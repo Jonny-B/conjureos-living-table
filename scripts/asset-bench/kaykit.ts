@@ -87,6 +87,11 @@ async function inflate(b64: string): Promise<Uint8Array> {
 
 const pending = new Map<string, Promise<HTMLCanvasElement[]>>();
 const ready = new Map<string, HTMLCanvasElement[]>();
+// One Set per clip, so a draw loop that asks every frame while a clip is still
+// decoding registers its (stable) callback once, not once per frame. Per-frame
+// registration snowballed: each resolved clip re-ran every draw, and each draw
+// queued more callbacks on the clips still pending, until the page froze.
+const listeners = new Map<string, Set<() => void>>();
 
 function clipKey(style: string, c: KClip): string {
   return `${style}|${c.loadout}|${c.size}|${c.clip}|${c.dir}`;
@@ -125,11 +130,18 @@ export function framesNow(d: KData, style: string, c: KClip, onReady?: () => voi
         frames.push(canvas);
       }
       ready.set(key, frames);
+      const waiting = listeners.get(key);
+      listeners.delete(key);
+      waiting?.forEach((fn) => fn());
       return frames;
     });
     pending.set(key, p);
   }
-  if (onReady) void pending.get(key)!.then(() => onReady());
+  if (onReady) {
+    let set = listeners.get(key);
+    if (!set) listeners.set(key, (set = new Set()));
+    set.add(onReady);
+  }
   return null;
 }
 

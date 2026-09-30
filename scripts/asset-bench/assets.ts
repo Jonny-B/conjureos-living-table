@@ -1265,13 +1265,16 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
     return findClip(d, k.style, k.loadout, k.size, k.clip, k.dir);
   }
 
+  // Stable, so framesNow registers it once per clip however often the loop asks.
+  const redrawScene = (): void => drawScene();
+
   function drawKayKitHero(ctx: CanvasRenderingContext2D, p: PlayState, k: KayKitHero, tileScale: number): void {
     const d = kaykitData();
     if (!d) return;
     const now = performance.now();
     const c = currentClip(p, k, now);
     if (!c) return;
-    const frames = framesNow(d, k.style, c, () => drawScene());
+    const frames = framesNow(d, k.style, c, redrawScene);
     if (!frames) return;
     const f = frames[frameIndex(c, now - k.clipStart)]!;
     const meta = d.sizes[k.size]!;
@@ -1786,13 +1789,15 @@ function mountKayKitPanel(el: HTMLElement, _api: unknown): () => void {
     draw(true);
   }
 
+  const redrawAll = (): void => draw(true);
+
   function draw(force = false): void {
     const meta = d!.sizes[size]!;
     const tilePx = meta.tokenW * zoom;
     for (const cell of cells) {
       const c = findClip(d!, cell.style, loadout, size, clip, cell.dir);
       if (!c) continue;
-      const frames = framesNow(d!, cell.style, c, () => draw(true));
+      const frames = framesNow(d!, cell.style, c, redrawAll);
       if (!frames) continue;
       const span = c.loop ? clipDurationMs(c) : clipDurationMs(c) + KK_ONCE_PAUSE_MS;
       const i = frameIndex(c, clock % span);
