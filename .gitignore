@@ -1,0 +1,22 @@
+node_modules
+dist
+.DS_Store
+*.log
+.env
+.env.local
+*.tsbuildinfo
+
+# Packed distributable produced by @conjureos/pack: a build artifact, not source.
+*.conj
+
+# esbuild dev server output (conj-pack dev)
+.devserve
+.shots/
+
+# Python bytecode (Blender scripts)
+__pycache__/
+
+# Built asset benches and every generated or downloaded art input (the KayKit
+# source packs, Blender renders). A bench inlines a full copy of every asset it
+# shows, so none of this is checked in or served.
+.cache/

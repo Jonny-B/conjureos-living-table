@@ -1,0 +1,1035 @@
+@layer core, skin, state;
+/**
+ * src/core.css, the shared core. DESIGN_SYSTEM.md §2, §3, §4 (+ §5.1's CSS
+ * curve mirrors and §5.6's third reduced-motion chokepoint).
+ *
+ * LINE 1 IS LOAD-BEARING. `@layer core, skin, state;` must be the first thing
+ * any browser reads, before a single rule in any sheet. Layer order beats both
+ * specificity and source order, and it is the only thing that makes the focus
+ * ring win against a skin sheet loaded after this one: `:where(.cg-skin)
+ * :focus-visible` is specificity (0,1,0) and so is `.po-tile`, so on a tie the
+ * later sheet wins and the app ships with NO VISIBLE FOCUS RING ANYWHERE -
+ * invisible in code review and invisible in a screenshot. §2.7.
+ *
+ *   @layer core  , this file: tokens, reset, materials, type.
+ *   @layer skin  , skins/shell.css | poppy.css | noir.css, each wrapping its
+ *                   whole contents. A skin may repaint anything here; it cannot
+ *                   outrank the focus ring.
+ *   @layer state , the focus ring and the reduced-motion clamp. Nothing else.
+ *
+ * NO COLOUR LIVES HERE except the semantic four (§2.5) and the four group hues
+ * (§2.6). Everything else is a `--cg-*` a skin assigns (§2.8's manifest), read
+ * here with a defensible fallback so a future gap degrades instead of erasing
+ * the whole declaration.
+ *
+ * NOT IMPORTED BY THE APP YET. `src/styles.css` still owns every pixel; this
+ * file lands first so `test/css.test.ts` can hold the token contract before
+ * there are three skin sheets to retrofit (§16.1 step 1).
+ */
+
+@layer core {
+  /* ══════════════════════════════════════════════════════════════════════
+   * §2.1 GEOMETRY
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  :root {
+    --cg-r-chip: 999px;
+    --cg-r-ctl: 16px; /* buttons, inputs */
+    --cg-r-tile: 15px; /* a Threads tile, a calendar cell */
+    --cg-r-card: 22px; /* game cards, suspect cards, panels */
+    --cg-r-modal: 28px;
+    --cg-hair: 1px;
+
+    --cg-tap-min: 44px; /* nothing interactive is smaller */
+
+    /* There is no `--cg-border`, on purpose. Every rim in this app is a LIGHT,
+     * never a keyline. A 2px near-black outline is the rejected direction.
+     * `--cg-rim-a` is the one knob a skin turns. */
+    --cg-rim: inset 0 1px 0 rgb(255 255 255 / var(--cg-rim-a, 0.26));
+    --cg-rim-soft: inset 0 1px 0 rgb(255 255 255 / calc(var(--cg-rim-a, 0.26) * 0.54));
+    --cg-sink: inset 0 -1px 0 rgb(0 0 0 / 0.5);
+    --cg-edge: 0 0 0 1px rgb(255 255 255 / 0.075);
+
+    /* §2.3, the pressed rim: the top inner highlight at half its resting
+     * alpha. The law's ceiling is 50%; this is the shared instantiation. */
+    --cg-rim-press: inset 0 1px 0 rgb(255 255 255 / calc(var(--cg-rim-a, 0.26) * 0.5));
+
+    /* ════════════════════════════════════════════════════════════════════
+     * §2.2 THE ELEVATION LADDER, five rungs, all soft
+     *
+     * The GEOMETRY is shared; the shadow's colour and weight are per-skin,
+     * because a shadow on a pastel sky must be blue-tinted and light while one
+     * on near-black must be near-black and heavy. Two tokens carry that:
+     * `--cg-shade` (an `R G B` triple) and `--cg-shade-k` (a weight multiplier).
+     *
+     *   e1     chips, pills, pips, meters, beads
+     *   e2     cards and tiles at rest, bubbles
+     *   e3     hovered card, lifted tile, selected tile, toast
+     *   e4     modal, ceremony panel
+     *   press  any pressed state, any dead card
+     *   e-far  static ceremony panels, the desk plane, the reveal frame
+     *
+     * EVERY RUNG IS BLURRED. The zero-blur layers above, rim, rim-soft, sink,
+     * edge, are NOT on this ladder; they are edge lights and seams (R2), and
+     * they are the only zero-blur layers a consumer may add. An outer layer
+     * offset 2px or more with a blur of 0 is a bug everywhere, with the single
+     * licensed exception of the Ask button's die (§10.3).
+     * ════════════════════════════════════════════════════════════════════ */
+
+    --cg-shade: 3 5 12; /* skins override */
+    --cg-shade-k: 1; /* poppy uses .55 */
+
+    --cg-e1: 0 1px 2px rgb(var(--cg-shade) / calc(0.44 * var(--cg-shade-k))),
+      0 4px 10px -3px rgb(var(--cg-shade) / calc(0.42 * var(--cg-shade-k)));
+    --cg-e2: 0 1px 3px rgb(var(--cg-shade) / calc(0.5 * var(--cg-shade-k))),
+      0 12px 28px -8px rgb(var(--cg-shade) / calc(0.62 * var(--cg-shade-k)));
+    --cg-e3: 0 2px 5px rgb(var(--cg-shade) / calc(0.52 * var(--cg-shade-k))),
+      0 22px 46px -12px rgb(var(--cg-shade) / calc(0.7 * var(--cg-shade-k)));
+    --cg-e4: 0 4px 9px rgb(var(--cg-shade) / calc(0.55 * var(--cg-shade-k))),
+      0 40px 80px -18px rgb(var(--cg-shade) / calc(0.78 * var(--cg-shade-k)));
+
+    --cg-press: 0 1px 1px rgb(var(--cg-shade) / calc(0.5 * var(--cg-shade-k))),
+      0 3px 6px -2px rgb(var(--cg-shade) / calc(0.5 * var(--cg-shade-k)));
+
+    /* Appended by STATIC panels only (never anything that scrolls). */
+    --cg-e-far: 0 28px 54px -18px rgb(var(--cg-shade) / calc(0.55 * var(--cg-shade-k)));
+
+    /* ════════════════════════════════════════════════════════════════════
+     * §5.1 THE NINE CURVES, mirrored literally from `src/motion.ts`.
+     * Change one, change both, the WAAPI `easing` field is parsed by the
+     * animation engine, which does not resolve custom properties, so the two
+     * copies cannot be collapsed into one.
+     * ════════════════════════════════════════════════════════════════════ */
+
+    --cg-e-snap: cubic-bezier(0.20, 0.90, 0.25, 1.00);
+    --cg-e-pop: cubic-bezier(0.30, 1.68, 0.42, 1.00);
+    --cg-e-boing: cubic-bezier(0.16, 1.86, 0.30, 1.00);
+    --cg-e-anticipate: cubic-bezier(0.70, -0.50, 0.30, 1.40);
+    --cg-e-out: cubic-bezier(0.40, 0.00, 1.00, 1.00);
+    --cg-e-sway: cubic-bezier(0.37, 0.00, 0.63, 1.00);
+    --cg-e-glide: cubic-bezier(0.30, 0.00, 0.10, 1.00);
+    --cg-e-slam: cubic-bezier(0.16, 1.82, 0.30, 1.00);
+    --cg-e-settle-heavy: cubic-bezier(0.22, 0.68, 0.12, 1.00);
+
+    /* ════════════════════════════════════════════════════════════════════
+     * §2.4 THE TWO PROCEDURAL TEXTURE PLATES, and there are only two.
+     *
+     * `stitchTiles="stitch"` makes them seamless. `color-interpolation-filters
+     * ="sRGB"` is MANDATORY: the linearRGB default washes turbulence out to
+     * almost nothing. Both are seeded, so they are byte-identical everywhere.
+     *
+     * §14 RULE, PROMOTED TO CORE: never animate any property on an element
+     * carrying an feTurbulence filter. The filter re-evaluates every frame and
+     * will drop a mid-range phone.
+     * ════════════════════════════════════════════════════════════════════ */
+
+    /* GRAIN, 140px, fine tooth. */
+    --cg-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+
+    /* SILK, 400px, low-frequency cloud. Breaks up a big gradient so it never bands. */
+    --cg-silk: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400'%3E%3Cfilter id='s' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='2' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='400' height='400' filter='url(%23s)'/%3E%3C/svg%3E");
+
+    /* ════════════════════════════════════════════════════════════════════
+     * §2.5 SEMANTIC COLOUR, the same four meanings everywhere.
+     * A skin may DARKEN these to sit on its ground; it may not repoint them.
+     * ════════════════════════════════════════════════════════════════════ */
+
+    --cg-good: #2fd98a;
+    --cg-good-deep: #10784c;
+    --cg-warn: #ffb629;
+    --cg-warn-deep: #a66a00;
+    --cg-bad: #ff4d5e;
+    --cg-bad-deep: #a3122a;
+    --cg-cost: #ffd24a; /* the ✦n CostBadge numeral. Gold = "this costs one." */
+    --cg-free: #2fd98a; /* the FREE chip. Green = "this costs nothing." */
+
+    /* ════════════════════════════════════════════════════════════════════
+     * §2.6 THE FOUR THREADS GROUP COLOURS, one source of truth
+     *
+     * `art.tsx`'s GROUP_FILL already returns these four names; they are
+     * canonical. Two parallel ramps hang off each:
+     *
+     *   --cg-grad-lvN   the CANONICAL jewel ramp. Ribbons, key art, Lattice
+     *                   edges, share chips. Carries NO text, so it is free to
+     *                   span a lot of luminance.
+     *   --cg-band-lvN   the BAND ramp, deliberately shallower and deeper,
+     *                   because a level surface that carries a LABEL is a
+     *                   different object. Dark ink on the canonical grape
+     *                   bottom is 2.18:1; white on its top is 1.86:1. Neither
+     *                   ink survives the canonical sweep, so any level surface
+     *                   carrying text takes the band and its per-level ink.
+     *   --cg-band-ink-lvN  the ink, a TOKEN PER LEVEL, so no component chooses
+     *                   it and no component can get it wrong. The two light
+     *                   jewels keep dark ink; the two dark jewels take white.
+     *
+     * Worst ratio across each whole band ramp, each measured against the stop
+     * that is worst FOR THAT INK'S DIRECTION (dark ink → darkest stop, light
+     * ink → LIGHTEST stop; a ratio quoted against a midpoint is not a
+     * measurement): lv1 6.64:1 · lv2 5.86:1 · lv3 5.28:1 · lv4 5.59:1.
+     *
+     * The emoji share squares 🟨🟩🟦🟪 and GroupMark's shape channel are
+     * unchanged and stay mandatory, colour is never alone (§12.2).
+     * ════════════════════════════════════════════════════════════════════ */
+
+    --cg-marigold: #f7b733;
+    --cg-fern: #2fbe63;
+    --cg-sky: #2a93f2;
+    --cg-grape: #8b5cf6;
+
+    /* Canonical jewel ramps, top → mid → bottom, running DOWN the object. */
+    --cg-grad-lv1: linear-gradient(180deg, #ffe07a 0%, #f7b733 46%, #de8a06 100%);
+    --cg-grad-lv2: linear-gradient(180deg, #8bee9b 0%, #2fbe63 46%, #12904a 100%);
+    --cg-grad-lv3: linear-gradient(180deg, #7fd3ff 0%, #2a93f2 46%, #0f63c9 100%);
+    --cg-grad-lv4: linear-gradient(180deg, #d3aeff 0%, #8b5cf6 46%, #6224d6 100%);
+
+    --cg-rim-lv1: #a55e02;
+    --cg-rim-lv2: #0a5e33;
+    --cg-rim-lv3: #08427f;
+    --cg-rim-lv4: #3f1590;
+
+    --cg-glow-lv1: rgb(247 183 51 / 0.55);
+    --cg-glow-lv2: rgb(47 190 99 / 0.52);
+    --cg-glow-lv3: rgb(42 147 242 / 0.52);
+    --cg-glow-lv4: rgb(139 92 246 / 0.55);
+
+    /* The band ramp, shallower, deeper, and it carries words. */
+    /* FOUR STOPS, NOT THREE, AND THE FOURTH IS AT .78. With the ramp spending
+     * its whole useful travel by 46% and then holding one flat value to the
+     * bottom lip, the biggest object on the mid-game screen sampled the SAME
+     * RGB for its lower ~55px, a slab with a caption. The added stop keeps the
+     * body modelling all the way down; the endpoint colours are untouched, so
+     * every contrast figure in this file still holds. */
+    --cg-band-lv1: linear-gradient(180deg, #ffd86e 0%, #f7b733 42%, #ec9f16 78%, #e29208 100%);
+    --cg-band-lv2: linear-gradient(180deg, #8bee9b 0%, #4fd183 42%, #34bd6c 78%, #25af5e 100%);
+    --cg-band-lv3: linear-gradient(180deg, #1e6cc2 0%, #1257a6 42%, #0d4c95 78%, #0a4288 100%);
+    --cg-band-lv4: linear-gradient(180deg, #7a45e0 0%, #5f27c4 42%, #511dae 78%, #45169c 100%);
+
+    --cg-band-ink-lv1: #2a1b06;
+    --cg-band-ink-lv2: #2a1b06;
+    --cg-band-ink-lv3: #ffffff;
+    --cg-band-ink-lv4: #ffffff;
+
+    /* ════════════════════════════════════════════════════════════════════
+     * §4.1 TYPE STACKS. No webfont, Google Fonts is an external asset (R8).
+     * `ui-serif` resolves to New York on Apple, Noto Serif on Android,
+     * Palatino Linotype or Georgia on Windows, all three period-correct, all
+     * three already on the device.
+     * ════════════════════════════════════════════════════════════════════ */
+
+    --cg-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+      Arial, sans-serif;
+    --cg-round: ui-rounded, "SF Pro Rounded", "Segoe UI Variable Display", system-ui,
+      var(--cg-sans);
+    --cg-serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+      Georgia, "Times New Roman", serif;
+
+    /* §4.1, the tracking relief applied on the rounded-less path. 0 here; the
+     * `[data-round="synthetic"]` block below turns it on for EVERY T1 role at
+     * once rather than only for the ones that happen not to set their own
+     * track. -.02em + .005em = -.015em, which is §4.1's stated base value. */
+    --cg-track-relief: 0em;
+  }
+
+  /* `ui-rounded` maps to a real face ONLY on Apple. On Android the stack falls
+   * through to Roboto and `font-weight: 800` SYNTHESISES rather than resolving
+   * to a real cut, which smears the stroke T2 depends on. Two responses, and
+   * neither is a webfont: the two fixed strings that carry the most letterform
+   * character (the hub wordmark, SOLVED) become frozen SVG paths in art.tsx,
+   * and the scale is compensated here. Bigger radii on the controls is the
+   * honest substitute for a rounded typeface: the SHAPES carry the
+   * friendliness the letterforms cannot. §16.3 shoots both stacks. */
+  [data-round="synthetic"] {
+    --cg-track-relief: 0.005em; /* tighter tracking buys back some roundness */
+    --cg-t1-weight: 700; /* 800 synthesises on Roboto/Segoe, cap at a real cut */
+    --cg-t2-stroke-w: 0.8px; /* widen T2's stroke so it survives a synthesised weight */
+    --cg-r-ctl: 18px;
+    --cg-r-tile: 17px; /* lean on the control radii instead */
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+   * RESET, the smallest one that stops the UA from fighting the materials.
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* R1: the UA's flat grey button fill is a solid background-color on a
+   * control, which is a bug by rule. Every control paints itself from a
+   * material. */
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    margin: 0;
+  }
+
+  button {
+    padding: 0;
+    cursor: pointer;
+  }
+
+  img,
+  canvas {
+    display: block;
+    max-width: 100%;
+  }
+  svg {
+    max-width: 100%;
+  }
+
+  /* THE TOUCH FLOOR IS A HIT BOX, NOT A PAINTED BOX, so it is deliberately NOT
+   * a blanket `min-height` on every button here. §8.3's chip is a 30px pill and
+   * §12.3's calendar cell is 40px with a 6px gutter giving a 46px hit box, a
+   * global floor would inflate both and contradict the document's own numbers.
+   * Each control meets `--cg-tap-min` with its own padding or hit area, and the
+   * review checklist is what checks it. */
+
+  /* ══════════════════════════════════════════════════════════════════════
+   * §1.1 THE DOM CONTRACT, one shape, for the whole app.
+   *
+   * The ground NEVER SCROLLS. That parallax-of-zero is what makes a playfield
+   * read as sunk INTO a scene rather than painted on a page. `.cg-stage` is
+   * the app's only scroll container; all body prose sits at z-index 10,
+   * beneath the FX canvas at 60, never above it (§12.3).
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  .cg-defs {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+  }
+
+  .cg-skin {
+    position: relative;
+    height: 100%;
+    color: var(--cg-ink, #fff);
+    font-family: var(--cg-ui-font, var(--cg-sans));
+
+    /* ════════════════════════════════════════════════════════════════════
+     * §2.7 FOCUS, one geometry, SKINNED COLOUR, and the declaration has to
+     * live HERE rather than at `:root`.
+     *
+     * A custom property's variables are substituted at computed-value time ON
+     * THE ELEMENT WHERE IT IS DECLARED, and the resolved string is what
+     * inherits. Declared at `:root`, `var(--cg-focus, var(--cg-grape))`
+     * resolves against `:root`, where no skin has set `--cg-focus`, because a
+     * skin sets its tokens on `[data-skin="…"]`, a DESCENDANT. So `:root`
+     * baked the grape fallback into the token and every skin inherited a
+     * literal `#8B5CF6` ring: measured in Chromium as
+     * `rgb(139, 92, 246) 0 0 0 4px`, in the shell, whose `--cg-focus` is
+     * `#9C82FF`. Three skins, one hard-coded ring, and §15's cut #5, "a
+     * violet ring on a parchment interrogation card is a shell element leaking
+     * into a game", arriving anyway, through the substitution rules instead
+     * of through a design choice.
+     *
+     * `.cg-skin` IS the element that carries `data-skin`, so the same
+     * declaration substituted here reads the skin's own `--cg-focus`,
+     * `--cg-focus-inner` and `--cg-focus-glow`. The fallbacks stay, because a
+     * skin sheet that has not shipped yet must still get a visible ring.
+     *
+     * The rule that USES this token is in `@layer state`, at the bottom of
+     * this file, and it is scoped `:where(.cg-skin) :focus-visible`, so the
+     * token is always in scope wherever the rule can match.
+     * ════════════════════════════════════════════════════════════════════ */
+    --cg-focus-ring: 0 0 0 2px var(--cg-focus-inner, #ffffff),
+      0 0 0 4px var(--cg-focus, var(--cg-grape)),
+      0 0 22px -2px var(--cg-focus-glow, var(--cg-glow-lv4));
+  }
+
+  .cg-ground,
+  .cg-ground-fx,
+  .cg-vig {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    contain: strict;
+  }
+
+  .cg-ground {
+    z-index: 0;
+  }
+  .cg-ground-fx {
+    z-index: 1;
+  } /* the practical / grille / motes host */
+  .cg-vig {
+    z-index: 2;
+  }
+
+  .cg-stage {
+    position: relative;
+    z-index: 10;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* R10: desktop widens the grid and caps the column. Nothing else changes. */
+  @media (min-width: 900px) {
+    .cg-stage {
+      max-width: 880px;
+      margin-inline: auto;
+    }
+  }
+
+  /* ── §2.4 the ground plate, luminance-split ─────────────────────────────
+   *
+   * `overlay` against a near-black base collapses to `2 × base × blend`. At a
+   * base luminance of 0.03, the bottom two-thirds of the shell ground, a
+   * mid-grey noise at 5.5% alpha moves the pixel by about 0.13/255. That is a
+   * rounding error, not a dither, and it is absent exactly where dark-gradient
+   * banding is worst. Measured: ground alone has a 24px longest identical-value
+   * plateau; ground + .055 overlay silk + .035 soft-light grain still has 24px.
+   * The plates break ZERO plateaus.
+   *
+   * So the plate is split by luminance, not given one opacity for the whole
+   * sheet: overlay where the ground is lit, a low-alpha NORMAL-blended grey
+   * where it is dark. Acceptance: the longest identical-value run down a pixel
+   * column of `.cg-ground` must be ≤12px (§16.4 runs it).
+   *
+   * A skin repaints the alphas and masks from `@layer skin` (poppy puts grain
+   * at .045 overlay on a bright sky; noir at .075 plus the same dark plate).
+   * ───────────────────────────────────────────────────────────────────── */
+
+  .cg-ground::after {
+    /* the LIT region, overlay works here */
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--cg-silk) repeat, var(--cg-grain) repeat;
+    background-size: 400px, 140px;
+    opacity: 0.055;
+    mix-blend-mode: overlay;
+    mask-image: linear-gradient(180deg, #000 0%, #000 34%, transparent 58%);
+  }
+
+  .cg-ground::before {
+    /* the DARK region, normal blend, low alpha, real dither */
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--cg-grain) repeat;
+    background-size: 140px;
+    opacity: 0.028;
+    mix-blend-mode: normal;
+    mask-image: linear-gradient(180deg, transparent 30%, #000 62%, #000 100%);
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+   * §3 MATERIALS, four primitives. Every painted surface in the app is one of
+   * them plus skin tokens.
+   *
+   * §3.0 THE PSEUDO-ELEMENT BUDGET, assigned once and globally. A skin may
+   * only REPAINT these slots, never repurpose them, even on surfaces where
+   * the core layer renders nothing:
+   *
+   *   ::before      the ELEVATION OVERLAY, hover/press shadow lift + gloss
+   *   ::after       the TOOTH, the grain plate
+   *   > i.cg-spec   a real child element for any THIRD layer      (the skin)
+   *   > i.cg-fill   a real child element for any tweenable colour (the skin)
+   *
+   * §2.7 THE BOX-SHADOW CONTRACT: every material publishes its whole stack as
+   * `--cg-own-shadow` and sets `box-shadow` to exactly `var(--cg-own-shadow)`,
+   * because `box-shadow` REPLACES rather than composes, a focus rule that
+   * simply assigned a ring would compute to the ring ALONE and hand the app's
+   * most-bevelled surfaces a flat rounded rectangle the moment a keyboard
+   * touched them. Pressed and selected states redefine the custom property, so
+   * the ring follows them for free. A literal `box-shadow: <layers>` is a bug;
+   * `.cg-raise::before` is the one licensed exception in the document, and it
+   * is a pseudo-element that can never take focus.
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  /* ── §3.1 M-RAISED, the default. Five simultaneous channels: body gradient,
+   * top gloss, rim light, bottom sink, soft shadow. ───────────────────── */
+
+  .cg-raise {
+    position: relative;
+    isolation: isolate;
+    border-radius: var(--cg-r-card);
+    background:
+      linear-gradient(
+        180deg,
+        /* gloss, the top 46% only */ rgb(255 255 255 / var(--cg-gloss-a, 0.115)) 0%,
+        rgb(255 255 255 / calc(var(--cg-gloss-a, 0.115) * 0.33)) 17%,
+        rgb(255 255 255 / 0) 46%
+      ),
+      var(--cg-body, linear-gradient(180deg, rgb(255 255 255 / 0.06), rgb(0 0 0 / 0.06)));
+    --cg-own-shadow: var(--cg-edge), var(--cg-rim), var(--cg-sink), var(--cg-e2),
+      0 10px 30px -14px var(--cg-tint-glow, transparent);
+    box-shadow: var(--cg-own-shadow);
+    /* TRANSFORM ONLY. §14 forbids animating box-shadow or filter on a large
+     * surface, and this is the app's single most-instantiated element:
+     * hovering a grid of cards would re-rasterise five blurred shadow layers
+     * plus a filter per card per frame. The e2→e3 step and the gloss lift
+     * arrive as an opacity cross-fade of the pre-composited ::before instead.
+     *
+     * There is deliberately NO `transform: translateZ(0)` here. It promoted
+     * unconditionally, ~25 permanent compositor layers on the Threads board
+     * alone, against §14's budget of ≤3 at once. Chromium already promotes an
+     * element for the duration of a running transform animation and releases
+     * it after, which is exactly what the hack was buying. */
+    transition: transform 190ms var(--cg-e-pop);
+  }
+
+  .cg-raise::before {
+    /* THE ELEVATION OVERLAY, §3.0's slot, and §2.7's single licensed literal
+     * box-shadow. The old `filter: saturate(1.06) brightness(1.03)` lift is
+     * baked into this overlay's own colour rather than animated: the white
+     * wash IS what "brighter on hover" now means. */
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: -1; /* behind content, above the body */
+    opacity: 0;
+    transition: opacity 190ms var(--cg-e-snap);
+    box-shadow: var(--cg-e3), 0 14px 40px -14px var(--cg-tint-glow, transparent);
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.07), rgb(255 255 255 / 0) 58%);
+  }
+
+  .cg-raise::after {
+    /* ITS OWN TOOTH, never a smooth vector wash.
+     * NO mix-blend-mode: §2.4's own arithmetic says `overlay` against a dark
+     * base is a rounding error, and a blend mode against the BACKDROP forces a
+     * separate compositing group per element, ~90 of them, all live during
+     * the beat-3 FLIP, against §14's ceiling of 20. Normal-blended, and
+     * `--cg-tooth` is retuned so the alpha reads directly. */
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--cg-grain) repeat;
+    background-size: 140px;
+    opacity: var(--cg-tooth, 0.034);
+  }
+
+  .cg-raise:hover,
+  .cg-raise:focus-visible {
+    transform: translateY(-3px) scale(1.012);
+  }
+  .cg-raise:hover::before,
+  .cg-raise:focus-visible::before {
+    opacity: 1;
+  }
+
+  /* ── §2.3 THE PRESS LAW ─────────────────────────────────────────────────
+   *
+   * Press depth is proportional to object size, so the three skins legitimately
+   * use different numbers; the LAW is shared and is what gets reviewed:
+   *
+   *   the top inner highlight drops to ≤50% of its resting alpha, the outer
+   *   shadow steps DOWN one rung on the ladder, an `inset 0 5-6px 8-14px`
+   *   appears (the object now takes light from above rather than throwing it),
+   *   and the element moves down 1-3px with a scale between 0.96 and 0.99 -
+   *   deeper for smaller objects.
+   *
+   * Press-down is 90ms `--cg-e-snap`. RELEASE IS `SPRING.press` OVER
+   * `DUR.enter` and never runs the down-transition backwards, a CSS
+   * transition cannot spring, so the release is a `springFrames(SPRING.press,
+   * DUR.enter, …)` call through `mo()` at the call site. The 190ms `--cg-e-pop`
+   * on `.cg-raise` is the fallback for anything that has not wired one up.
+   *
+   * `.is-press` is set on `pointerdown` as well as `:active`, so touch gets it
+   * too, and it lands inside 90ms BEFORE any validation (GAMEPLAY_SPEC §4).
+   *
+   * Skin instantiations turn the two knobs: shell card 1px/.978 · poppy tile
+   * 2px/.965 · noir suspect card 1px/.985 · noir Ask button 3px.
+   * ───────────────────────────────────────────────────────────────────── */
+
+  .cg-raise:active,
+  .cg-raise.is-press {
+    --cg-own-shadow: var(--cg-edge), var(--cg-rim-press),
+      inset 0 5px 10px rgb(var(--cg-shade) / calc(0.42 * var(--cg-shade-k))), var(--cg-press);
+    transform: translateY(var(--cg-press-y, 1px)) scale(var(--cg-press-s, 0.978));
+    transition-duration: 90ms;
+    transition-timing-function: var(--cg-e-snap);
+  }
+  .cg-raise:active::before,
+  .cg-raise.is-press::before {
+    opacity: 0;
+  }
+
+  /* ── §3.2 M-WELL, things RECESSED INTO the ground. The Threads playfield,
+   * the calendar grid, a progress track, a text input, the archive list, the
+   * mistake-pip track, a pasted error message. ───────────────────────── */
+
+  .cg-well {
+    border-radius: var(--cg-r-ctl);
+    background: var(--cg-well-body, linear-gradient(180deg, rgb(0 0 0 / 0.22), rgb(0 0 0 / 0.1)));
+    /* A well can be an input, and an input takes focus, §2.7. */
+    --cg-own-shadow: inset 0 2px 5px rgb(var(--cg-shade) / calc(0.62 * var(--cg-shade-k))),
+      inset 0 1px 0 rgb(var(--cg-shade) / calc(0.8 * var(--cg-shade-k))),
+      /* the outer bottom lip, the whole trick. It is what says "HOLE"
+         rather than "dark box". */ 0 1px 0 rgb(255 255 255 / 0.075);
+    box-shadow: var(--cg-own-shadow);
+  }
+
+  /* ── §3.3 M-GLASS, translucent chrome: the sticky header, secondary
+   * buttons, the Vault keeper's bubble. ───────────────────────────────── */
+
+  .cg-glass {
+    background:
+      linear-gradient(
+        180deg,
+        rgb(255 255 255 / 0.13) 0%,
+        rgb(255 255 255 / 0.035) 40%,
+        rgb(255 255 255 / 0) 52%
+      ),
+      var(--cg-glass-body, linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(0 0 0 / 0.12)));
+    /* 8px, not 14px, and NO saturate(). The sticky header is not IN the
+     * scroller but composites OVER it, so its backdrop changes on every scroll
+     * frame: a 390×44 region at DPR 3, re-blurred continuously. `saturate` is
+     * a second full-region pass buying almost nothing on a dark ground.
+     * §14 budget: at most TWO backdrop-filter elements visible at once, and
+     * never one inside a scrolling list. */
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    --cg-own-shadow: var(--cg-edge), var(--cg-rim-soft), var(--cg-sink), var(--cg-e1);
+    box-shadow: var(--cg-own-shadow);
+  }
+
+  /* Degradation order, §14: backdrop-filter goes off FIRST. The two gradients
+   * underneath still render, so nothing becomes flat. */
+  @media (prefers-reduced-transparency: reduce) {
+    .cg-glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+
+  /* ── §3.4 M-PLATE, machined metal: brass frames, portholes, oval portrait
+   * mounts, the letterpress plate, the shell's booster-style cost disc.
+   *
+   * THE RULE THAT MAKES METAL READ AS METAL: a gradient across a metal band
+   * must swing light → dark → light → dark → light. One stop short and it is a
+   * yellow border. In polar form (a ring, a mount, a porthole) the same law is
+   * a conic-gradient with six alternating stops.
+   *
+   * Skins that do not use metal (poppy, mostly) simply never mount it. ── */
+
+  .cg-plate {
+    background: var(--cg-plate-face, linear-gradient(180deg, rgb(255 255 255 / 0.2), rgb(0 0 0 / 0.2)));
+    --cg-own-shadow:
+      /* a dark keyline SEATS it, this is the one place a keyline is legal,
+         because metal has an edge */ 0 0 0 1px var(--cg-plate-seat, rgb(0 0 0 / 0.55)),
+      0 1px 0 var(--cg-plate-rim, rgb(255 255 255 / 0.22)), var(--cg-e2);
+    box-shadow: var(--cg-own-shadow);
+  }
+
+  /* ── §3.5 THE PROSE MATERIAL (R7) ───────────────────────────────────────
+   *
+   * There is deliberately no class here. Whatever a skin calls it, shell's
+   * `--cg-panel-lo`, poppy's ivory, noir's parchment or armoured glass, a
+   * surface carrying body prose must satisfy all five, and the skin mounts it:
+   *
+   *   1. Luminance drift across the whole sheet ≤6% corner to corner.
+   *   2. No background-clip: text, no gradient fill, no bloom, no particle
+   *      emitter over it.
+   *   3. No texture above .10 opacity, and never at a spatial frequency near
+   *      the type's stroke width.
+   *   4. Contrast ≥7:1, measured against the DARKEST stop of the gradient,
+   *      not its midpoint.
+   *   5. At most 4 box-shadow layers on a PROSE surface that scrolls. Raised
+   *      chrome is allowed 6, `.cg-raise`, `.po-tile` and `.po-btn--submit`
+   *      are six-layer materials by design.
+   *
+   * Noir's parchment ramp #F2E8CF → #DCCBA6 over 174° is a 6% drift: it
+   * satisfies R1 and is invisible under 16px type. That is the ceiling.
+   *
+   * What core CAN enforce is rule 2 at the type level, and it does, see
+   * `.cg-prose` below, which hard-resets every treatment channel so a T1
+   * ancestor cannot leak `-webkit-text-fill-color: transparent` onto a
+   * paragraph and erase it.
+   * ───────────────────────────────────────────────────────────────────── */
+
+  /* ══════════════════════════════════════════════════════════════════════
+   * §4 TYPE, no webfont (R8). The TREATMENT carries the weight.
+   * ══════════════════════════════════════════════════════════════════════ */
+
+  /* ── §4.2 T1, embossed gradient display. Titles, verdicts, the wordmark,
+   * SOLVED, the passphrase, section heads. ───────────────────────────────
+   *
+   * TWO THINGS ARE LOAD-BEARING AND BOTH ARE EASY TO GET WRONG.
+   *
+   * 1. `filter: drop-shadow`, NOT `text-shadow`. With background-clip: text the
+   *    glyphs are transparent, so text-shadow paints behind the element BOX and
+   *    renders as a rectangular ghost slab. drop-shadow follows the painted
+   *    glyph alpha. This is not a preference.
+   * 2. A dark stop must cross the middle of the glyph, and the face must run
+   *    VERTICALLY. Gold without a 48%→62% dark band is just yellow. That band
+   *    IS the metal, the turn where the bevel rolls away from the light and
+   *    comes back. A face at 104° is nearly horizontal across the whole string,
+   *    so each letter gets an almost uniform colour and the result is a rainbow
+   *    wash, not an emboss.
+   *
+   * All three faces are five stops on one skeleton, and every skin's value
+   * lives in its OWN palette block (§8.1 / §9.1 / §10.1) so that block is
+   * complete on its own:
+   *
+   *   0%    near-white          the top bevel catching the key light
+   *   26%   the hue, light      the face
+   *   48%   the hue, saturated  still the face
+   *   62%   THE TURN, dark     the shadow side. this stop makes it metal
+   *   82%   light again         the bounce off the surface below
+   *   100%  the hue, mid        the bottom edge
+   *
+   * Every consumption site carries a defensible fallback (§2.8 mechanism 2):
+   * an unset custom property invalidates the WHOLE declaration at
+   * computed-value time, so one missing token silently deletes an entire
+   * treatment, and a live `-webkit-text-fill-color: transparent` with an
+   * invalid background renders display type INVISIBLE, not merely flat.
+   * ───────────────────────────────────────────────────────────────────── */
+
+  .cg-t1 {
+    font-family: var(--cg-display-font, var(--cg-round));
+    font-weight: var(--cg-t1-weight, 800);
+    letter-spacing: calc(var(--cg-t1-track, -0.02em) + var(--cg-track-relief, 0em));
+    /* The fallback is the SKELETON with the hue removed, neutral greys that
+     * still turn dark at 62%, so a missing face degrades to a grey emboss
+     * instead of erasing the declaration and rendering the heading invisible.
+     * Core carries no palette; the three real faces live in §8.1 / §9.1 / §10.1. */
+    background: var(
+      --cg-t1-face,
+      linear-gradient(180deg, #fff 0%, #d8dce8 26%, #a9afc0 48%, #4a4f5e 62%, #e6e9f0 82%, #8c93a4 100%)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    filter: drop-shadow(0 1px 0 var(--cg-t1-lip, rgb(0 0 0 / 0.55)))
+      drop-shadow(0 2px 1px rgb(var(--cg-shade) / 0.6))
+      drop-shadow(0 6px 14px rgb(var(--cg-shade) / 0.55));
+  }
+
+  @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+    .cg-t1 {
+      background: none;
+      color: var(--cg-t1-flat, #fff);
+      -webkit-text-fill-color: currentColor;
+      filter: none;
+      -webkit-text-stroke: 0.6px var(--cg-t1-stroke, rgb(0 0 0 / 0.7));
+      text-shadow: 0 1px 0 var(--cg-t1-lip, rgb(0 0 0 / 0.55)),
+        0 2px 4px rgb(var(--cg-shade) / 0.7);
+    }
+  }
+
+  /* A true outline BEHIND the fill, for SOLVED and the share card title,
+   * where the piece must read on confetti. `.cg-t1--outlined` is a type
+   * treatment, never a material: do not put it on a `.cg-raise`, whose
+   * ::before slot is the elevation overlay (§3.0). */
+  .cg-t1--outlined {
+    position: relative;
+    isolation: isolate;
+  }
+  .cg-t1--outlined::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: none;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    -webkit-text-stroke: 6px var(--cg-t1-outline, rgb(0 0 0 / 0.8));
+    filter: none;
+  }
+
+  /* ── §4.3 T2, outline + shadow. Small labels, tallies, stamps, metadata
+   * that still wants treating. A solid fill with a hairline stroke and a hard
+   * lip; the stroke is what carries the contrast at small sizes.
+   *
+   * GOLD DISPLAY TYPE IS NEVER USED BELOW 17px EXCEPT AS T2. ─────────── */
+
+  .cg-t2 {
+    font-family: var(--cg-display-font, var(--cg-round));
+    color: var(--cg-t2-ink, var(--cg-ink, #fff));
+    -webkit-text-stroke: var(--cg-t2-stroke-w, 0.6px) var(--cg-t2-stroke, rgb(0 0 0 / 0.7));
+    text-shadow: 0 1px 0 var(--cg-t2-lip, rgb(0 0 0 / 0.5)),
+      0 2px 4px rgb(var(--cg-shade) / 0.7);
+  }
+
+  /* ── §4.4 T3, the numeral. The Candy Crush moulded-metal numeral: scores,
+   * streak counts, floating +200s. Rendered as SVG <text> with
+   * `paint-order="stroke fill"`, because -webkit-text-stroke on HTML paints
+   * the stroke OVER the fill and eats the letterforms.
+   *
+   * The four paint channels are styled from CSS, not from presentation
+   * attributes, insurance against the one part of SVG 2 with a history of
+   * engine divergence, at a cost of one rule. The gradient itself lives in
+   * Defs.tsx, once per skin, and `url(#id)` resolves across separate <svg>
+   * elements in the same document.
+   *
+   * The hard .46/.47 stop pair in those ramps is not a typo: a 1%-wide value
+   * cliff mid-glyph is what makes the numeral read as moulded metal instead of
+   * a gradient. ───────────────────────────────────────────────────────── */
+
+  .cg-num {
+    filter: drop-shadow(0 3px 5px rgb(var(--cg-shade) / 0.6));
+  }
+  .cg-num text {
+    font-family: var(--cg-display-font, var(--cg-round));
+    font-weight: 800;
+    stroke: var(--cg-num-stroke, #0a0d1c);
+    fill: var(--cg-num-fill, var(--cg-num-2, #ffd24a));
+  }
+
+  /* ── §4.5 PROSE, the R7 floor ─────────────────────────────────────────
+   *
+   * 16px is the floor for anything the model wrote. 15px is allowed only for
+   * two-line card descriptions and other AUTHORED copy. No gradient, no clip,
+   * no text-shadow, no bloom, no treatment of any kind on either. Chrome is
+   * rich; sentences are readable. Every rule in this document is suspended for
+   * a paragraph of prose.
+   *
+   * The resets are not decoration: `.cg-t1` sets `-webkit-text-fill-color:
+   * transparent` and it INHERITS, so a paragraph inside a treated ancestor
+   * would render as nothing at all. R7 is enforced here, not remembered.
+   * ───────────────────────────────────────────────────────────────────── */
+
+  .cg-prose,
+  .cg-prose-sm,
+  .cg-meta {
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    -webkit-text-fill-color: currentColor;
+    -webkit-text-stroke: 0;
+    text-shadow: none;
+    filter: none;
+  }
+
+  .cg-prose {
+    font: 400 16px/1.55 var(--cg-prose-font, var(--cg-sans));
+    color: var(--cg-ink-2, rgb(255 255 255 / 0.82));
+    max-width: 62ch;
+  }
+  .cg-prose-sm {
+    /* card copy, 2 lines */
+    font: 400 15px/1.5 var(--cg-prose-font, var(--cg-sans));
+    color: var(--cg-ink-2, rgb(255 255 255 / 0.82));
+  }
+  .cg-meta {
+    font: 600 12px/1.3 var(--cg-prose-font, var(--cg-sans));
+    letter-spacing: 0.05em;
+    color: var(--cg-ink-3, rgb(255 255 255 / 0.62));
+  }
+
+  /* ── THE GLOSSARY MARK (src/components/Glossary.tsx) ───────────────────
+   *
+   * A term a game has taught itself and the player has not. TWO CHANNELS,
+   * never one: an underline AND a colour, so it survives both a greyscale
+   * screen and §12.2's rule that colour is never the only signal.
+   *
+   * The base is deliberately colourless, `--cg-term-ink` falls back to the
+   * inherited ink, so an unskinned surface renders an underlined word rather
+   * than an invisible one, and each skin paints the real hue.
+   * ───────────────────────────────────────────────────────────────────── */
+  .cg-term-wrap {
+    position: relative;
+    display: inline;
+  }
+  .cg-term {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--cg-term-ink, currentColor);
+    -webkit-text-fill-color: currentColor;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-thickness: from-font;
+    text-underline-offset: 0.18em;
+    cursor: help;
+  }
+  /* The bubble. Centred on the term, clamped to the phone, and it never
+   * intercepts a pointer, a help chit that eats the tap under it is worse
+   * than no help at all. */
+  .cg-termtip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    z-index: 60;
+    transform: translateX(-50%);
+    display: block;
+    width: max-content;
+    max-width: min(264px, 70vw);
+    padding: 9px 11px;
+    border-radius: 10px;
+    pointer-events: none;
+    font: 400 14px/1.45 var(--cg-prose-font, var(--cg-sans));
+    text-align: left;
+    text-decoration: none;
+    color: var(--cg-ink-2, rgb(255 255 255 / 0.82));
+    background: var(--cg-body, rgb(20 20 24 / 0.96));
+    --cg-own-shadow: var(--cg-edge), var(--cg-e2);
+    box-shadow: var(--cg-own-shadow);
+  }
+  .cg-termtip__t {
+    display: block;
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cg-ink-3, rgb(255 255 255 / 0.62));
+  }
+
+  /* ── §4.6 THE SCALE ────────────────────────────────────────────────────
+   *
+   * There is no "or" in this table, deliberately. `.cg-h1` was previously
+   * specified as "T1, OR solid + double shadow emboss," and an alternative in
+   * a rules document is the branch that gets taken at 11pm, one careless
+   * commit from a plain system-sans heading, which §0.1 lists as an outright
+   * failure. If a surface genuinely cannot carry background-clip: text it
+   * takes the @supports fallback above, which keeps the stroke and the lip.
+   * That is the only other legal rendering of `.cg-h1`.
+   *
+   * The two "name from the world" rows (19/1.20, solid ivory on dark, serif
+   * ink on parchment) are noir-only by construction, ivory on parchment is
+   * 1.3:1 and forbidden, so they live in §10.1, not here.
+   * ───────────────────────────────────────────────────────────────────── */
+
+  .cg-wordmark {
+    /* hub only; the shipped mark is a frozen SVG path (§4.1). This is its
+     * metric, and the treatment its @supports fallback needs. */
+    font-size: 34px;
+    line-height: 1.05;
+    --cg-t1-track: -0.028em;
+  }
+  .cg-h1 {
+    font-size: 26px;
+    line-height: 1.15;
+    --cg-t1-track: -0.02em;
+    margin: 0;
+  }
+  .cg-h2 {
+    /* T1 in the card's own tint */
+    font-size: 19px;
+    line-height: 1.2;
+    --cg-t1-track: -0.012em;
+    margin: 0;
+    /* A section heading is not display type. The skin's full T1 face carries a
+     * deep mid-stop that reads as a metal turn at wordmark size and as a fade
+     * across the x-height at 19px, so small headings take the skin's SHALLOW
+     * face where it defines one.
+     *
+     * The fallback is a LITERAL gradient, never `var(--something-undefined)`:
+     * this custom property feeds a background under
+     * `-webkit-text-fill-color: transparent`, and per §8's warning an invalid
+     * value there does not degrade to flat, it renders the heading INVISIBLE.
+     * A skin with no `--cg-t1-face-sm` gets the neutral shallow emboss below
+     * rather than a chance to erase its own headings. */
+    --cg-t1-face: var(
+      --cg-t1-face-sm,
+      linear-gradient(178deg, #fff 0%, #e2e6f0 42%, #b6bccb 74%, #d4d8e2 100%)
+    );
+  }
+  .cg-desig {
+    /* designation / small-caps rule, T2 at 68% */
+    font-size: 11px;
+    line-height: 1.2;
+    letter-spacing: 0.14em;
+    font-variant-caps: small-caps;
+    opacity: 0.68;
+  }
+  .cg-chip {
+    /* the box metric only, §8.3 paints it: gradient + gloss + glow */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: var(--cg-r-chip);
+    font-family: var(--cg-ui-font, var(--cg-round));
+    font-size: 12.5px;
+    font-weight: 700;
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * @layer state, TWO RULES, AND NOTHING ELSE MAY LIVE HERE.
+ *
+ * This layer exists because both of these must outrank every skin sheet, and
+ * on specificity alone both LOSE: `:where(.cg-skin) :focus-visible` is (0,1,0)
+ * and so is `.po-tile`, and §13 loads the skins after this file.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+@layer state {
+  /* §2.7, the ring PREPENDS to the material's own stack, because box-shadow
+   * replaces and never composes. Verified in Chromium: an element carrying a
+   * six-layer bevel, given `box-shadow: <ring>` on focus, computes to the ring
+   * ALONE, rim, highlight, lip, falloff and contact all gone. A rule that
+   * flattened the app's most-bevelled surfaces the moment a keyboard touched
+   * them would break R1 and R2 THROUGH the accessibility rule itself, for
+   * exactly the users least able to absorb it.
+   *
+   * On :focus-visible only, on every interactive element including calendar
+   * cells and game cards. `--cg-focus` is violet in the shell, magenta in
+   * poppy, gold in noir. */
+  :where(.cg-skin) :focus-visible {
+    box-shadow: var(--cg-focus-ring), var(--cg-own-shadow, var(--cg-e2));
+    outline: none;
+  }
+
+  /* §5.6, THE THIRD REDUCED-MOTION CHOKEPOINT.
+   *
+   * `mo()` and `decor()` are JavaScript and cover the WAAPI. Every hover peel,
+   * every press, every ::before elevation cross-fade, every .cg-fill tween,
+   * the .is-stuck header change and the tile deselect is a CSS TRANSITION, and
+   * neither of the other two can reach one. Worse, Settings routes its "Reduce
+   * motion" row to `setReducedMotion()` "so the app setting beats the OS", and
+   * a JavaScript setting cannot reach a media query, so the setting that is
+   * supposed to be the STRONGER one would do less. <Skin> therefore stamps
+   * `data-reduced="true"` from the same `reduced()` source `mo()` reads, and
+   * both paths land here.
+   *
+   * DURATION, NEVER `transition: none`. `none` cancels the transition and, on
+   * some engines, the final value still commits but `transitionend` never
+   * fires; 1ms lands the final state and keeps every listener honest.
+   *
+   * This is the only !important in the document. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 1ms !important;
+      animation-duration: 1ms !important;
+    }
+  }
+
+  [data-reduced="true"] *,
+  [data-reduced="true"] *::before,
+  [data-reduced="true"] *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}

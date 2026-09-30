@@ -1,0 +1,375 @@
+name: Publish to ConjureOS App Store
+
+# The Living Table is pure source (no Vite). ConjureOS's own bundler (@bundle,
+# inside the shared composite action) builds it into a single store HTML -
+# exactly the pipeline a user-imported store app goes through.
+#
+# Two Supabase projects (Phase 24 split):
+#   - push to `dev`             -> DEV project, every commit (mirrors ConjureOS's
+#                                  "dev auto-deploys" convention)
+#   - push to `main`            -> PROD project, every commit (mirrors ConjureOS's
+#                                  "main is production")
+#   - release published        -> PROD project (kept for a richer changelog off
+#                                  release notes; redundant with a `main` push on
+#                                  the same commit, so expect two prod versions
+#                                  if you tag a release right after merging)
+#   - workflow_dispatch        -> whichever `target` you pick (default dev)
+#
+# NO SERVICE-ROLE KEY IS INVOLVED. `scripts/publish-app.mjs` signs in as the
+# bot with `signInWithPassword` and says so in its own header; the
+# service-role/OTP path in ANCHOR_APP_CI_SETUP.md is a *backdoor* for running
+# the CLI by hand when the bot password isn't available. From CI the password
+# secret is all that's needed, and it's the less privileged credential.
+#
+# Per-repo secrets required (see ANCHOR_APP_CI_SETUP.md §5):
+#   CONJUREOS_REPO_TOKEN       read-only PAT so we can check ConjureOS out
+#   SUPABASE_DEV_PROJECT_REF   dev project ref
+#   SUPABASE_PROD_PROJECT_REF  prod project ref
+#   PUBLISH_BOT_DEV_PASSWORD   bot account password on dev
+#   PUBLISH_BOT_PROD_PASSWORD  bot account password on prod
+
+on:
+  push:
+    branches: [dev, main]
+    # A push that changes only Markdown has nothing to publish: no .md file is
+    # in the bundle, so the build is byte-identical to the live version and
+    # store-version answers 409 "nothing to publish". Without this, recording a
+    # decision in CLAUDE.md or DESIGN.md turns the publish run red. paths-ignore
+    # skips only when EVERY changed file matches, so a release commit, which
+    # always bumps package.json alongside CHANGELOG_NEXT.md, still publishes.
+    paths-ignore:
+      - "**/*.md"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which project to publish to
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+      first_publish:
+        description: >
+          First-ever publish for this slug, creates the store_apps row.
+          Leave OFF for every publish after the first.
+        required: false
+        default: false
+        type: boolean
+      changelog:
+        description: Changelog for this version
+        required: false
+        default: ""
+
+concurrency:
+  group: publish-store-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # Until the five secrets below exist, every push would fail at the first
+      # step that needs one. This repo was set up before they were added, so the
+      # job checks first and skips everything with a notice instead of going red.
+      - name: Check publish secrets are configured
+        id: secrets
+        env:
+          PAT: ${{ secrets.CONJUREOS_REPO_TOKEN }}
+          DEV_PW: ${{ secrets.PUBLISH_BOT_DEV_PASSWORD }}
+          PROD_PW: ${{ secrets.PUBLISH_BOT_PROD_PASSWORD }}
+          DEV_REF: ${{ secrets.SUPABASE_DEV_PROJECT_REF }}
+          PROD_REF: ${{ secrets.SUPABASE_PROD_PROJECT_REF }}
+        run: |
+          if [ -n "$PAT" ] && [ -n "$DEV_PW" ] && [ -n "$PROD_PW" ] && [ -n "$DEV_REF" ] && [ -n "$PROD_REF" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Publishing skipped: this repo does not have all five publish secrets yet (CONJUREOS_REPO_TOKEN, PUBLISH_BOT_DEV_PASSWORD, PUBLISH_BOT_PROD_PASSWORD, SUPABASE_DEV_PROJECT_REF, SUPABASE_PROD_PROJECT_REF)."
+          fi
+
+      - name: Checkout app source
+        uses: actions/checkout@v4
+
+      # ── THE GATE ──────────────────────────────────────────────────────────
+      #
+      # Nothing below this point runs if the tree does not typecheck, pass its
+      # tests and build. Issue #1: this workflow published to the PROD store on
+      # every push to `main` having run none of the three, so a commit that did
+      # not compile still reached real users. The store bundle IS built further
+      # down by the composite action, but that build happens after the decision
+      # to publish, inside the step that publishes, which is too late to be a
+      # gate and never ran the tests at all.
+      #
+      # It is a step, not a separate `needs:` job, on purpose: a second job
+      # would need its own checkout and could not be shown to be looking at the
+      # same tree these steps stamp and bundle. And it sits ABOVE the target
+      # resolution so there is nothing to reason about per trigger, EVERY path
+      # through this job (push to dev, push to main, a published release, and
+      # either workflow_dispatch target, first publish or not) comes through
+      # here first.
+      #
+      # Node is set up here rather than only on the first-publish path below,
+      # which is why that path used to hold the file's only `setup-node`: the
+      # composite action brings its own toolchain, so nothing else in this job
+      # had ever needed one.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        # The `playwright` devDependency downloads Chromium, Firefox and WebKit
+        # in its postinstall. The gate runs typecheck, tests and build; none of
+        # them open a browser. The only thing that does is `npm run shots`, a
+        # local visual-QA harness deliberately kept out of publishing. So this
+        # is pure cost on every publish.
+        #
+        # MEASURED, because the first version of this comment guessed and got it
+        # badly wrong: `npm ci` WITH the browsers had not finished at 4m; WITHOUT
+        # them it completes in 2m01s. Worth having, and worth being accurate
+        # about, it is a ~2 minute saving, not a hang. Nothing was ever hung.
+        #
+        # If a browser-driven check is ever added HERE, it needs its own
+        # `npx playwright install --with-deps chromium` step rather than this
+        # line being removed, pulling all three browsers back into every
+        # publish is what this comment exists to prevent.
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci
+
+      # Three commands, three steps, so the Actions summary names WHICH one
+      # failed without anybody opening a log. `npm run build` is not optional
+      # (CLAUDE.md): `conj-pack dev` does not exercise the real @bundle
+      # pipeline, so JSON imports, encoding and externalised deps can break in
+      # the published artifact and nowhere else.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # One place decides dev-vs-prod, so the manifest stamp, the Supabase URL
+      # and the bot password can never disagree with each other. A release is
+      # always prod; a push goes by which branch it landed on; a dispatch
+      # honours the `target` input.
+      - name: Resolve target project
+        id: target
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          DEV_REF: ${{ secrets.SUPABASE_DEV_PROJECT_REF }}
+          PROD_REF: ${{ secrets.SUPABASE_PROD_PROJECT_REF }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            env_name=prod
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            case "${{ github.ref_name }}" in
+              main) env_name=prod ;;
+              dev) env_name=dev ;;
+              *) echo "::error::Unexpected push branch '${{ github.ref_name }}'." && exit 1 ;;
+            esac
+          else
+            env_name="${{ github.event.inputs.target }}"
+          fi
+          if [ "$env_name" = "prod" ]; then
+            ref="$PROD_REF"
+            # Anon keys are public by design (shipped in every browser); RLS applies.
+            anon="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im50Z2VsYnRlcGVjcXNxbG94bWN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwOTkzMzEsImV4cCI6MjA5MzY3NTMzMX0.fgRCszkeAbHANaK-JJAGmTwWHyOh-3b6-od1c3s3V0w"
+          else
+            ref="$DEV_REF"
+            anon="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1xcHZqbHN5d3JwdGVmZ3d1enRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MTA3OTMsImV4cCI6MjA5NTQ4Njc5M30.ITZjX5KkMNgbJuFEHS5-IqFFJC6A39OynVgOznZeqD8"
+          fi
+          if [ -z "$ref" ]; then
+            echo "::error::No project ref for '$env_name'. Set SUPABASE_${env_name^^}_PROJECT_REF in this repo's Actions secrets (ANCHOR_APP_CI_SETUP.md §5)."
+            exit 1
+          fi
+          {
+            echo "env=$env_name"
+            echo "ref=$ref"
+            echo "anon=$anon"
+            echo "url=https://${ref}.supabase.co"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing to $env_name ($ref)."
+
+      - name: Resolve changelog
+        id: changelog
+        if: steps.secrets.outputs.ready == 'true'
+        # User-controlled fields come in as env vars, NOT inlined via ${{ }}
+        # into the script body. Inlining lets a quote or backtick in the release
+        # notes break the shell.
+        env:
+          REL_BODY: ${{ github.event.release.body }}
+          REL_NAME: ${{ github.event.release.name }}
+          REL_TAG: ${{ github.event.release.tag_name }}
+          PUSH_MESSAGE: ${{ github.event.head_commit.message }}
+          DISPATCH_CHANGELOG: ${{ github.event.inputs.changelog }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            text="$REL_BODY"
+            [ -z "$text" ] && text="$REL_NAME"
+            [ -z "$text" ] && text="$REL_TAG"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # NEVER the full commit message. This is the store changelog PLAYERS
+            # READ, and a commit body is written for the next engineer: issue #1
+            # shipped a session URL and twenty lines about `touch-action` and
+            # nested-iframe gesture handling to the public listing, and v7 did it
+            # again with forty lines about @layer braces. A commit message has no
+            # business on a product surface.
+            #
+            # CHANGELOG_NEXT.md is the deliberate user-facing copy. When it is
+            # absent we fall back to the commit SUBJECT ONLY, one line, no body,
+            # no trailers, which is terse but cannot leak.
+            #
+            # The file must open with a version header matching package.json,
+            # and that is a hard failure, not a warning. Nothing consumes this
+            # file on publish, so it survives the release it was written for:
+            # store v16 shipped the copy written for v15 (thirteen biomes and
+            # hazards) describing a release about the start screen, and every
+            # check stayed green because a stale file and a fresh one are
+            # byte-identical to a workflow that only asks whether it exists.
+            # Making the stamp load-bearing means the copy cannot outlive its
+            # release, you either update it or the publish stops.
+            if [ -s CHANGELOG_NEXT.md ]; then
+              ver="$(node -p "require('./package.json').version")"
+              stamp="$(head -n 1 CHANGELOG_NEXT.md | sed -n 's/^#[[:space:]]*//p' | tr -d '[:space:]')"
+              if [ -z "$stamp" ]; then
+                echo "::error::CHANGELOG_NEXT.md must start with a version header line, e.g. '# $ver', followed by the copy players read. Found: $(head -n 1 CHANGELOG_NEXT.md)"
+                exit 1
+              fi
+              if [ "$stamp" != "$ver" ]; then
+                echo "::error::CHANGELOG_NEXT.md is stamped $stamp but package.json is $ver, this is last release's copy. Rewrite it for $ver (and stamp it '# $ver') before publishing."
+                exit 1
+              fi
+              text="$(tail -n +2 CHANGELOG_NEXT.md)"
+            else
+              text="$(printf '%s\n' "$PUSH_MESSAGE" | head -n 1)"
+              echo "::warning::No CHANGELOG_NEXT.md, falling back to the commit subject. Players are reading this line."
+            fi
+          else
+            text="$DISPATCH_CHANGELOG"
+          fi
+
+          # Belt and braces, on EVERY path including a hand-written release body:
+          # strip git trailers and anything carrying a session URL. A human
+          # pasting a commit message into release notes is the same leak.
+          text="$(printf '%s\n' "$text" \
+            | grep -viE '^(Co-Authored-By|Claude-Session|Signed-off-by|Claude-Model):' \
+            | grep -viE 'claude\.ai/code/session' \
+            | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"
+          {
+            echo "text<<__CHANGELOG__"
+            echo "$text"
+            echo "__CHANGELOG__"
+          } >> "$GITHUB_OUTPUT"
+
+      # The shared publish/build action lives in the (private) ConjureOS repo.
+      # GitHub can't resolve an action in another private *personal* repo via
+      # `uses: Jonny-B/ConjureOS/...@dev`, so check ConjureOS out with a
+      # read-only PAT and reference the action by local path below. Pinned to
+      # `dev`, where the publish tooling is canonical.
+      - name: Checkout ConjureOS (shared publish action + publish CLI)
+        if: steps.secrets.outputs.ready == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Jonny-B/ConjureOS
+          ref: dev
+          token: ${{ secrets.CONJUREOS_REPO_TOKEN }}
+          path: .conjureos
+
+      # The manifest's remoteActions.gamesDb.url MUST match the project we're
+      # publishing to, or every backend call lands in the wrong database. This
+      # is not optional bookkeeping: Recipes shipped 0.10.0..0.31.0 pointing at
+      # the dev project because its publishes bypassed the stamping step, and
+      # every per-user call failed with a bare "Load failed" while public reads
+      # kept working. The committed default is PROD so that an unstamped
+      # publish is at worst correct for real users.
+      - name: Stamp games-db backend URL into manifest
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          GAMES_DB_URL: https://${{ steps.target.outputs.ref }}.supabase.co/functions/v1/games-db
+        run: |
+          node -e "const fs=require('fs');const p=require('./package.json');p.conjureos.remoteActions.gamesDb.url=process.env.GAMES_DB_URL;fs.writeFileSync('./package.json',JSON.stringify(p,null,2)+'\n');console.log('stamped gamesDb url ->',process.env.GAMES_DB_URL);"
+
+      # ── First-ever publish ────────────────────────────────────────────────
+      # The composite action can only register a NEW VERSION of an app whose
+      # store_apps row already exists, it builds its CLI args at
+      # action.yml:163-187 and has no way to emit --first-publish, --featured,
+      # --display-name, --visibility or --tags. So the bootstrap calls the CLI
+      # directly, once per project, and every publish after this uses the
+      # action path below.
+      #
+      # This Node setup is now redundant with the gate's unconditional one at
+      # the top of the job and is kept only so this bootstrap path stays
+      # self-contained if the gate is ever moved into a job of its own. The
+      # `npm ci && npm run build` under it is NOT redundant: it rebuilds after
+      # the stamping step above, so `dist/games.html` carries the right
+      # backend URL. The gate's build runs before stamping and only proves the
+      # tree builds.
+      - name: Set up Node (first publish)
+        if: steps.secrets.outputs.ready == 'true' && github.event.inputs.first_publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Build (first publish)
+        if: steps.secrets.outputs.ready == 'true' && github.event.inputs.first_publish == 'true'
+        run: |
+          npm ci
+          npm run build
+          ls -la dist/living-table.html
+
+      - name: First publish (creates the store_apps row)
+        if: steps.secrets.outputs.ready == 'true' && github.event.inputs.first_publish == 'true'
+        env:
+          SUPABASE_URL: ${{ steps.target.outputs.url }}
+          SUPABASE_ANON_KEY: ${{ steps.target.outputs.anon }}
+          PUBLISH_BOT_EMAIL: conjureosbot@gmail.com
+          PUBLISH_BOT_PASSWORD: >-
+            ${{ steps.target.outputs.env == 'prod'
+                && secrets.PUBLISH_BOT_PROD_PASSWORD
+                || secrets.PUBLISH_BOT_DEV_PASSWORD }}
+          CHANGELOG: ${{ steps.changelog.outputs.text }}
+        run: |
+          if [ -z "$PUBLISH_BOT_PASSWORD" ]; then
+            echo "::error::No bot password for ${{ steps.target.outputs.env }}. Set PUBLISH_BOT_DEV_PASSWORD / PUBLISH_BOT_PROD_PASSWORD in this repo's Actions secrets."
+            exit 1
+          fi
+          cd .conjureos/scripts && npm install --silent && cd -
+          # --package-json is load-bearing: it carries the `conjureos` manifest
+          # (permissions, the four actions, the stamped remoteActions URL) to
+          # the store. Without it the app installs with no permissions and
+          # every call fails.
+          #
+          # --featured needs the bot to be an admin; if it isn't, the CLI warns
+          # and affects 0 rows rather than failing, so check the log tail.
+          node .conjureos/scripts/publish-app.mjs \
+            --first-publish --featured \
+            --slug living-table \
+            --display-name 'The Living Table' \
+            --visibility public \
+            --tags 'games,ai' \
+            --package-json ./package.json \
+            --html ./dist/living-table.html \
+            --changelog "$CHANGELOG"
+
+      # ── Every publish after the first ─────────────────────────────────────
+      - name: Publish a new version
+        if: steps.secrets.outputs.ready == 'true' && github.event.inputs.first_publish != 'true'
+        uses: ./.conjureos/.github/actions/publish-anchor-app
+        with:
+          supabase-url: ${{ steps.target.outputs.url }}
+          supabase-anon-key: ${{ steps.target.outputs.anon }}
+          bot-email: conjureosbot@gmail.com
+          bot-password: >-
+            ${{ steps.target.outputs.env == 'prod'
+                && secrets.PUBLISH_BOT_PROD_PASSWORD
+                || secrets.PUBLISH_BOT_DEV_PASSWORD }}
+          source-path: .
+          project-name: The Living Table
+          slug: living-table
+          changelog: ${{ steps.changelog.outputs.text }}

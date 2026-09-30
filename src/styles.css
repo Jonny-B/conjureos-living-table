@@ -1,0 +1,1303 @@
+@layer core, legacy;
+/**
+ * LINE 1 IS LOAD-BEARING AND IT IS NEW. `@layer core, legacy;` runs BEFORE
+ * core.css's `@layer core, skin, state;` (see the import order in main.tsx), so
+ * layers sort by first appearance to `core, legacy, skin, state`.
+ *
+ * Why this file needed a layer at all. Unlayered author styles outrank EVERY
+ * layer, whatever the specificity, so as long as this sheet was unlayered,
+ * `.game-card { padding: var(--cui-space-4) }` beat the shell skin's
+ * `[data-skin="shell"] .cg-card { padding: 0 }` and the hub's tiles kept a
+ * 16px inset the new design does not have. And the obvious fix, appending
+ * `legacy` after `state`, is worse: it would outrank the focus ring.
+ *
+ * Why not simply BELOW core, either. core.css's element reset says
+ * `button { background: none; border: 0 }`, and layer order beats specificity,
+ * so a `legacy` layer under `core` would strip the paint off every `.tile`,
+ * `.level` and `.suspect` in the three games that have not been re-skinned yet.
+ * Between the two is the only place this sheet can sit.
+ *
+ * `legacy` HOLDS TWO SHEETS, NOT ONE. conjureos-ui.css is wrapped in this same
+ * layer, ahead of this file, because the two were both unlayered for the whole
+ * life of the app and their ties were settled by specificity first and source
+ * order second. Leaving that sheet unlayered handed it every tie (Cold Case
+ * lost the ring on the suspect you are questioning); giving it a rung of its
+ * own below this one handed THIS file every tie (the Vault's unlocked level
+ * card grew a violet glow the app has never shipped). One shared layer, in the
+ * original import order, reproduces the original cascade exactly.
+ *
+ * NOTHING BELOW IS DELETED OR REWRITTEN, it is scoped, exactly as
+ * DESIGN_SYSTEM.md §13 says: this file still owns every pixel of Threads, Cold
+ * Case and the Vault until §16.1 steps 8-9 replace it, and then it goes in one
+ * commit rather than being eroded.
+ */
+@layer legacy {
+/**
+ * Conjure Games styling. Everything resolves through @conjureos/ui's --cui-* tokens,
+ * so the app follows the OS's palette instead of inventing its own.
+ *
+ * Layout rule for the whole app: the window is the viewport, one column,
+ * scrolling inside .screen. Games get cramped inside a small ConjureOS window,
+ * so every grid collapses at 640px rather than overflowing.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--cui-bg);
+  color: var(--cui-fg);
+  font-family: var(--cui-font-sans);
+  line-height: var(--cui-leading-normal);
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-4);
+  height: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--cui-space-5);
+  overflow-y: auto;
+}
+
+/* ── game chrome ────────────────────────────────────────────────────── */
+
+/* WRAP IS LOAD-BEARING AT 390. The badge ("YOU OPENED THIS CASE") is a nowrap
+ * pill ~186px wide; on one row with a 44px back button and two 12px gaps it
+ * left the title column about 104px, so "The Last Rehearsal" broke over three
+ * lines and the case brief ran down a 6-word-per-line gutter with half the
+ * screen empty beside it. The text column now claims a 12rem basis and the
+ * badge drops to its own row when it cannot be paid; at desktop width nothing
+ * moves. Measured at 390x844, DESIGN_SYSTEM.md R10. */
+.game-head {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--cui-space-3);
+}
+.game-head > .cui-pill {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.game-head .back {
+  padding: var(--cui-space-1) var(--cui-space-3);
+  font-size: 1.2em;
+  line-height: 1;
+}
+.game-head-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.game-head-text h2 {
+  margin: 0;
+}
+.game-head-text p {
+  margin: var(--cui-space-1) 0 0;
+  font-size: 0.9em;
+}
+
+.busy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cui-space-3);
+  height: 100%;
+  padding: var(--cui-space-6);
+  text-align: center;
+}
+.busy p {
+  margin: 0;
+  max-width: 44ch;
+}
+.seed-body {
+  max-width: 46ch;
+}
+.err {
+  font-family: var(--cui-font-mono);
+  font-size: 0.85em;
+  word-break: break-word;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--cui-border);
+  border-top-color: var(--cui-accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+.cost {
+  display: inline-block;
+  margin-left: 0.4em;
+  padding: 0.05em 0.4em;
+  border-radius: var(--cui-radius-pill);
+  background: var(--cui-accent-tint);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.flash {
+  margin: 0;
+  color: var(--cui-accent);
+  font-size: 0.9em;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.outcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-3);
+  align-items: flex-start;
+  padding: var(--cui-space-4);
+}
+.outcome h3 {
+  margin: 0;
+}
+.outcome p {
+  margin: 0;
+}
+.outcome.win {
+  border-color: var(--cui-success);
+}
+
+.share {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+  align-items: flex-start;
+}
+.share pre {
+  margin: 0;
+  padding: var(--cui-space-3);
+  border-radius: var(--cui-radius);
+  background: var(--cui-surface-2);
+  font-family: var(--cui-font-mono);
+  font-size: 0.9em;
+  line-height: 1.35;
+}
+
+/* ── chat (Vault + Cold Case) ───────────────────────────────────────── */
+
+/* THE FADE IS AN AFFORDANCE, NOT A DECORATION. At 390x844 the five suspect
+ * cards leave `.interrogation` 265px, so this scroller lands on its 120px
+ * minimum and clips the transcript's last line horizontally through the middle
+ *, which reads as a rendering fault, not as "there is more below," and it is
+ * the first thing a reviewer sees in `.shots/coldcase-interrogation.phone.png`
+ * (§0.1). Chromium's overlay scrollbar is invisible in a screenshot and on a
+ * phone, so the clip edge is the ONLY signal there is. The mask makes it one.
+ *
+ * This is a stopgap on a sheet DESIGN_SYSTEM.md §16.1 step 12 deletes: the real
+ * answer is §10.3's transcript, which is not a 120px window under a suspect
+ * grid. Nothing here is layout, remove the mask when noir.css lands. */
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: var(--cui-space-1);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+.chat-empty {
+  margin: auto;
+  max-width: 38ch;
+  text-align: center;
+}
+.bubble {
+  max-width: 82%;
+  padding: var(--cui-space-3);
+  border-radius: var(--cui-radius-lg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bubble.user {
+  align-self: flex-end;
+  background: var(--cui-accent);
+  color: #fff;
+}
+.bubble.assistant {
+  align-self: flex-start;
+  background: var(--cui-surface-2);
+  border: var(--cui-border-width) solid var(--cui-border);
+}
+.bubble.thinking {
+  display: flex;
+  gap: 4px;
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cui-fg-mute);
+  animation: blink 1.2s infinite ease-in-out;
+}
+.dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+}
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--cui-space-2);
+  flex-wrap: wrap;
+}
+.composer textarea,
+.interrogation textarea {
+  resize: vertical;
+  font: inherit;
+}
+
+/* ── small windows ──────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .screen {
+    padding: var(--cui-space-3);
+    gap: var(--cui-space-3);
+  }
+  .tile {
+    padding: var(--cui-space-3) 2px;
+  }
+  .suspect-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .custom-row .cui-button,
+  .custom-row .cui-select {
+    flex: 1 1 auto;
+  }
+}
+
+/* ── The Living Table ──────────────────────────────────────────────── */
+
+.livingtable {
+  max-width: 1100px;
+}
+
+.lt-campaign-grid,
+.lt-template-row,
+.lt-archetype-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--cui-space-3);
+}
+.lt-campaign-card,
+.lt-template-card,
+.lt-archetype-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+  padding: var(--cui-space-4);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.lt-template-card.active,
+.lt-archetype-card.active {
+  border-color: var(--cui-accent);
+}
+.lt-new-card {
+  border-style: dashed;
+}
+
+.lt-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-1);
+}
+.lt-choice-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cui-space-2);
+}
+.lt-choice-options button {
+  cursor: pointer;
+  border: var(--cui-border-width) solid transparent;
+}
+
+/* The picked pill has to out-specify @conjureos/ui's own `.cui-ui .cui-pill`
+   (0-2-0), which sets both border-color and background. A bare
+   `.lt-choice-picked` (0-1-0) lost that fight silently: measured computed
+   styles on all three fighting-style pills were byte identical before and
+   after a click, so the one choice a newcomer makes at creation looked
+   broken. Two class-level selectors on the element plus its container puts
+   this at 0-3-0, which wins regardless of stylesheet order, and the picked
+   state is a filled accent rather than a border tint so it reads as chosen
+   from across the room rather than on close inspection. */
+.lt-choice-options .cui-pill.lt-choice-picked,
+.lt-levelup-choice .lt-levelup-option.lt-choice-picked {
+  background: var(--cui-accent);
+  border-color: var(--cui-accent);
+  color: #fff;
+  font-weight: 600;
+}
+.lt-choice-options .cui-pill.lt-choice-picked .cui-muted,
+.lt-levelup-choice .lt-levelup-option.lt-choice-picked .cui-muted {
+  color: #fff;
+  opacity: 0.9;
+}
+
+/* An option this build's engine does not apply yet, said out loud on the pill
+   rather than described in the present tense like the ones it does. Two cold
+   readers made four build decisions off these pills and got zero right,
+   partly because a dead option and a live one were written identically. Muted
+   and italic so it reads as a caveat attached to the option rather than as
+   part of the option's own pitch. */
+.lt-choice-notyet {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.85em;
+  font-style: italic;
+  opacity: 0.75;
+}
+
+/* What a credit actually buys, next to the button that spends one, and what
+   never costs one at all. Both cold readers derived a degenerate "never press
+   the paid button" strategy from badges alone, so the words that answer them
+   have to be on the same screen as the badge, not in a hover. */
+.lt-price-note,
+.lt-free-note {
+  margin: 0;
+  font-size: 0.85em;
+}
+.lt-free-note {
+  opacity: 0.8;
+}
+
+.lt-play-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: var(--cui-space-4);
+  align-items: start;
+  flex: 1;
+  min-height: 0;
+}
+.lt-stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-3);
+}
+/* Letterbox, never squeeze. The canvas is sized in JS to an exact integer
+   multiple of the sprite grid (see LivingTable.tsx's `displayScale`), so it
+   must NOT be stretched by CSS: `width: 100%` was what turned a 640px backing
+   store into a ~536px paint and deleted 104 of 640 columns with nearest-
+   neighbour scaling. The wrapper centres it and owns the leftover width. */
+.lt-canvas-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  /* was `var(--cui-bg-mute)`, a token @conjureos/ui does not define (it
+     ships --cui-bg / --cui-bg-1..3, never a "-mute" backdrop), so this
+     declaration was silently dropped and the wrap had no fill at all.
+     --cui-bg-1 is the defined "raised surface" token. */
+  background: var(--cui-bg-1);
+  border-radius: var(--cui-radius-md);
+  /* auto, not hidden: below about a 320px content width there is no integral
+     scale left to pick, and panning a crisp board beats either clipping it or
+     squeezing it back into the fractional downscale this whole change exists
+     to remove. */
+  overflow-x: auto;
+}
+.lt-canvas {
+  display: block;
+  flex: none;
+  background: var(--cui-bg-1);
+  image-rendering: pixelated;
+}
+
+/* The roll readout is DOM, not paint. Antialiased 14px monospace drawn into
+   the backing store was the least legible element on the least forgiving
+   surface: at the 375x812 mobile preset it landed at an effective ~7.7px and
+   then went through `image-rendering: pixelated`, which is right for a 16x16
+   sprite and wrong for type. As a DOM overlay it scales with the viewport and
+   uses the app's own type ramp. */
+/* Positioning moved to the `.lt-readout-stack` wrapper below (contract v2:
+   a loot popup can now land beside a roll's own readout in the same spot),
+   so a lone RollReadoutOverlay keeps drawing on the identical pixels it
+   always has -- the wrapper is the only thing that changed. */
+.lt-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--cui-space-2) var(--cui-space-3);
+  border-radius: var(--cui-radius);
+  background: rgba(0, 0, 0, 0.72);
+  color: #f5f5f5;
+  font-size: 0.85em;
+  line-height: 1.3;
+  pointer-events: none;
+}
+.lt-readout-caption {
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+.lt-readout-math {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cui-space-3);
+}
+.lt-readout-part {
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+.lt-readout-part b {
+  font-size: 1.15em;
+  font-variant-numeric: tabular-nums;
+  opacity: 1;
+}
+/* Where the bonus came from, under the bonus itself. The dice log has named
+   every part of a modifier since bonus sources landed; the popup showed the
+   lump alone, which is the one surface a player actually watches. Muted and a
+   step smaller so it reads as the explanation of the line above rather than as
+   a second set of numbers. */
+.lt-readout-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cui-space-2);
+  font-size: 0.78em;
+  opacity: 0.75;
+}
+.lt-readout-verdict {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.lt-readout-verdict.hit {
+  color: #7cfc7c;
+}
+.lt-readout-verdict.miss {
+  color: #ff8f8f;
+}
+.lt-readout-verdict.crit {
+  color: #ffd76a;
+}
+
+.lt-offscreen-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cui-space-3);
+  font-size: 0.8em;
+}
+
+.lt-round {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cui-space-2);
+  font-size: 0.9em;
+}
+
+.lt-suggestion {
+  margin: 0;
+  font-size: 0.9em;
+}
+
+/* menuHint, finally wired: the DM names the verbs that make sense right now
+   and the ones it named lift while the rest recede, so a newcomer is never
+   handed five equally weighted verb clusters with no signal. */
+.lt-verb-suggested {
+  border-left: 3px solid var(--cui-accent);
+  padding-left: var(--cui-space-2);
+}
+.lt-verb-quiet {
+  opacity: 0.6;
+}
+
+.lt-menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-3);
+}
+.lt-menu-move {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--cui-space-1);
+  width: fit-content;
+}
+.lt-menu-move-row {
+  display: flex;
+  gap: var(--cui-space-1);
+}
+.lt-menu-move button {
+  width: 44px;
+}
+.lt-target-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cui-space-2);
+  font-size: 0.9em;
+}
+
+.lt-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-3);
+  min-width: 0;
+}
+.lt-narration {
+  max-height: 260px;
+  overflow-y: auto;
+}
+/* A third voice in the story panel: not the dungeon master and not the
+   player, but the dice reporting what they did. Visually quieter than either
+   so the DM's prose stays the thing you read. */
+.lt-narration .bubble.engine {
+  align-self: center;
+  max-width: 92%;
+  padding: var(--cui-space-2) var(--cui-space-3);
+  background: transparent;
+  border: 0;
+  color: var(--cui-fg-mute);
+  font-size: 0.85em;
+  font-style: italic;
+  text-align: center;
+}
+
+.lt-save-trouble {
+  color: var(--cui-danger);
+}
+.lt-dice-entry {
+  margin: 0 0 var(--cui-space-1);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+.lt-dice-entry.hit {
+  color: var(--cui-success);
+}
+.lt-dice-entry.miss {
+  color: var(--cui-fg-mute);
+}
+
+.lt-sheet-vitals {
+  display: flex;
+  gap: var(--cui-space-3);
+  font-weight: 600;
+}
+.lt-sheet-abilities {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--cui-space-2);
+  font-size: 0.85em;
+}
+.lt-ability {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--cui-space-1);
+  border-radius: var(--cui-radius-sm);
+  background: var(--cui-bg-1);
+}
+.lt-ability-name {
+  font-size: 0.75em;
+  color: var(--cui-fg-mute);
+}
+
+.lt-levelup-preview {
+  margin-top: var(--cui-space-3);
+  padding: var(--cui-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+}
+.lt-levelup-changes {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.lt-levelup-choice {
+  padding-top: var(--cui-space-2);
+  border-top: 1px solid var(--cui-border);
+}
+/* Selectable cards, not paragraphs. The level-3 branch used to render as two
+   `<p>` elements with an apology underneath, so the single choice point in
+   the whole 1-to-3 progression had no affordance at all: a player looked for
+   something to click and found nothing. */
+.lt-levelup-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--cui-space-3);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  flex: 1 1 180px;
+}
+
+/* ── the six gear rows (issue #15's rarity chip is back, contract v2 adds
+   ring/amulet/boots) ─────────────────────────────────────────────────
+   One row per slot: what it is, its rarity, and what it does to a number.
+   The rank was off the screen while `equippableTiers` could only ever answer
+   with the tier already worn; loot is the engine-owned grant that changed
+   that (menu/equipment.ts's `equippableTiers` comment has the full story),
+   so the chip is back. The rank is carried by the WORD first (`.lt-rarity`'s
+   text), the PIPS second (the inventory screen's own rim-light-style cue),
+   and the colour only reinforces both -- a coloured chip alone tells a
+   colour blind player nothing. */
+.lt-gear {
+  margin-top: var(--cui-space-3);
+  padding-top: var(--cui-space-3);
+  border-top: 1px solid var(--cui-border);
+}
+.lt-gear-heading-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cui-space-2);
+  margin: 0 0 var(--cui-space-2);
+}
+.lt-gear-heading {
+  margin: 0;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cui-fg-mute);
+}
+.lt-gear-attuned {
+  font-size: 0.8em;
+  color: var(--cui-fg-mute);
+}
+.lt-gear-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+}
+.lt-gear-row {
+  border-radius: var(--cui-radius-sm);
+  background: var(--cui-bg-1);
+}
+/* A row is a button now (issue #15's restored surface opens the inventory
+   screen, not a second gear-writer inline on this panel), reset back to
+   looking like the plain row it always was. */
+.lt-gear-row-button {
+  display: block;
+  width: 100%;
+  padding: var(--cui-space-2);
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: var(--cui-space-3);
+}
+.lt-gear-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--cui-space-2);
+}
+.lt-gear-name {
+  font-weight: 600;
+}
+.lt-gear-slot {
+  font-size: 0.8em;
+  color: var(--cui-fg-mute);
+}
+.lt-gear-effect {
+  display: block;
+  margin: 2px 0 0;
+  font-size: 0.85em;
+  color: var(--cui-fg-mute);
+}
+.lt-gear-totals {
+  margin-top: var(--cui-space-2);
+  font-size: 0.85em;
+}
+.lt-gear-open-inventory {
+  margin-top: var(--cui-space-2);
+}
+.lt-rarity {
+  padding: 0 var(--cui-space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--cui-radius-pill);
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.lt-rarity--common {
+  color: var(--cui-fg-mute);
+}
+.lt-rarity--uncommon {
+  color: var(--cui-success);
+}
+/* Its OWN hue, not `--cui-accent`: the accent is also the Ok/Equip button's
+   colour and the selection outline's colour, so a rare item and "this is
+   selected" were the identical purple. `--cui-info-strong` is a defined,
+   distinct blue nowhere else in this rarity ladder. */
+.lt-rarity--rare {
+  color: var(--cui-info-strong);
+}
+.lt-rarity--legendary {
+  color: var(--cui-warning, var(--cui-accent));
+  font-weight: 700;
+}
+/* UNUSED: the old tier PICKER these three rules dressed is not restored
+   beside `.lt-rarity` (issue #15) -- it is SUPERSEDED by the inventory
+   screen (`.lt-inventory-*` below), the one staged surface that changes
+   gear now, so a second, unstaged writer never comes back. Deleting these
+   is the owner's call. */
+.lt-gear-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cui-space-2);
+  margin-top: var(--cui-space-2);
+}
+.lt-gear-option {
+  font-size: 0.8em;
+  padding: 2px var(--cui-space-2);
+}
+.lt-gear-option--worn {
+  border-color: var(--cui-accent);
+  color: var(--cui-accent);
+}
+
+.lt-applied-effects {
+  margin: var(--cui-space-2) 0 0;
+  padding-left: 1.2em;
+  font-size: 0.85em;
+  color: var(--cui-fg-mute);
+}
+
+/* Beside `.lt-readout` (a roll's own popup), never on top of it: a killing
+   blow's attack readout and the loot it just triggered can show at once. */
+.lt-readout-stack {
+  position: absolute;
+  top: var(--cui-space-2);
+  left: var(--cui-space-2);
+  right: var(--cui-space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+  pointer-events: none;
+}
+.lt-loot-readout .lt-readout-verdict {
+  color: #ffd76a;
+}
+.lt-loot-readout .lt-readout-verdict.hit {
+  color: #7cfc7c;
+}
+
+/* ── the inventory screen (contract v2) ────────────────────────────────
+   The owner's reference LAYOUT (a framed, book-titled panel; the character
+   large on a glowing pedestal; slots round the figure that show a faint
+   silhouette when empty and glow when selected; a bag grid underneath;
+   Cancel and Ok so a change is staged before it commits), redrawn in this
+   game's own FF-era vocabulary: a hard 2px light border inside a 2px dark
+   one, square corners, a flat dark panel, no gradients, no blur, no painted
+   texture. INVENTORY_LAYOUT (characters/equipmentTypes.ts) is where every
+   pixel number below comes from: full-bleed with the page's own 16px gutter
+   on a phone, capped at 480px on desktop; 56px slot boxes with an 8px gap
+   either side of a doll that gets the rest; a 6-wide bag grid with a 4px
+   gap. Every tap target here is at least 44 CSS px. */
+.lt-inventory-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+.lt-inventory {
+  width: 100%;
+  max-width: 480px;
+  max-height: 100%;
+  /* The PANEL no longer scrolls: header and footer are `flex: none` below
+     and `.lt-inventory-body` is the one scroller, so Ok can never land below
+     the fold the way the whole-panel scroller used to carry it. `overflow:
+     hidden` here is what makes that clip apply. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-3);
+  padding: 12px;
+  /* Was `var(--cui-bg-mute)`, a token @conjureos/ui does not define, so the
+     panel had no fill at all and the play screen behind it read straight
+     through the frame. A literal flat FF-window navy, opaque, per the "flat
+     dark panel, no gradients, no blur, no painted texture" rule above. */
+  background: #101a30;
+  border: 2px solid #05070d;
+  /* The inner light 2px stroke, drawn hard (0 blur) so it reads as a second
+     ring rather than a glow: "a hard 2px light border inside a 2px dark
+     one." */
+  box-shadow: inset 0 0 0 2px #e8e8f0;
+  border-radius: 0;
+}
+.lt-inventory-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--cui-space-2);
+  padding-bottom: var(--cui-space-2);
+  border-bottom: 1px solid rgba(232, 232, 240, 0.25);
+}
+.lt-inventory-title {
+  flex: 1;
+  margin: 0;
+  font-size: 1em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.lt-inventory-attuned {
+  font-size: 0.8em;
+  color: var(--cui-fg-mute);
+  white-space: nowrap;
+}
+.lt-inventory-close {
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 1.2em;
+  line-height: 1;
+  cursor: pointer;
+}
+.lt-inventory-blocked {
+  flex: none;
+  margin: 0;
+  padding: var(--cui-space-2);
+  border-radius: var(--cui-radius-sm);
+  background: var(--cui-bg);
+  font-size: 0.85em;
+}
+/* THE scroller. `.lt-inventory` itself is `overflow: hidden` now, so this is
+   the only thing that can grow past the viewport -- which means the footer
+   (Cancel/Ok, a sibling of this div, not a child) is a fixed `flex: none`
+   row that is always on screen, detail panel open or not, phone or desktop. */
+.lt-inventory-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-3);
+}
+.lt-inventory-columns {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.lt-inventory-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+}
+.lt-inventory-slot {
+  width: 56px;
+  height: 56px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 2px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+  /* An inset well, not a near-invisible 8%-white hairline: `--cui-border` at
+     8% white on a navy panel was nearly unreadable (the QA measurement was
+     `rgba(255,255,255,0.08)`). */
+  border: 2px solid rgba(232, 232, 240, 0.35);
+  background: #080b14;
+  color: inherit;
+  font: inherit;
+  font-size: 0.62em;
+  line-height: 1.1;
+  text-align: center;
+  cursor: pointer;
+}
+.lt-inventory-slot--empty {
+  /* A darker fill instead of `opacity`, which used to let the play screen
+     behind the (then-transparent) panel show through empty boxes too. */
+  background: #05070c;
+  font-style: italic;
+  color: var(--cui-fg-dim);
+}
+/* Selection and the equip target are drawn OUTSIDE the box in plain white,
+   never in a tier colour: the tier border (`--inventory-slot--rare` etc.,
+   below) is the only thing allowed to say what rarity a piece is, so a
+   selected legendary can never be read as a selected rare. `selected` is a
+   steady ring; `highlighted` (the box a staged bag pick would land in) is
+   the same ring, blinking, so the two are never confused with each other
+   either. */
+.lt-inventory-slot--selected {
+  outline: 2px solid #ffffff;
+  outline-offset: 3px;
+}
+.lt-inventory-slot--highlighted {
+  outline: 2px dashed #ffffff;
+  outline-offset: 3px;
+  animation: lt-inventory-target-blink 1s steps(1, start) infinite;
+}
+@keyframes lt-inventory-target-blink {
+  50% {
+    outline-color: transparent;
+  }
+}
+.lt-inventory-slot-rarity {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  gap: 2px;
+}
+/* RARITY_PIPS: square marks, a count legible with no hue at all. Drawn in
+   CSS (currentColor, from the .lt-rarity--<tier> colour rule) rather than a
+   glyph, which some phones render as an emoji. */
+.lt-pip {
+  display: block;
+  width: 4px;
+  height: 4px;
+  background: currentColor;
+}
+/* The box border in the tier colour: the fourth, redundant rarity cue
+   (the word, the pips and the rim light carry it without colour). */
+.lt-inventory-slot.lt-inventory-slot--uncommon,
+.lt-inventory-bag-cell.lt-inventory-bag-cell--uncommon {
+  border-color: var(--cui-success);
+}
+.lt-inventory-slot.lt-inventory-slot--rare,
+.lt-inventory-bag-cell.lt-inventory-bag-cell--rare {
+  /* Not `--cui-accent`: that is also the Ok/Equip button's colour and (see
+     `--selected` above) used to be the selection ring's colour too, so a
+     selected legendary read as rare and a selected rare was indistinguishable
+     from an unselected one. `--cui-info-strong` is its own hue. */
+  border-color: var(--cui-info-strong);
+}
+.lt-inventory-slot.lt-inventory-slot--legendary,
+.lt-inventory-bag-cell.lt-inventory-bag-cell--legendary {
+  border-color: var(--cui-warning, var(--cui-accent));
+}
+.lt-inventory-slot-word {
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cui-fg-mute);
+}
+/* A slot box or bag cell's pixel icon (render/gearIcon.ts). Backing store
+   equals CSS size, so pixelated only matters if a browser zoom rescales it. */
+.lt-gear-icon {
+  display: block;
+  flex: none;
+  image-rendering: pixelated;
+}
+.lt-inventory-slot-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.lt-inventory-doll-wrap {
+  flex: 1 1 auto;
+  min-width: 120px;
+  max-width: 206px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lt-inventory-doll {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+}
+/* A FIXED height, not `min-height`: the bag sits right below this box, and
+   selecting something used to change how tall this box was, which moved the
+   bag's first row up to ~150 CSS px on a phone the instant a player tapped
+   an item -- exactly while they were reaching for a second one. A fixed
+   height (about 7 lines, the tallest real detail: name, "Fits:", the effect
+   sentence, the attunement line, "Replaces...", the Equip button and its
+   refusal reason) with its own scroll means the bag never moves again,
+   whatever is selected. */
+.lt-inventory-detail {
+  /* `flex: none` because this box is a child of `.lt-inventory-body`, a
+     flex column: with the default shrink of 1 and its own `overflow-y`
+     (which lets a flex item's minimum height fall to 0), it was the one
+     child that gave way whenever the body ran taller than the window. At
+     1280x800 it collapsed to a ~20px strip, hiding the item's text and the
+     Equip button inside a sliver. The body is the scroller; this box keeps
+     its height. */
+  flex: none;
+  height: 168px;
+  overflow-y: auto;
+  padding: var(--cui-space-2);
+  border-radius: 0;
+  background: #080b14;
+  border: 1px solid rgba(232, 232, 240, 0.2);
+}
+.lt-inventory-detail-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--cui-space-2);
+  margin-bottom: 2px;
+}
+.lt-inventory-detail-name {
+  font-weight: 600;
+}
+/* The live before/after (statDeltaLine, inventoryView.ts): the PRIMARY
+   claim about what an item does, ahead of the worked-example sentence
+   underneath it, so a live AC that happens to match the example's fixed "a
+   15" can never be misread as the item doing nothing. */
+.lt-inventory-detail-stat {
+  margin: 2px 0;
+  font-weight: 600;
+  color: var(--cui-success);
+}
+/* Equip, Unequip and the fitting-list rows are tap targets like any other:
+   INVENTORY_LAYOUT's "every tap target is at least 44 px". The shared
+   cui-button measured 32px tall here, the only buttons on this screen under
+   the floor. */
+.lt-inventory-detail .cui-button {
+  min-height: 44px;
+}
+.lt-inventory-refusal {
+  margin: var(--cui-space-2) 0 0;
+  font-size: 0.85em;
+  color: var(--cui-warning, var(--cui-accent));
+}
+.lt-inventory-fitting-list {
+  margin: var(--cui-space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+}
+.lt-inventory-bag-label {
+  margin: 0;
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cui-fg-mute);
+}
+.lt-inventory-bag {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+.lt-inventory-bag-cell {
+  position: relative;
+  aspect-ratio: 1;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 2px;
+  overflow: hidden;
+  border: 1px solid rgba(232, 232, 240, 0.35);
+  background: #080b14;
+  color: inherit;
+  font: inherit;
+  font-size: 0.6em;
+  text-align: center;
+  cursor: pointer;
+}
+.lt-inventory-bag-cell--empty {
+  cursor: default;
+  /* A darker fill instead of `opacity`, same reasoning as the empty slot
+     box above: opacity let the play screen behind the (then-transparent)
+     panel show through. */
+  background: #05070c;
+  border-color: rgba(232, 232, 240, 0.15);
+}
+.lt-inventory-bag-cell--selected {
+  /* White, outside the cell (never the tier border's own colour, and never
+     `--cui-accent`, which is also the Ok/Equip button and used to be the
+     rare tier's colour -- see the slot rules above for the full story). */
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+.lt-inventory-bag-rarity {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  gap: 2px;
+}
+.lt-inventory-bag-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lt-inventory-footer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-1);
+  padding-top: var(--cui-space-2);
+  border-top: 1px solid rgba(232, 232, 240, 0.25);
+}
+.lt-inventory-footer-row {
+  display: flex;
+  gap: var(--cui-space-2);
+}
+.lt-inventory-footer .cui-button {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 0;
+}
+/* Cancel used to be `cui-button--ghost`: transparent background, transparent
+   border, so it read as a floating word beside Ok's solid pill rather than
+   as a second, equally-tappable button. Framed the same square-cornered way
+   as the rest of this window, at equal visual weight to Ok. */
+.lt-inventory-footer .cui-button--ghost {
+  background: #080b14;
+  border: 2px solid rgba(232, 232, 240, 0.5);
+  color: var(--cui-fg);
+}
+.lt-inventory-footer .cui-button--ghost:hover {
+  background: var(--cui-bg-1);
+}
+.lt-inventory-footer .cui-button--primary {
+  border: 2px solid var(--cui-accent);
+}
+/* "1 change" beside Ok when the staged draft differs from what is on the
+   sheet, so a player who taps Cancel (or the header x, which discards the
+   same way) knows there is something to lose first. */
+.lt-inventory-changes {
+  align-self: center;
+  font-size: 0.78em;
+  color: var(--cui-fg-mute);
+}
+
+/* ── explaining the numbers ─────────────────────────────────────────── */
+
+/* Tap, not hover. The four explanations this game had were all `title`
+   attributes, unreachable on the mobile host ConjureOS actually serves this
+   app from. */
+.lt-explainable {
+  position: relative;
+  display: inline-block;
+}
+.lt-explain {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.lt-explain-mark {
+  display: inline-block;
+  margin-left: 0.25em;
+  width: 1.15em;
+  height: 1.15em;
+  line-height: 1.15em;
+  border-radius: var(--cui-radius-pill);
+  background: var(--cui-accent-tint);
+  color: var(--cui-accent);
+  font-size: 0.7em;
+  text-align: center;
+  vertical-align: middle;
+}
+.lt-popover {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  max-width: min(80vw, 320px);
+  padding: var(--cui-space-3);
+  border: var(--cui-border-width) solid var(--cui-border);
+  border-radius: var(--cui-radius);
+  background: var(--cui-surface-2);
+  color: var(--cui-fg);
+  font-size: 0.85em;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.4;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+/* ── about the rules: the glossary and the SRD credit ───────────────── */
+
+.lt-about-link {
+  align-self: flex-start;
+}
+.lt-about-heading {
+  margin: var(--cui-space-3) 0 var(--cui-space-1);
+}
+.lt-glossary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-2);
+  margin: 0;
+}
+.lt-glossary-row dt {
+  font-weight: 600;
+}
+.lt-glossary-row dd {
+  margin: 0;
+  font-size: 0.9em;
+}
+.lt-srd-notice {
+  margin: 0 0 var(--cui-space-1);
+  font-size: 0.8em;
+}
+
+@media (max-width: 720px) {
+  .lt-play-layout {
+    grid-template-columns: 1fr;
+  }
+}
+}
