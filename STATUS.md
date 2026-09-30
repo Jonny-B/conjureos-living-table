@@ -15,6 +15,14 @@ The Living Table is leaving Conjure Games for this repo. Owner decisions,
 6. The game stays inside Conjure Games until this app is live on the prod store; then the hub card points here.
 7. All rights reserved (not MIT).
 
+Later the same day, with the art moving to Kay Lousberg's free KayKit packs
+(CC0): **sci-fi is paused** and **the Healer is out of play**, because the free
+packs have a knight, a rogue and a mage but no cleric and no sci-fi characters.
+Both stay in the code and still load; only `PLAYABLE_TEMPLATES` and
+`PLAYABLE_ARCHETYPE_IDS` in `characters/templates.ts` decide what a player can
+start (0.2.0). The owner also wants the "not much use" free packs kept in mind:
+pieces of them can be pulled in and adapted.
+
 ## Next
 
 - Publishing: add the five Actions secrets (see the publish workflow's header), then the first publish per project.

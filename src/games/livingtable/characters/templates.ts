@@ -271,6 +271,25 @@ export const ARCHETYPES: Archetype[] = [
   },
 ];
 
+/**
+ * What a player can start today, a subset of everything defined above.
+ *
+ * Owner decision, 2026-09-30: the game's art is moving to Kay Lousberg's free
+ * KayKit packs (CC0), which have a knight, a rogue and a mage but no cleric and
+ * no sci-fi characters. So the sci-fi template is PAUSED and the Healer is OUT
+ * OF PLAY. Both stay defined (rules, gear tables, sprites, tests) and simply
+ * cannot be picked: un-pausing is an edit to these two lists, and a stored
+ * sheet or campaign that names one still loads.
+ */
+export const PLAYABLE_TEMPLATES: readonly TemplateGenre[] = Object.freeze(["fantasy"] as const);
+export const PLAYABLE_ARCHETYPE_IDS: readonly string[] = Object.freeze(["knight", "shadow", "fireball-person"]);
+
+/** The archetypes a player may pick for a campaign in `template`, in ARCHETYPES order. */
+export function playableArchetypes(template: TemplateGenre): Archetype[] {
+  if (!PLAYABLE_TEMPLATES.includes(template)) return [];
+  return ARCHETYPES.filter((a) => a.template === template && PLAYABLE_ARCHETYPE_IDS.includes(a.id));
+}
+
 export function getArchetype(archetypeId: string): Archetype {
   const found = ARCHETYPES.find((a) => a.id === archetypeId);
   if (!found) throw new Error(`unknown archetype id "${archetypeId}"`);

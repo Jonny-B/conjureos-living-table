@@ -2,6 +2,8 @@
 
 Moved from Conjure Games' DESIGN.md (the "The Living Table (fifth game)" section) when the game got its own repo on 2026-09-30. Headings are one level up; the text is unchanged. Where it says "the fifth game" or refers to the hub's other games, read it as history.
 
+**Current scope (2026-09-30).** The art is moving to Kay Lousberg's free KayKit packs, so only what they can draw is playable: the Fantasy template with the Knight, the Shadow and the wizard. Sci-fi is paused and the Healer is out of play; both remain in the code and in the notes below. `PLAYABLE_TEMPLATES` and `PLAYABLE_ARCHETYPE_IDS` in `characters/templates.ts` are the switch.
+
 
 **The pitch.** A real AI dungeon master, d20s, ability scores, saves,
 initiative, spell slots, the actual rules, on a top-down sprite grid, playable

@@ -64,7 +64,7 @@ import * as api from "../../bridge/gamesApi";
 import type { ChatMessage } from "../../bridge/ai";
 import { Busy, CostBadge, ErrorNote, GameHeader, Panel } from "../../components/Bits";
 
-import { ARCHETYPES, type TemplateGenre } from "./characters/templates";
+import { PLAYABLE_TEMPLATES, playableArchetypes, type TemplateGenre } from "./characters/templates";
 // `EquipmentTier` and `SlotRole` were imported for the hidden tier picker's
 // props alone (issue #15); every other reference on this screen goes through
 // menu/equipment.ts's own view types. They come back with the picker.
@@ -701,27 +701,31 @@ function NewCampaignScreen({ onExit, onCreated }: { onExit: () => void; onCreate
               player exactly one character: createCharacter is called once, and
               the sheet, the HP bar and the player's token are all singular.
               Companions are not a thing the player recruits or controls. So
-              the list is a CHOICE now -- "one of four", joined by "or" rather
-              than "and" -- which is what the next screen actually offers. The
+              the list is a CHOICE now, joined by "or" rather than "and",
+              which is what the next screen actually offers. The
               archetype blurbs underneath were fixed for this same defect
               already, and "no archetype blurb sells a party this game never
               shows" is the test that has guarded them since. */}
           <p className="cui-muted">
-            Swords, spells, dungeons. You play one of four: a knight, a shadow, a healer, or a wizard whose fire starts
-            as a single bolt and grows from there.
+            Swords, spells, dungeons. You play one of three: a knight, a shadow, or a wizard whose fire starts as a
+            single bolt and grows from there.
           </p>
         </button>
-        <button
-          type="button"
-          className={`cui-card cui-card--interactive lt-template-card${template === "scifi" ? " active" : ""}`}
-          onClick={() => setTemplate("scifi")}
-        >
-          <strong>Sci-fi</strong>
-          <p className="cui-muted">
-            Starships, psionics, ray weapons. You play one of four: a trooper, an infiltrator, a medic, or a mind that
-            bends other minds.
-          </p>
-        </button>
+        {/* Sci-fi is paused (templates.ts PLAYABLE_TEMPLATES), so its card is
+            not offered; the template itself still loads. */}
+        {PLAYABLE_TEMPLATES.includes("scifi") && (
+          <button
+            type="button"
+            className={`cui-card cui-card--interactive lt-template-card${template === "scifi" ? " active" : ""}`}
+            onClick={() => setTemplate("scifi")}
+          >
+            <strong>Sci-fi</strong>
+            <p className="cui-muted">
+              Starships, psionics, ray weapons. You play one of four: a trooper, an infiltrator, a medic, or a mind that
+              bends other minds.
+            </p>
+          </button>
+        )}
       </div>
       <input
         className="cui-input"
@@ -771,7 +775,8 @@ function CreateCharacterScreen({
   onExit: () => void;
   onCreated: (characterId: string) => void;
 }) {
-  const archetypes = useMemo(() => ARCHETYPES.filter((a) => a.template === campaign.template), [campaign.template]);
+  // Only what can be started today (templates.ts PLAYABLE_ARCHETYPE_IDS): the Healer is out of play.
+  const archetypes = useMemo(() => playableArchetypes(campaign.template), [campaign.template]);
   const [archetypeId, setArchetypeId] = useState(archetypes[0]?.id ?? "");
   const [name, setName] = useState("");
   const [choices, setChoices] = useState<Record<string, string>>({});

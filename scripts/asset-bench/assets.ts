@@ -52,7 +52,7 @@ import {
   type SheetOnlyRole,
   type SlotRole,
 } from "../../src/games/livingtable/characters/equipmentTypes";
-import type { TemplateGenre } from "../../src/games/livingtable/characters/templates";
+import { PLAYABLE_ARCHETYPE_IDS, PLAYABLE_TEMPLATES, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
 import { createCharacter, type CharacterSheet } from "../../src/games/livingtable/characters/creation";
 import { applyDamage } from "../../src/games/livingtable/characters/health";
 import { renderPlanFor, slotLabelFor } from "../../src/games/livingtable/menu/equipment";
@@ -339,7 +339,8 @@ function buildArchetypeSelect(template: TemplateGenre, onChange: (id: ArchetypeI
   for (const id of ARCHETYPES_BY_TEMPLATE[template]) {
     const opt = document.createElement("option");
     opt.value = id;
-    opt.textContent = ARCHETYPE_LABEL[id];
+    // Out-of-play archetypes stay on the bench (their art and rules still exist), marked as such.
+    opt.textContent = PLAYABLE_ARCHETYPE_IDS.includes(id) ? ARCHETYPE_LABEL[id] : `${ARCHETYPE_LABEL[id]} (not playable)`;
     select.appendChild(opt);
   }
   select.onchange = () => onChange(select.value as ArchetypeId);
@@ -352,7 +353,7 @@ function buildTemplateSelect(onChange: (t: TemplateGenre) => void): HTMLSelectEl
   for (const t of TEMPLATES) {
     const opt = document.createElement("option");
     opt.value = t;
-    opt.textContent = TEMPLATE_LABEL[t];
+    opt.textContent = PLAYABLE_TEMPLATES.includes(t) ? TEMPLATE_LABEL[t] : `${TEMPLATE_LABEL[t]} (paused)`;
     select.appendChild(opt);
   }
   select.onchange = () => onChange(select.value as TemplateGenre);
