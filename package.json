@@ -16,7 +16,7 @@
     "build": "npx -y tsx scripts/build-bundle.mjs",
     "typecheck": "tsc -b --noEmit",
     "test": "npx -y tsx --test test/*.test.ts",
-    "bench": "node scripts/kaykit/pack.mjs && node scripts/kaykit/pack-library.mjs && node scripts/asset-bench/build-bench.mjs --assets scripts/asset-bench/assets.ts --out .cache/asset-bench/living-table-bench.html --artifact --data kaykit=.cache/kaykit/bench-data.json --data kaylib=.cache/kaykit/bench-library.json",
+    "bench": "node scripts/kaykit/pack-library.mjs && node scripts/kaykit/pack-cast.mjs && node scripts/asset-bench/build-bench.mjs --assets scripts/asset-bench/assets.ts --out .cache/asset-bench/living-table-bench.html --artifact --data kaylib=.cache/kaykit/bench-library.json --data kaycast=.cache/kaykit/bench-cast.json",
     "kaykit:palette": "npx -y tsx scripts/kaykit/export-palette.ts",
     "kaykit:targets": "npx -y tsx scripts/kaykit/export-targets.ts"
   },

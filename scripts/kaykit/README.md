@@ -12,7 +12,9 @@ bench. Nothing here ships in the game.
 | `styles/*.py` | Conversion styles: how a posed 3D scene becomes an indexed pixel frame in the game's palette. `plain.py` is the control (a straight downscale). The contract is in `harness.py`'s docstring. |
 | `export-palette.ts` | Writes the fantasy palette to `.cache/kaykit/palette-fantasy.json` so Blender quantises into the game's own 52 colours. |
 | `sheet.mjs` | Contact sheets from harness output, to look at renders without the bench. |
-| `pack.mjs` | Gathers every finished style into `.cache/kaykit/bench-data.json`, which `npm run bench` embeds. |
+| `pack.mjs` | The trial's packer (`.cache/kaykit/bench-data.json`). The bench no longer embeds it: the animated cast below replaced the trial panel. |
+| `cast.py` | Every character the game uses (heroes, monsters, townsfolk) rendered through this harness's camera, framing and styles, animated, with each hero's gear as separate animated layers. See "The animated cast" below. |
+| `pack-cast.mjs` | Gathers `.cache/kaykit/out/cast-<style>/cast.json` into `.cache/kaykit/bench-cast.json`, which `npm run bench` embeds. |
 
 ## Running it
 
@@ -34,10 +36,7 @@ Everything reads and writes under `.cache/` (gitignored). From the repo root:
    ```
    node scripts/kaykit/sheet.mjs plain --size 32x48 --dir down
    ```
-5. Put it on the bench (packs every full-run style, then builds).
-   ```
-   npm run bench
-   ```
+5. The trial's Knight now lives on as part of the animated cast (`cast.py`, below), which is what the bench shows.
 
 ## Notes
 
@@ -57,7 +56,7 @@ four makers, each owning one script and its parts:
 | `lib_ground_lit.py` | 40 ground, 5 wall and 190 edge tiles, Lit style | `ground-lit-16.json`, `ground-lit-32.json` |
 | `lib_ground_painted.py` | the same 235 tiles, Painted style | `ground-painted-16.json`, `ground-painted-32.json` |
 | `lib_props.py` | 37 props (multi-tile props are one model, sliced) | `props-16.json`, `props-32.json` |
-| `lib_tokens.py` | 8 tokens, 33 gear overlays, 7 icons, per character style | `tokens-<plain/bands/toon/pixelart>-<16/32>.json` |
+| `cast.py` | 8 tokens, 33 gear overlays, 7 icons, per character style (stills from the animated cast; replaced `lib_tokens.py`, whose figures did not match the Knight) | `tokens-<plain/bands/toon/pixelart>-<16/32>.json` |
 
 The Healer's pieces are out of play and sci-fi is paused, so neither is
 converted. `token_goblin` has no free Kay source and is the hooded Rogue
@@ -81,3 +80,27 @@ Run order, from the repo root (each step is safe to repeat):
 32 px art needs the renderer's `RenderManifest.spriteSize` (32), which the
 game supports from 0.3.0; the game itself still loads the 16 px art from
 games-db until it is switched over.
+
+## The animated cast
+
+The owner's call (2026-09-30): every character must be a Kay model drawn the
+same way as the animated Knight. `cast.py` renders the whole cast through the
+harness's camera, framing and four styles, at 16 and 32 px, in seven
+animations and four facings. Heroes are rendered without their removable gear,
+and each gear piece (weapon, shield or cloak, armour or hat, boots; base, rare
+and legendary) is its own animated layer rendered with the body as holdout, so
+body plus any combination of layers composites pixel for pixel. The bench's
+Play tab dresses the hero from `renderPlanFor` (the game's own equipment
+plan): each plan layer's sprite id is a cast gear id.
+
+Output, per style: `.cache/kaykit/out/cast-<style>/cast.json` (the shape is
+in `scripts/asset-bench/cast.ts`), a contact sheet `sheet.png` beside the
+Knight, and the static `tokens-<style>-<size>.json` library parts.
+
+```
+"C:/Program Files/Blender Foundation/Blender 5.2/blender.exe" -b --factory-startup --python scripts/kaykit/cast.py -- render --style bands
+"C:/Program Files/Blender Foundation/Blender 5.2/blender.exe" -b --factory-startup --python scripts/kaykit/cast.py -- assemble --style bands
+npm run bench
+```
+
+Repeat render and assemble per style (bands, toon, pixelart, plain); `--chars` renders a subset, and `parity` proves the Knight still matches the harness pixel for pixel. The full cast is about 20 minutes with the styles in parallel. The other subcommands are in `cast.py`'s docstring.

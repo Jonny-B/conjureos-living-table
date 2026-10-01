@@ -280,9 +280,12 @@ export function mountBench(bench, root) {
   const libraryTab = document.createElement("button");
   libraryTab.className = "bn-tab";
   libraryTab.type = "button";
-  libraryTab.textContent = "Library";
+  libraryTab.textContent = bench.libraryLabel || "Library";
   libraryTab.setAttribute("role", "tab");
-  tabsEl.appendChild(libraryTab);
+  // This project's addition: bench.libraryLast puts the Library tab after the
+  // panels (appended below, once they exist) for a bench whose panels are the
+  // main thing; by default it comes first, as in the template.
+  if (!bench.libraryLast) tabsEl.appendChild(libraryTab);
 
   const libraryPanel = document.createElement("section");
   libraryPanel.className = "bn-panel";
@@ -613,8 +616,10 @@ export function mountBench(bench, root) {
     panelState.set(p.id, { el: section, cleanup: null, mounted: false });
   }
 
+  if (bench.libraryLast) tabsEl.appendChild(libraryTab);
   renderGrid();
-  activate("__library");
+  // bench.defaultPanel (this project's addition) opens a panel first instead of the Library.
+  activate(bench.defaultPanel && panel(bench.defaultPanel) ? bench.defaultPanel : "__library");
 }
 
 function escapeHtml(s) {

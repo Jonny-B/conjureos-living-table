@@ -1,20 +1,23 @@
 /**
  * The Living Table asset bench registry.
  *
- * Every sprite in scripts/assets/fantasy.ts and scripts/assets/scifi.ts, laid
- * out as a searchable library, plus five panels that call the game's own
- * render/character functions BY SYMBOL (renderPlanFor, compositeToken via
- * renderCell, renderDoll, renderGearIcon, applyDisplayTiles) so the bench
- * shows what ships, not a second drawing of it.
+ * Six panels (Play, Characters, Pieces, Gear, Terrain, Palette) and a
+ * searchable Library of every sprite in scripts/assets/fantasy.ts and
+ * scripts/assets/scifi.ts. The panels call the game's own render, rules and
+ * character functions BY SYMBOL (renderPlanFor, renderCell, renderDoll,
+ * renderGearIcon, applyDisplayTiles, the combat and inventory rules) so the
+ * bench shows what ships, not a second drawing of it. The KayKit art rides in
+ * as embedded data: the converted stills (kaykit.ts) and the animated cast
+ * (cast.ts).
  *
  * Built with scripts/asset-bench/build-bench.mjs from the project root:
  *
  *   node scripts/asset-bench/build-bench.mjs \
  *     --assets scripts/asset-bench/assets.ts \
  *     --out .cache/asset-bench/living-table-bench.html \
- *     --artifact
+ *     --artifact --data kaylib=... --data kaycast=...
  *
- * or `npm run bench`.
+ * or `npm run bench`, which packs the KayKit data first.
  */
 import { PALETTE as FANTASY_PALETTE, SPRITES as FANTASY_SPRITES } from "../assets/fantasy";
 import { PALETTE as SCIFI_PALETTE, SPRITES as SCIFI_SPRITES } from "../assets/scifi";
@@ -30,7 +33,6 @@ import {
   DOLL_MIN_SCALE,
   EQUIPMENT_TIERS,
   GEAR_ROLES,
-  GLOW_PULSE_PERIOD_MS,
   LOOT_CAP_LINE,
   MAX_ATTUNED_ITEMS,
   SLOTS_BY_ARCHETYPE,
@@ -46,7 +48,6 @@ import {
   type Equipment,
   type EquipmentTier,
   type GearRole,
-  type GlowFrame,
   type LoadoutDraft,
   type MagicTier,
   type SheetOnlyRole,
@@ -76,24 +77,28 @@ import {
 import { renderDoll } from "../../src/games/livingtable/render/doll";
 import { renderGearIcon } from "../../src/games/livingtable/render/gearIcon";
 import { renderCell, spriteSizeOf, type RenderManifest } from "../../src/games/livingtable/render/canvasRenderer";
+import { decodeLibrary, kaykitLibrary, partFile } from "./kaykit";
 import {
-  K_CLIPS,
-  K_DIRS,
-  clipDurationMs,
-  decodeLibrary,
-  dirToward,
-  findClip,
-  frameIndex,
-  framesNow,
-  kaykitData,
-  kaykitLibrary,
-  partFile,
-  sizeIdsFor,
-  type KClip,
-  type KClipId,
-  type KData,
-  type KDir,
-} from "./kaykit";
+  CAST_CLIPS,
+  CAST_DIRS,
+  actorAt,
+  actorClip,
+  castClipMs,
+  castData,
+  castDirToward,
+  castFrameIndex,
+  castFrames,
+  findCastClip,
+  newActor,
+  playClips,
+  type Actor,
+  type CastCharacter,
+  type CastClip,
+  type CastClipId,
+  type CastDir,
+  type CastGear,
+  type CastStyle,
+} from "./cast";
 import { applyDisplayTiles } from "../../src/games/livingtable/render/terrainEdges";
 import { CELL_WIDTH, CELL_HEIGHT } from "../../src/games/livingtable/world/coordinates";
 import type { CellLayout, PlacedProp, PlacedToken, TileId } from "../../src/games/livingtable/world/cell";
@@ -113,7 +118,6 @@ interface LtSprite {
   pixels: number[][];
 }
 
-const TEMPLATES: readonly TemplateGenre[] = ["fantasy", "scifi"];
 const TEMPLATE_LABEL: Record<TemplateGenre, string> = { fantasy: "Fantasy", scifi: "Sci-fi" };
 const FLOOR_TILE: Record<TemplateGenre, string> = { fantasy: "floor_grass", scifi: "floor_deckplate" };
 const SPRITES_BY_TEMPLATE: Record<TemplateGenre, readonly LtSprite[]> = {
@@ -236,7 +240,9 @@ interface ArtChoice {
   size: 16 | 32;
 }
 
-const art: ArtChoice = { source: "current", ground: "painted", chars: "bands", size: 32 };
+// KayKit first: it is the art under review. Without a converted library in the
+// build, artManifest falls back to the current art on its own.
+const art: ArtChoice = { source: "kaykit", ground: "painted", chars: "bands", size: 32 };
 let artDecoded: Map<string, Map<string, number[][]>> | null = null;
 const artManifests = new Map<string, RenderManifest>();
 
@@ -305,9 +311,10 @@ function artSpriteSize(template: TemplateGenre): number {
  * The shared Art row: Current or KayKit, and for KayKit the ground style,
  * the character style and the detail. One state for every panel, so a choice
  * made on one tab holds on the next. The first switch to KayKit decodes the
- * library (once) before redrawing.
+ * library (once) before redrawing. A tab with no characters on it passes
+ * { chars: false } and the Characters choice is left off.
  */
-function buildArtControls(onChange: () => void): HTMLElement {
+function buildArtControls(onChange: () => void, opts: { chars?: boolean } = {}): HTMLElement {
   const row = document.createElement("div");
   row.className = "bn-controls lt-art-controls";
   const lib = kaykitLibrary();
@@ -340,11 +347,11 @@ function buildArtControls(onChange: () => void): HTMLElement {
     art.source,
     (v) => (art.source = v as ArtChoice["source"]),
   );
-  extras.push(
-    pick("Ground", [["painted", "Painted"], ["lit", "Lit"]], art.ground, (v) => (art.ground = v as GroundStyle)),
-    pick("Characters", [["bands", "Cel bands"], ["pixelart", "Pixel artist"], ["toon", "Toon"], ["plain", "Plain"]], art.chars, (v) => (art.chars = v as CharStyle)),
-    pick("Detail", [["32", "32 px"], ["16", "16 px (the game's size)"]], String(art.size), (v) => (art.size = Number(v) as 16 | 32)),
-  );
+  extras.push(pick("Ground", [["painted", "Painted"], ["lit", "Lit"]], art.ground, (v) => (art.ground = v as GroundStyle)));
+  if (opts.chars !== false) {
+    extras.push(pick("Characters", [["bands", "Cel bands"], ["pixelart", "Pixel artist"], ["toon", "Toon"], ["plain", "Plain"]], art.chars, (v) => (art.chars = v as CharStyle)));
+  }
+  extras.push(pick("Detail", [["32", "32 px"], ["16", "16 px (the game's size)"]], String(art.size), (v) => (art.size = Number(v) as 16 | 32)));
   row.append(sourceField, ...extras, status);
   const sync = () => {
     for (const e of extras) e.hidden = art.source !== "kaykit";
@@ -483,30 +490,23 @@ function buildTierControls(
   return wrap;
 }
 
-function buildArchetypeSelect(template: TemplateGenre, onChange: (id: ArchetypeId) => void): HTMLSelectElement {
+/**
+ * The heroes a player can start as. The panels offer only these: the Healer
+ * is out of play and sci-fi is paused (characters/templates.ts), and their
+ * sprites stay in the Library.
+ */
+function buildHeroSelect(value: ArchetypeId, onChange: (id: ArchetypeId) => void): HTMLSelectElement {
   const select = document.createElement("select");
   select.className = "bn-select";
-  for (const id of ARCHETYPES_BY_TEMPLATE[template]) {
+  for (const id of ARCHETYPES_BY_TEMPLATE.fantasy) {
+    if (!PLAYABLE_ARCHETYPE_IDS.includes(id)) continue;
     const opt = document.createElement("option");
     opt.value = id;
-    // Out-of-play archetypes stay on the bench (their art and rules still exist), marked as such.
-    opt.textContent = PLAYABLE_ARCHETYPE_IDS.includes(id) ? ARCHETYPE_LABEL[id] : `${ARCHETYPE_LABEL[id]} (not playable)`;
+    opt.textContent = ARCHETYPE_LABEL[id];
     select.appendChild(opt);
   }
+  select.value = value;
   select.onchange = () => onChange(select.value as ArchetypeId);
-  return select;
-}
-
-function buildTemplateSelect(onChange: (t: TemplateGenre) => void): HTMLSelectElement {
-  const select = document.createElement("select");
-  select.className = "bn-select";
-  for (const t of TEMPLATES) {
-    const opt = document.createElement("option");
-    opt.value = t;
-    opt.textContent = PLAYABLE_TEMPLATES.includes(t) ? TEMPLATE_LABEL[t] : `${TEMPLATE_LABEL[t]} (paused)`;
-    select.appendChild(opt);
-  }
-  select.onchange = () => onChange(select.value as TemplateGenre);
   return select;
 }
 
@@ -524,16 +524,10 @@ function buildScaleSelect(options: readonly number[], initial: number, onChange:
   return select;
 }
 
-function floorOptionsFor(template: TemplateGenre): string[] {
-  return SPRITES_BY_TEMPLATE[template]
-    .filter((s) => s.kind === "tile" && s.walkable && !/_edge_|_pale/.test(s.assetId))
-    .map((s) => s.assetId)
-    .slice(0, 8);
-}
-
 // ===========================================================================
-// Panel: Character. A two-room scene to walk around in, with the game's own
-// rules behind every button.
+// Panel: Play. A two-room scene to walk around in, with the game's own rules
+// behind every button. With the KayKit art on, the hero and the monster are
+// the animated cast (cast.ts), the hero dressed in whatever it wears.
 //
 // The game's own code, called by symbol:
 //   drawing   renderCell + renderPlanFor (the hero composited with whatever
@@ -635,42 +629,13 @@ interface PlayState {
   log: LogLine[];
   /** Why the last press did nothing, in words. Cleared by the next press that does something. */
   note: string | null;
-  /** Set when the hero is the KayKit Knight: the rules are the Knight's, the picture is a Blender render. */
-  kaykit: KayKitHero | null;
-}
-
-/**
- * The KayKit hero's picture state. Which render set, how much detail, which
- * weapons; and what it is doing: the clip playing, since when, what plays next,
- * and a short walk between tiles so a step reads as a step.
- */
-interface KayKitHero {
-  style: string;
-  size: string;
-  loadout: string;
-  dir: KDir;
-  clip: KClipId;
-  clipStart: number;
-  queue: KClipId[];
-  tween: { from: XY; start: number } | null;
-}
-
-const KAYKIT_ARCHETYPE = "kaykit-knight";
-const STEP_MS = 280;
-
-function newKayKitHero(d: KData, prev?: KayKitHero | null): KayKitHero {
-  const loadout = prev?.loadout ?? d.loadouts[0]!.id;
-  const sizes = sizeIdsFor(d, loadout);
-  return {
-    style: prev?.style ?? d.styles[0]!.style,
-    size: prev && sizes.includes(prev.size) ? prev.size : sizes.includes("32x48") ? "32x48" : sizes[0]!,
-    loadout,
-    dir: "down",
-    clip: "idle",
-    clipStart: performance.now(),
-    queue: [],
-    tween: null,
-  };
+  /** How many times the monster has swung, so the picture can play its attack (a miss changes nothing else). */
+  monsterSwings: number;
+  /** Where the monster fell; the animated picture leaves its body there. */
+  fallenAt: XY | null;
+  /** What the hero and the monster are doing in the animated picture (cast.ts). Picture only: the rules never read these. */
+  heroActor: Actor;
+  monsterActor: Actor;
 }
 
 function freshHero(archetypeId: ArchetypeId): CharacterSheet {
@@ -678,17 +643,10 @@ function freshHero(archetypeId: ArchetypeId): CharacterSheet {
 }
 
 /** A new scene. `keepGearOf` carries worn gear and the pack over (Reset scene), while hit points, the loot ledger, the door, the container and the monster all start again. */
-function newPlay(
-  template: TemplateGenre,
-  archetypeId: ArchetypeId,
-  floorId: TileId,
-  keepGearOf?: CharacterSheet,
-  kaykit: KayKitHero | null = null,
-): PlayState {
+function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: TileId, keepGearOf?: CharacterSheet): PlayState {
   const fresh = freshHero(archetypeId);
   const hero = keepGearOf ? { ...fresh, equipment: keepGearOf.equipment, bag: keepGearOf.bag } : fresh;
   return {
-    kaykit,
     template,
     archetypeId,
     floorId,
@@ -699,6 +657,10 @@ function newPlay(
     searched: false,
     log: [],
     note: null,
+    monsterSwings: 0,
+    fallenAt: null,
+    heroActor: newActor("down"),
+    monsterActor: newActor("left"),
   };
 }
 
@@ -745,10 +707,11 @@ function sceneProps(p: PlayState): PlacedProp[] {
   ];
 }
 
-function sceneLayout(p: PlayState): CellLayout {
-  // A KayKit hero is drawn over the scene by the panel itself (it animates);
-  // every other hero is a token the game's own renderCell composites.
-  const tokens: PlacedToken[] = p.kaykit ? [] : [{ id: HERO_ID, assetId: bodySpriteId(p.archetypeId), x: p.heroAt.x, y: p.heroAt.y, kind: "pc" }];
+function sceneLayout(p: PlayState, animated: boolean): CellLayout {
+  // Animated, the panel draws the hero and the monster itself over the scene
+  // (cast.ts); otherwise both are tokens the game's own renderCell composites.
+  if (animated) return { tiles: sceneTiles(p), props: sceneProps(p), tokens: [], exits: [], sealed: true };
+  const tokens: PlacedToken[] = [{ id: HERO_ID, assetId: bodySpriteId(p.archetypeId), x: p.heroAt.x, y: p.heroAt.y, kind: "pc" }];
   if (p.monster) {
     tokens.push({ id: MONSTER_ID, assetId: SCENE_KIT[p.template].monster, x: p.monster.at.x, y: p.monster.at.y, kind: "monster", currentHp: p.monster.hp });
   }
@@ -849,6 +812,7 @@ function monsterTurn(p: PlayState): void {
   }
   const block = statblockFor(kit.monster);
   const playerAC = effectiveArmorClass(p.hero);
+  p.monsterSwings++;
   const result = resolveAttack({ attackerBonus: block.attackBonus, targetAC: playerAC });
   let damage: number | undefined;
   let vitalsNote: string | null = null;
@@ -963,6 +927,7 @@ function heroAttack(p: PlayState): void {
     tone: result.hit ? "good" : "bad",
   });
   if (down) {
+    p.fallenAt = { ...m.at };
     p.monster = null;
     rollLoot(p, "fight");
     return;
@@ -1154,25 +1119,108 @@ const CARET_PATH =
   "M182.6 137.4c-12.5-12.5-32.8-12.5-45.3 0l-128 128c-9.2 9.2-11.9 22.9-6.9 34.9s16.6 19.8 29.6 19.8H288c12.9 0 24.6-7.8 29.6-19.8s2.2-25.7-6.9-34.9l-128-128z";
 const CARET_TURN: Record<Dir, number> = { up: 0, right: 90, down: 180, left: 270 };
 
-function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
+// ---------------------------------------------------------------------------
+// The animated cast (cast.ts): which style is on show, and one figure drawn
+// as its body plus whatever it wears, every piece the same clip, facing and
+// frame, so they register pixel for pixel.
+// ---------------------------------------------------------------------------
+
+/** The heroes a player can start as today (characters/templates.ts). */
+const PLAYABLE_HEROES: ArchetypeId[] = ARCHETYPES_BY_TEMPLATE.fantasy.filter((id) => PLAYABLE_ARCHETYPE_IDS.includes(id));
+
+/** The cast in the Art row's character style (or the first one rendered), or null when the build has none. */
+function castStyleNow(): CastStyle | null {
+  const cast = castData();
+  if (!cast) return null;
+  return cast.styles.find((s) => s.style === art.chars) ?? cast.styles[0] ?? null;
+}
+
+function castEntry(style: CastStyle, tokenId: string): CastCharacter | null {
+  return style.characters.find((c) => c.id === tokenId) ?? null;
+}
+
+interface WornLayer {
+  gear: CastGear;
+  remap: Readonly<Record<number, number>> | null;
+}
+
+/** What a hero sheet wears, as cast layers: renderPlanFor's sprite ids (the cast's gear ids are the same) with each tier's recolour. */
+function wornLayers(style: CastStyle, sheet: CharacterSheet): WornLayer[] {
+  const plan = renderPlanFor(sheet);
+  if (!plan) return [];
+  const byId = new Map(style.gear.map((g) => [g.id, g]));
+  return plan.layers.flatMap((l) => {
+    const gear = byId.get(l.spriteId);
+    return gear ? [{ gear, remap: l.remap }] : [];
+  });
+}
+
+/** A hero's starting kit (every base-tier piece), for the Characters tab. */
+function starterLayers(style: CastStyle, entry: CastCharacter): WornLayer[] {
+  if (entry.kind !== "hero") return [];
+  const prefix = `gear_${entry.id.replace(/^token_/, "")}_`;
+  return style.gear
+    .filter((g) => (g.character ? g.character === entry.id : g.id.startsWith(prefix)) && g.tier === "base")
+    .map((gear) => ({ gear, remap: null }));
+}
+
+/**
+ * One frame of a figure: the body, then each worn layer in the cast's order
+ * for that facing. Draws nothing and returns false until every piece is
+ * decoded (onReady fires as each one lands), so a half-dressed frame never
+ * shows.
+ */
+function drawCastFrame(
+  ctx: CanvasRenderingContext2D,
+  style: CastStyle,
+  entry: CastCharacter,
+  clip: CastClip,
+  frame: number,
+  layers: WornLayer[],
+  dest: { x: number; y: number; w: number; h: number },
+  onReady: () => void,
+): boolean {
+  const cast = castData();
+  const meta = entry.sizes[clip.size];
+  if (!cast || !meta) return false;
+  const body = castFrames(cast.palette, `${style.style}|${entry.id}`, clip, meta, null, onReady);
+  const order = (entry.archetype ? style.layerOrderByArchetype?.[entry.archetype]?.[clip.dir] : undefined) ?? style.layerOrder[clip.dir] ?? [];
+  const rank = (role: string) => {
+    const i = order.indexOf(role);
+    return i < 0 ? order.length : i;
+  };
+  const pieces = [...layers]
+    .sort((a, b) => rank(a.gear.role) - rank(b.gear.role))
+    .map((l) => {
+      const lc = findCastClip(l.gear, clip.size, clip.clip, clip.dir);
+      return lc ? castFrames(cast.palette, `${style.style}|${l.gear.id}`, lc, meta, l.remap, onReady) : [];
+    });
+  if (!body || pieces.some((p) => p === null)) return false;
+  ctx.imageSmoothingEnabled = false;
+  for (const frames of [body, ...pieces]) {
+    if (!frames || frames.length === 0) continue;
+    ctx.drawImage(frames[Math.min(frame, frames.length - 1)]!, dest.x, dest.y, dest.w, dest.h);
+  }
+  return true;
+}
+
+function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
-  if (!play) play = newPlay("fantasy", ARCHETYPES_BY_TEMPLATE.fantasy[0]!, ROOM_FLOOR.fantasy);
+  if (!play || !PLAYABLE_HEROES.includes(play.archetypeId)) play = newPlay("fantasy", PLAYABLE_HEROES[0]!, ROOM_FLOOR.fantasy);
   const st = (): PlayState => play!;
 
   // Per SOURCE pixel, integers only, the same convention the Library's own
   // scale control uses; renderCell's own unit is canvas px PER TILE
   // (scale x the art's sprite size), so 32 px art halves the default scale.
   const wide = typeof innerWidth === "number" && innerWidth >= 1100;
-  const defaultScale = () => (artSpriteSize(st().template) >= 32 ? (wide ? 2 : 1) : wide ? 3 : 2);
+  const defaultScale = () => (artSpriteSize("fantasy") >= 32 ? (wide ? 2 : 1) : wide ? 3 : 2);
   let scale = defaultScale();
-  let frame: GlowFrame = 0;
-  let pulse = false;
-  let lastArtSize = artSpriteSize(st().template);
+  let lastArtSize = artSpriteSize("fantasy");
 
   el.appendChild(
     buildArtControls(() => {
-      const size = artSpriteSize(st().template);
+      const size = artSpriteSize("fantasy");
       if (size !== lastArtSize) {
         lastArtSize = size;
         scale = defaultScale();
@@ -1194,58 +1242,24 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   const controls = el_("div", "bn-controls");
   el.appendChild(controls);
 
-  const templateField = el_("label", "bn-field", "Template ");
-  const templateSelect = buildTemplateSelect((t) => {
-    play = newPlay(t, ARCHETYPES_BY_TEMPLATE[t][0]!, ROOM_FLOOR[t]);
-    rebuildArchetypeSelect();
-    rebuildFloorOptions();
-    renderKayKitControls();
+  const heroField = el_("label", "bn-field", "Hero ");
+  const heroSelect = buildHeroSelect(st().archetypeId, (id) => {
+    play = newPlay("fantasy", id, ROOM_FLOOR.fantasy);
     renderAll();
   });
-  templateField.appendChild(templateSelect);
-  controls.appendChild(templateField);
+  heroField.appendChild(heroSelect);
+  controls.appendChild(heroField);
 
-  const archetypeField = el_("label", "bn-field", "Archetype ");
-  controls.appendChild(archetypeField);
-
-  const floorField = el_("label", "bn-field", "Floor ");
-  const floorSelect = el_("select", "bn-select");
-  floorSelect.onchange = () => {
-    st().floorId = floorSelect.value;
+  const scaleField = el_("label", "bn-field", "Zoom ");
+  const scaleSelect = buildScaleSelect([1, 2, 3, 4], scale, (n) => {
+    scale = n;
     drawScene();
-  };
-  floorField.appendChild(floorSelect);
-  controls.appendChild(floorField);
-
-  const scaleField = el_("label", "bn-field", "Scale ");
-  const scaleSelect = buildScaleSelect([1, 2, 3, 4], scale, (n) => { scale = n; drawScene(); });
+  });
   scaleField.appendChild(scaleSelect);
   controls.appendChild(scaleField);
 
-  const frameField = el_("label", "bn-field", "Glow frame ");
-  const frameSelect = el_("select", "bn-select");
-  frameSelect.innerHTML = '<option value="0">A (bright)</option><option value="1">B (dim)</option>';
-  frameSelect.onchange = () => {
-    frame = Number(frameSelect.value) as GlowFrame;
-    drawScene();
-  };
-  frameField.appendChild(frameSelect);
-  controls.appendChild(frameField);
-
-  const pulseField = el_("label", "bn-field");
-  const pulseCheckbox = el_("input");
-  pulseCheckbox.type = "checkbox";
-  pulseCheckbox.disabled = REDUCED_MOTION;
-  pulseCheckbox.onchange = () => {
-    pulse = pulseCheckbox.checked;
-  };
-  pulseField.appendChild(pulseCheckbox);
-  pulseField.appendChild(document.createTextNode(REDUCED_MOTION ? " Pulse (off: reduced motion)" : " Pulse glow (legendary)"));
-  controls.appendChild(pulseField);
-
-  // KayKit hero controls: shown only while the KayKit Knight is the hero.
-  const kkRow = el_("div", "bn-controls lt-kk-controls");
-  el.appendChild(kkRow);
+  const pictureNote = el_("p", "lt-note lt-picture-note");
+  el.appendChild(pictureNote);
 
   // ---- the scene, the pad, the readout ---------------------------------------
 
@@ -1289,8 +1303,7 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   actionButton("Interact", "E", false, () => act(() => heroInteract(st()), "interact"));
   actionButton("Reset scene", "", false, () => {
     const p = st();
-    const d = kaykitData();
-    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero, p.kaykit && d ? newKayKitHero(d, p.kaykit) : null);
+    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero);
     renderAll();
   });
   padArea.appendChild(actions);
@@ -1310,7 +1323,7 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   const gear = el_("section", "lt-gear");
   el.appendChild(gear);
   gear.appendChild(el_("h3", undefined, "Worn"));
-  gear.appendChild(el_("p", "lt-note", "Drop an item on the slot it fits, or tap it. Tap a worn magic piece (or drag it to the pack) to take it off; your own piece comes back."));
+  gear.appendChild(el_("p", "lt-note", "Drop an item on its slot, or tap it, and the hero wears it. Tap a worn magic piece (or drag it to the pack) to take it off."));
   const slotsEl = el_("div", "lt-slots");
   gear.appendChild(slotsEl);
   gear.appendChild(el_("h3", undefined, "Pack"));
@@ -1318,20 +1331,100 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   packEl.dataset.drop = "pack";
   gear.appendChild(packEl);
   gear.appendChild(el_("h3", undefined, "Armoury"));
-  gear.appendChild(el_("p", "lt-note", "Every piece this archetype can wear, at every tier the game has. For trying things on; what you win in the scene lands in the pack."));
+  gear.appendChild(el_("p", "lt-note", "Every piece this hero can wear, at every tier. What you win in the scene lands in the pack."));
   const armouryEl = el_("div", "lt-armoury");
   gear.appendChild(armouryEl);
 
   // ---- behaviour -----------------------------------------------------------
 
+  /** The cast style the scene animates with, or null for the static tokens (the current art, or no cast for these figures). */
+  function animated(): CastStyle | null {
+    if (art.source !== "kaykit") return null;
+    const style = castStyleNow();
+    if (!style) return null;
+    const p = st();
+    return castEntry(style, bodySpriteId(p.archetypeId)) && castEntry(style, SCENE_KIT[p.template].monster) ? style : null;
+  }
+
+  interface Before {
+    at: XY;
+    hp: number;
+    monsterAt: XY | null;
+    monsterHp: number;
+    swings: number;
+    bag: number;
+  }
+
   function act(run: () => void, kind?: "move" | "attack" | "interact"): void {
     const p0 = st();
-    const before = { at: { ...p0.heroAt }, hp: p0.hero.currentHp, monsterAt: p0.monster ? { ...p0.monster.at } : null, bag: p0.hero.bag?.length ?? 0 };
+    const before: Before = {
+      at: { ...p0.heroAt },
+      hp: p0.hero.currentHp,
+      monsterAt: p0.monster ? { ...p0.monster.at } : null,
+      monsterHp: p0.monster?.hp ?? 0,
+      swings: p0.monsterSwings,
+      bag: p0.hero.bag?.length ?? 0,
+    };
     run();
     const p = st();
     if (p.log.length > LOG_KEEP) p.log.splice(0, p.log.length - LOG_KEEP);
-    if (p.kaykit && kind) animateKayKit(p, p.kaykit, kind, before);
+    if (kind) animate(p, kind, before);
     renderAll();
+  }
+
+  /**
+   * Pick the clips a press produced, from what changed. The hero: a step
+   * walks, a landed press swings or uses, a hit flinches, a fall dies, a find
+   * cheers. The monster: a wound flinches, a step walks, a swing attacks, a
+   * kill dies and stays down.
+   */
+  function animate(p: PlayState, kind: "move" | "attack" | "interact", before: Before): void {
+    const now = performance.now();
+    const h = p.heroActor;
+    const m = p.monsterActor;
+    const heroQ: CastClipId[] = [];
+    if (kind === "move" && !same(before.at, p.heroAt)) {
+      h.dir = castDirToward(p.heroAt.x - before.at.x, p.heroAt.y - before.at.y);
+      if (!REDUCED_MOTION) h.tween = { from: before.at, start: now };
+      heroQ.push("walk");
+    } else if (kind === "attack" && before.monsterAt && p.note === null) {
+      h.dir = castDirToward(before.monsterAt.x - p.heroAt.x, before.monsterAt.y - p.heroAt.y);
+      heroQ.push("attack");
+    } else if (kind === "interact" && p.note === null) {
+      const target = tileDistance(p.heroAt, DOOR_AT) <= 1 ? DOOR_AT : CONTAINER_AT;
+      if (!same(target, p.heroAt)) h.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
+      heroQ.push("interact");
+    }
+    if (p.hero.currentHp < before.hp) heroQ.push(heroDown(p) ? "death" : "hit");
+    else if ((p.hero.bag?.length ?? 0) > before.bag || (before.monsterAt && !p.monster)) heroQ.push("cheer");
+
+    const monQ: CastClipId[] = [];
+    if (before.monsterAt && !p.monster) {
+      m.dir = castDirToward(p.heroAt.x - before.monsterAt.x, p.heroAt.y - before.monsterAt.y);
+      monQ.push("death");
+    } else if (p.monster) {
+      const style = animated();
+      const entry = style ? castEntry(style, SCENE_KIT[p.template].monster) : null;
+      let delay = 0;
+      if (p.monster.hp < before.monsterHp) {
+        monQ.push("hit");
+        const hit = entry ? findCastClip(entry, String(artSpriteSize(p.template)), "hit", m.dir) : null;
+        delay += hit ? castClipMs(hit) : 0;
+      }
+      if (before.monsterAt && !same(before.monsterAt, p.monster.at)) {
+        m.dir = castDirToward(p.monster.at.x - before.monsterAt.x, p.monster.at.y - before.monsterAt.y);
+        if (!REDUCED_MOTION) m.tween = { from: before.monsterAt, start: now + delay };
+        monQ.push("walk");
+      }
+      if (p.monsterSwings > before.swings) {
+        m.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
+        monQ.push("attack");
+      }
+    }
+    // Reduced motion: turn to face, but play nothing.
+    if (REDUCED_MOTION) return;
+    playClips(h, heroQ, now);
+    playClips(m, monQ, now);
   }
 
   function gearResult(outcome: GearOutcome): void {
@@ -1357,40 +1450,8 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
     gearResult(payload.from === "armoury" ? equipFromArmoury(p, payload.role, payload.tier) : equipFromPack(p, payload.index));
   }
 
-  function rebuildArchetypeSelect(): void {
-    archetypeField.querySelectorAll("select").forEach((s) => s.remove());
-    const p = st();
-    const select = buildArchetypeSelect(p.template, (id) => {
-      const now = st();
-      const d = kaykitData();
-      play = (id as string) === KAYKIT_ARCHETYPE && d
-        ? newPlay(now.template, "knight", now.floorId, undefined, newKayKitHero(d, now.kaykit))
-        : newPlay(now.template, id, now.floorId);
-      renderKayKitControls();
-      renderAll();
-    });
-    // The KayKit Knight: a Blender render of a CC0 3D model, on trial against the hand-drawn tokens.
-    if (p.template === "fantasy" && kaykitData()) {
-      const opt = el_("option", undefined, "KayKit Knight (3D render)");
-      opt.value = KAYKIT_ARCHETYPE;
-      select.appendChild(opt);
-    }
-    select.value = p.kaykit ? KAYKIT_ARCHETYPE : p.archetypeId;
-    archetypeField.appendChild(select);
-  }
-
-  function rebuildFloorOptions(): void {
-    const p = st();
-    floorSelect.innerHTML = "";
-    const options = floorOptionsFor(p.template);
-    if (!options.includes(p.floorId)) options.unshift(p.floorId);
-    for (const id of options) {
-      const opt = el_("option", undefined, id);
-      opt.value = id;
-      if (id === p.floorId) opt.selected = true;
-      floorSelect.appendChild(opt);
-    }
-  }
+  // Stable, so castFrames registers it once per clip however often the loop asks.
+  const redrawScene = (): void => drawScene();
 
   function drawScene(): void {
     const p = st();
@@ -1401,12 +1462,13 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
     const ctx = canvas.getContext("2d")!;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const style = animated();
     const plan = renderPlanFor(p.hero);
-    renderCell(ctx, sceneLayout(p), manifest, tileScale, 0, plan ? { [HERO_ID]: plan } : undefined, frame);
-    if (p.kaykit) drawKayKitHero(ctx, p, p.kaykit, tileScale);
+    renderCell(ctx, sceneLayout(p, style !== null), manifest, tileScale, 0, !style && plan ? { [HERO_ID]: plan } : undefined, 0);
+    if (style) drawFigures(ctx, p, style, String(spriteSizeOf(manifest)), tileScale);
     // Keep the hero in the middle of the viewport (it matters at phone width),
-    // but only when it has moved: an animating KayKit hero redraws every frame
-    // and must not keep yanking a viewport the player scrolled.
+    // but only when it has moved: the animated scene redraws every frame and
+    // must not keep yanking a viewport the player scrolled.
     const centreKey = `${p.heroAt.x},${p.heroAt.y},${tileScale}`;
     if (centreKey !== lastCentre) {
       lastCentre = centreKey;
@@ -1416,138 +1478,62 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   }
   let lastCentre = "";
 
-  // ---- the KayKit hero -----------------------------------------------------
-
-  /** The clip showing now, after moving through anything queued. Walk plays only for the step; death holds its last frame. */
-  function currentClip(p: PlayState, k: KayKitHero, now: number): KClip | null {
-    const d = kaykitData();
-    if (!d) return null;
-    for (let guard = 0; guard < 8; guard++) {
-      const c = findClip(d, k.style, k.loadout, k.size, k.clip, k.dir);
-      if (!c) return null;
-      const elapsed = now - k.clipStart;
-      const done = k.clip === "walk" ? elapsed >= STEP_MS : !c.loop && elapsed >= clipDurationMs(c);
-      if (!done || k.clip === "death" || (k.clip === "idle" && k.queue.length === 0)) return c;
-      k.clip = k.queue.shift() ?? (heroDown(p) ? "death" : "idle");
-      k.clipStart = now;
-    }
-    return findClip(d, k.style, k.loadout, k.size, k.clip, k.dir);
-  }
-
-  // Stable, so framesNow registers it once per clip however often the loop asks.
-  const redrawScene = (): void => drawScene();
-
-  function drawKayKitHero(ctx: CanvasRenderingContext2D, p: PlayState, k: KayKitHero, tileScale: number): void {
-    const d = kaykitData();
-    if (!d) return;
+  /** The hero and the monster (or where it fell), back to front, each standing in the game's one-tile footprint with its feet on the tile's bottom edge. */
+  function drawFigures(ctx: CanvasRenderingContext2D, p: PlayState, style: CastStyle, size: string, tileScale: number): void {
     const now = performance.now();
-    const c = currentClip(p, k, now);
-    if (!c) return;
-    const frames = framesNow(d, k.style, c, redrawScene);
-    if (!frames) return;
-    const f = frames[frameIndex(c, now - k.clipStart)]!;
-    const meta = d.sizes[k.size]!;
-    let hx = p.heroAt.x;
-    let hy = p.heroAt.y;
-    if (k.tween) {
-      const t = Math.min(1, (now - k.tween.start) / STEP_MS);
-      hx = k.tween.from.x + (p.heroAt.x - k.tween.from.x) * t;
-      hy = k.tween.from.y + (p.heroAt.y - k.tween.from.y) * t;
-      if (t >= 1) k.tween = null;
+    const heroEntry = castEntry(style, bodySpriteId(p.archetypeId));
+    const monEntry = castEntry(style, SCENE_KIT[p.template].monster);
+    if (!heroEntry || !monEntry) return;
+    const figures: { entry: CastCharacter; actor: Actor; at: XY; down: boolean; layers: WornLayer[] }[] = [];
+    if (p.monster) figures.push({ entry: monEntry, actor: p.monsterActor, at: p.monster.at, down: false, layers: [] });
+    figures.push({ entry: heroEntry, actor: p.heroActor, at: p.heroAt, down: heroDown(p), layers: wornLayers(style, p.hero) });
+    const placed = figures.map((f) => ({ ...f, pos: actorAt(f.actor, f.at, now) })).sort((a, b) => a.pos.y - b.pos.y);
+    // The fallen monster lies under everything.
+    if (!p.monster && p.fallenAt) placed.unshift({ entry: monEntry, actor: p.monsterActor, at: p.fallenAt, down: true, layers: [], pos: p.fallenAt });
+    const spx = tileScale / Number(size);
+    for (const f of placed) {
+      const meta = f.entry.sizes[size];
+      const c = actorClip(f.actor, f.entry, size, f.down, now);
+      if (!meta || !c) continue;
+      const dest = {
+        x: Math.round((f.pos.x + 0.5) * tileScale - meta.anchorX * spx),
+        y: Math.round((f.pos.y + 1) * tileScale - meta.anchorY * spx),
+        w: Math.round(meta.canvasW * spx),
+        h: Math.round(meta.canvasH * spx),
+      };
+      drawCastFrame(ctx, style, f.entry, c, castFrameIndex(c, now - f.actor.clipStart), f.layers, dest, redrawScene);
     }
-    // Every detail level stands in the game's own token footprint: one tile
-    // wide, feet on the tile's bottom edge. At 16x24 a sprite pixel is a tile
-    // pixel; at 32x48 and 48x72 the pixels are finer than the floor's.
-    const spx = tileScale / meta.tokenW;
-    const x = Math.round((hx + 0.5) * tileScale - meta.anchorX * spx);
-    const y = Math.round((hy + 1) * tileScale - meta.anchorY * spx);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(f, x, y, Math.round(meta.canvasW * spx), Math.round(meta.canvasH * spx));
   }
 
-  /** Pick the clips a press produced, from what changed: a step walks, a landed press swings or uses, a hit flinches, a fall dies, a find cheers. */
-  function animateKayKit(p: PlayState, k: KayKitHero, kind: "move" | "attack" | "interact", before: { at: XY; hp: number; monsterAt: XY | null; bag: number }): void {
-    const now = performance.now();
-    const queue: KClipId[] = [];
-    if (kind === "move" && !same(before.at, p.heroAt)) {
-      k.dir = dirToward(p.heroAt.x - before.at.x, p.heroAt.y - before.at.y);
-      k.tween = { from: before.at, start: now };
-      queue.push("walk");
-    } else if (kind === "attack" && before.monsterAt && p.note === null) {
-      k.dir = dirToward(before.monsterAt.x - p.heroAt.x, before.monsterAt.y - p.heroAt.y);
-      queue.push("attack");
-    } else if (kind === "interact" && p.note === null) {
-      const target = tileDistance(p.heroAt, DOOR_AT) <= 1 ? DOOR_AT : CONTAINER_AT;
-      if (!same(target, p.heroAt)) k.dir = dirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
-      queue.push("interact");
-    }
-    if (p.hero.currentHp < before.hp) queue.push(heroDown(p) ? "death" : "hit");
-    else if ((p.hero.bag?.length ?? 0) > before.bag || (before.monsterAt && !p.monster)) queue.push("cheer");
-    if (queue.length === 0) return;
-    k.clip = queue.shift()!;
-    k.clipStart = now;
-    k.queue = queue;
-  }
-
-  function kaykitSignature(): string {
+  /** Changes whenever the animated picture would: either figure's clip, facing, frame or step. */
+  function pictureSignature(): string {
+    const style = animated();
+    if (!style) return "";
     const p = st();
-    const k = p.kaykit;
-    if (!k) return "";
+    const size = String(artSpriteSize(p.template));
     const now = performance.now();
-    const c = currentClip(p, k, now);
-    const fi = c ? frameIndex(c, now - k.clipStart) : -1;
-    const tw = k.tween ? Math.floor((now - k.tween.start) / 30) : -1;
-    return `${k.style}|${k.size}|${k.loadout}|${k.clip}|${k.dir}|${fi}|${tw}`;
-  }
-
-  const DETAIL_LABEL: Record<string, string> = { "16x24": "16x24 (the game's size)", "32x48": "32x48 (2x detail)", "48x72": "48x72 (3x detail)" };
-
-  function renderKayKitControls(): void {
-    kkRow.innerHTML = "";
-    const p = st();
-    const d = kaykitData();
-    kkRow.hidden = !p.kaykit || !d;
-    if (!p.kaykit || !d) return;
-    const k = p.kaykit;
-    const pick = (label: string, options: [string, string][], value: string, onChange: (v: string) => void): HTMLElement => {
-      const field = el_("label", "bn-field", `${label} `);
-      const select = el_("select", "bn-select");
-      for (const [v, text] of options) {
-        const opt = el_("option", undefined, text);
-        opt.value = v;
-        select.appendChild(opt);
-      }
-      select.value = value;
-      select.onchange = () => onChange(select.value);
-      field.appendChild(select);
-      return field;
+    const part = (tokenId: string, actor: Actor, down: boolean): string => {
+      const entry = castEntry(style, tokenId);
+      const c = entry ? actorClip(actor, entry, size, down, now) : null;
+      const fi = c ? castFrameIndex(c, now - actor.clipStart) : -1;
+      const tw = actor.tween ? Math.floor((now - actor.tween.start) / 30) : -1;
+      return `${actor.clip}|${actor.dir}|${fi}|${tw}`;
     };
-    kkRow.append(
-      pick("Render style", d.styles.map((s) => [s.style, s.label]), k.style, (v) => {
-        k.style = v;
-        renderKayKitControls();
-        drawScene();
-      }),
-      pick("Detail", sizeIdsFor(d, k.loadout).map((id) => [id, DETAIL_LABEL[id] ?? id]), k.size, (v) => {
-        k.size = v;
-        drawScene();
-      }),
-      pick("Weapons", d.loadouts.map((l) => [l.id, l.label]), k.loadout, (v) => {
-        k.loadout = v;
-        const sizes = sizeIdsFor(d, v);
-        if (!sizes.includes(k.size)) k.size = sizes[0]!;
-        renderKayKitControls();
-        drawScene();
-      }),
-    );
-    const style = d.styles.find((s) => s.style === k.style);
-    kkRow.appendChild(
-      el_(
-        "p",
-        "lt-note lt-kk-note",
-        `${style ? `${style.label}: ${style.description} ` : ""}KayKit ${d.character} by Kay Lousberg (CC0), rendered in Blender. Every detail level stands in the game's one-tile token footprint. The rules are the Knight's: the Worn slots change the numbers, not this picture.`,
-      ),
-    );
+    return `${style.style}|${size}|${part(bodySpriteId(p.archetypeId), p.heroActor, heroDown(p))}|${part(SCENE_KIT[p.template].monster, p.monsterActor, !p.monster)}`;
+  }
+
+  function renderPictureNote(): void {
+    const style = animated();
+    if (style) {
+      const hero = castEntry(style, bodySpriteId(st().archetypeId));
+      const monster = castEntry(style, SCENE_KIT[st().template].monster);
+      const standIns = [hero, monster].filter((c): c is CastCharacter => !!c && c.standIn).map((c) => `The ${c.label.toLowerCase()} is a stand-in (see Characters).`);
+      pictureNote.textContent = `Animated: KayKit ${style.label}, every figure rendered the same way as the Knight, gear included. ${standIns.join(" ")}`.trim();
+    } else if (art.source === "kaykit") {
+      pictureNote.textContent = castData() ? "No animated figure for this hero in this build: the tokens are the static conversion." : "No animated cast in this build: the tokens are the static conversion.";
+    } else {
+      pictureNote.textContent = "The game's current hand-drawn tokens: one facing, no animation.";
+    }
   }
 
   function stat(label: string, value: string, bad = false): HTMLElement {
@@ -1638,7 +1624,7 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
     packEl.innerHTML = "";
     const bag = p.hero.bag ?? [];
     if (bag.length === 0) {
-      packEl.appendChild(el_("p", "lt-note lt-tray-empty", "Empty. What you win lands here: kill the monster or open the container. Drag a worn magic piece here to take it off."));
+      packEl.appendChild(el_("p", "lt-note lt-tray-empty", "Empty. Kill the monster or open the chest to win something. Drag a worn magic piece here to take it off."));
       return;
     }
     bag.forEach((item, index) => {
@@ -1664,7 +1650,9 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   }
 
   function renderAll(): void {
+    heroSelect.value = st().archetypeId;
     drawScene();
+    renderPictureNote();
     renderStats();
     renderLog();
     renderSlots();
@@ -1672,11 +1660,13 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
     renderArmoury();
   }
 
-  // ---- keyboard, pulse, first paint ----------------------------------------
+  // ---- keyboard, animation, first paint ------------------------------------
 
   const KEY_DIR: Record<string, Dir> = { arrowup: "up", w: "up", arrowdown: "down", s: "down", arrowleft: "left", a: "left", arrowright: "right", d: "right" };
   const onKey = (e: KeyboardEvent) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
+    // Keys belong to the Play tab only while it is the one showing.
+    if (!el.isConnected || el.offsetParent === null) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest?.("input, select, textarea, [contenteditable]")) return;
     const key = e.key.toLowerCase();
@@ -1691,19 +1681,12 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   document.addEventListener("keydown", onKey);
 
   let raf = 0;
-  let lastFlip = 0;
   let lastSig = "";
-  function loop(now: number) {
-    if (pulse && !REDUCED_MOTION && now - lastFlip >= GLOW_PULSE_PERIOD_MS / 2) {
-      lastFlip = now;
-      frame = frame === 0 ? 1 : 0;
-      frameSelect.value = String(frame);
-      drawScene();
-    }
-    // The KayKit hero animates: redraw only when the frame it shows changes.
-    if (st().kaykit && !REDUCED_MOTION) {
-      const sig = kaykitSignature();
-      if (sig !== lastSig) {
+  function loop() {
+    // Redraw only when the picture would change: a new frame, facing or step.
+    if (!REDUCED_MOTION) {
+      const sig = pictureSignature();
+      if (sig && sig !== lastSig) {
         lastSig = sig;
         drawScene();
       }
@@ -1712,10 +1695,6 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   }
   raf = requestAnimationFrame(loop);
 
-  templateSelect.value = st().template;
-  rebuildArchetypeSelect();
-  rebuildFloorOptions();
-  renderKayKitControls();
   renderAll();
 
   return () => {
@@ -1725,14 +1704,13 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
 }
 
 // ===========================================================================
-// Panel: KayKit. The comparison surface for the 3D-to-pixel trial: every
-// conversion style the Blender harness produced (scripts/kaykit/), side by
-// side in all four facings, playing the chosen animation, beside the source
-// render and the game's current hand-drawn Knight at the same zoom. Nothing is
-// filtered or ranked here: the owner judges.
+// Panel: Characters. Every figure the game uses, as the animated KayKit cast:
+// four facings, any animation, in one style or every style side by side.
+// Heroes wear their starting gear (the same layers the Play tab dresses them
+// in). Nothing is filtered or ranked here: the owner judges.
 // ===========================================================================
 
-const KK_CLIP_LABEL: Record<KClipId, string> = {
+const CLIP_LABEL: Record<CastClipId, string> = {
   idle: "Idle",
   walk: "Walk",
   attack: "Attack",
@@ -1741,44 +1719,27 @@ const KK_CLIP_LABEL: Record<KClipId, string> = {
   interact: "Interact",
   cheer: "Cheer",
 };
-const KK_DIR_LABEL: Record<KDir, string> = { down: "Front", right: "Right", up: "Back", left: "Left" };
-const KK_ONCE_PAUSE_MS = 700;
+const DIR_LABEL: Record<CastDir, string> = { down: "Front", right: "Right", up: "Back", left: "Left" };
+const KIND_LABEL: Record<CastCharacter["kind"], string> = { hero: "Hero", monster: "Monster", npc: "Townsfolk" };
+const ONCE_PAUSE_MS = 700;
 
-/** The game's current Knight token (body plus common gear, through renderPlanFor and renderCell) on a floor tile, cropped to one tile by 1.5. */
-function drawGameKnight(target: HTMLCanvasElement, zoom: number, floorId: TileId | null): void {
-  const tileScale = 16 * zoom;
-  const full = document.createElement("canvas");
-  full.width = CELL_WIDTH * tileScale;
-  full.height = CELL_HEIGHT * tileScale;
-  const fctx = full.getContext("2d")!;
-  fctx.imageSmoothingEnabled = false;
-  const tiles: TileId[][] = Array.from({ length: CELL_HEIGHT }, () => Array.from({ length: CELL_WIDTH }, () => floorId ?? "__none__"));
-  const layout: CellLayout = { tiles, props: [], tokens: [{ id: "knight", assetId: bodySpriteId("knight"), x: 2, y: 2, kind: "pc" }], exits: [], sealed: true };
-  const plan = renderPlanFor(baseSheetFor("knight"));
-  renderCell(fctx, layout, MANIFEST.fantasy, tileScale, 0, plan ? { knight: plan } : undefined, 0);
-  // Same box the KayKit cells use: two token widths by 1.5 token heights, feet on the bottom edge.
-  target.width = 32 * zoom;
-  target.height = 36 * zoom;
-  const ctx = target.getContext("2d")!;
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, target.width, target.height);
-  ctx.drawImage(full, 1.5 * tileScale, 3 * tileScale - 36 * zoom, 32 * zoom, 36 * zoom, 0, 0, 32 * zoom, 36 * zoom);
-}
-
+/** Floor tiles behind a figure, from the art the Art row has chosen, tiled up from the bottom edge so the feet stand on a tile's edge. */
 function paintFloor(ctx: CanvasRenderingContext2D, floorId: TileId | null, tilePx: number, w: number, h: number): void {
   ctx.clearRect(0, 0, w, h);
   if (!floorId) return;
-  const sprite = MANIFEST.fantasy.tiles[floorId];
+  const manifest = artManifest("fantasy");
+  const sprite = manifest.tiles[floorId];
   if (!sprite) return;
-  const px = tilePx / 16;
+  const n = sprite.pixels.length;
+  const px = tilePx / n;
   for (let ty = h; ty > -tilePx; ty -= tilePx) {
     for (let tx = 0; tx < w; tx += tilePx) {
-      for (let sy = 0; sy < sprite.pixels.length; sy++) {
+      for (let sy = 0; sy < n; sy++) {
         const row = sprite.pixels[sy]!;
         for (let sx = 0; sx < row.length; sx++) {
           const idx = row[sx]!;
           if (idx < 0) continue;
-          ctx.fillStyle = MANIFEST.fantasy.palette[idx] ?? "#f0f";
+          ctx.fillStyle = manifest.palette[idx] ?? "#f0f";
           ctx.fillRect(Math.floor(tx + sx * px), Math.floor(ty - tilePx + sy * px), Math.ceil(px), Math.ceil(px));
         }
       }
@@ -1786,22 +1747,21 @@ function paintFloor(ctx: CanvasRenderingContext2D, floorId: TileId | null, tileP
   }
 }
 
-function mountKayKitPanel(el: HTMLElement, _api: unknown): () => void {
+function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
-  const d = kaykitData();
-  if (!d) {
+  const cast = castData();
+  if (!cast) {
     el.innerHTML =
-      '<p class="lt-note">No KayKit renders in this build. Fetch the pack and run the Blender harness (scripts/kaykit/README.md), then rebuild with <code>npm run bench</code>.</p>';
+      '<p class="lt-note">No animated cast in this build. Render it with <code>scripts/kaykit/cast.py</code> (see scripts/kaykit/README.md), then <code>npm run bench</code>.</p>';
     return () => {};
   }
 
-  let loadout = d.loadouts[0]!.id;
-  let size = sizeIdsFor(d, loadout).includes("32x48") ? "32x48" : sizeIdsFor(d, loadout)[0]!;
-  let clip: KClipId = "walk";
-  let zoom = 3;
+  let styleId = castStyleNow()?.style ?? cast.styles[0]!.style;
+  let clip: CastClipId = "walk";
+  let zoom = art.size === 32 ? 2 : 4;
   let floorId: TileId | null = "floor_stone";
-  let speed = 1;
+  let withGear = true;
   let playing = !REDUCED_MOTION;
 
   const controls = document.createElement("div");
@@ -1825,62 +1785,67 @@ function mountKayKitPanel(el: HTMLElement, _api: unknown): () => void {
     controls.appendChild(field);
     return select;
   };
-  pick("Weapons", d.loadouts.map((l) => [l.id, l.label]), loadout, (v) => {
-    loadout = v;
-    const sizes = sizeIdsFor(d, v);
-    if (!sizes.includes(size)) size = sizes[0]!;
-    rebuildSizeSelect();
+  const check = (label: string, value: boolean, onChange: (v: boolean) => void): void => {
+    const field = document.createElement("label");
+    field.className = "bn-field";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = value;
+    box.onchange = () => onChange(box.checked);
+    field.append(box, document.createTextNode(` ${label}`));
+    controls.appendChild(field);
+  };
+  // Style and detail are the Art row's own choices, so the Play tab follows.
+  pick("Style", [...cast.styles.map((s): [string, string] => [s.style, s.label]), ["all", "All styles, side by side"]], styleId, (v) => {
+    styleId = v;
+    if (v !== "all") art.chars = v as CharStyle;
     build();
   });
-  let sizeSelect = pick("Detail", [], size, () => {});
-  function rebuildSizeSelect(): void {
-    sizeSelect.innerHTML = "";
-    for (const id of sizeIdsFor(d!, loadout)) {
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = id === "16x24" ? "16x24 (the game's size)" : id;
-      sizeSelect.appendChild(opt);
-    }
-    sizeSelect.value = size;
-    sizeSelect.onchange = () => {
-      size = sizeSelect.value;
-      build();
-    };
-  }
-  rebuildSizeSelect();
-  pick("Animation", K_CLIPS.map((c) => [c, KK_CLIP_LABEL[c]]), clip, (v) => {
-    clip = v as KClipId;
+  pick("Animation", CAST_CLIPS.map((c): [string, string] => [c, CLIP_LABEL[c]]), clip, (v) => {
+    clip = v as CastClipId;
     build();
   });
-  pick("Zoom", ["2", "3", "4", "6"].map((z) => [z, `${z}x`]), String(zoom), (v) => {
+  const zoomSelect = pick("Zoom", [], String(zoom), (v) => {
     zoom = Number(v);
+    build();
+  });
+  pick("Detail", [["32", "32 px"], ["16", "16 px (the game's size)"]], String(art.size), (v) => {
+    art.size = Number(v) as 16 | 32;
+    zoom = art.size === 32 ? 2 : 4;
+    fillZoom();
     build();
   });
   pick("Floor", [["floor_stone", "Stone"], ["floor_grass", "Grass"], ["", "None"]], floorId ?? "", (v) => {
     floorId = v || null;
     build();
   });
-  pick("Speed", [["1", "1x"], ["0.5", "0.5x"], ["0.25", "0.25x"]], "1", (v) => {
-    speed = Number(v);
+  check("Heroes wear their starting gear", withGear, (v) => {
+    withGear = v;
+    build();
   });
-  const playField = document.createElement("label");
-  playField.className = "bn-field";
-  const playBox = document.createElement("input");
-  playBox.type = "checkbox";
-  playBox.checked = playing;
-  playBox.onchange = () => {
-    playing = playBox.checked;
-  };
-  playField.append(playBox, document.createTextNode(" Play"));
-  controls.appendChild(playField);
+  check("Play", playing, (v) => {
+    playing = v;
+  });
+  function fillZoom(): void {
+    zoomSelect.innerHTML = "";
+    for (const z of art.size === 32 ? [1, 2, 3] : [2, 4, 6]) {
+      const opt = document.createElement("option");
+      opt.value = String(z);
+      opt.textContent = `${z}x`;
+      zoomSelect.appendChild(opt);
+    }
+    zoomSelect.value = String(zoom);
+  }
+  fillZoom();
 
   const body = document.createElement("div");
   el.appendChild(body);
 
   interface Cell {
     canvas: HTMLCanvasElement;
-    style: string;
-    dir: KDir;
+    style: CastStyle;
+    entry: CastCharacter;
+    dir: CastDir;
     shown: number;
   }
   let cells: Cell[] = [];
@@ -1890,101 +1855,88 @@ function mountKayKitPanel(el: HTMLElement, _api: unknown): () => void {
   function build(): void {
     body.innerHTML = "";
     cells = [];
-    const meta = d!.sizes[size]!;
-    const tilePx = meta.tokenW * zoom; // the token footprint is one tile, as in the game
-
-    const top = document.createElement("div");
-    top.className = "lt-kk-top";
-    const ref = document.createElement("figure");
-    ref.className = "lt-kk-fig";
-    const img = document.createElement("img");
-    img.src = `data:image/png;base64,${d!.reference}`;
-    img.alt = "The KayKit Knight rendered straight from Blender, before any pixel conversion";
-    img.className = "lt-kk-ref";
-    const cap = document.createElement("figcaption");
-    cap.textContent = "Source: the 3D model, lit and smoothed, before conversion.";
-    ref.append(img, cap);
-    const today = document.createElement("figure");
-    today.className = "lt-kk-fig";
-    const todayCanvas = document.createElement("canvas");
-    todayCanvas.className = "lt-canvas";
-    // Same footprint as the KayKit cells: at 32x48 a game pixel is drawn 2x as big as a KayKit pixel.
-    drawGameKnight(todayCanvas, zoom * Math.max(1, Math.round(meta.tokenW / 16)), floorId);
-    const cap2 = document.createElement("figcaption");
-    cap2.textContent = `The game today: the hand-drawn 16x24 Knight token, drawn in the same footprint. One facing, no animation.`;
-    today.append(todayCanvas, cap2);
-    top.append(ref, today);
-    body.appendChild(top);
-
+    const size = String(art.size);
+    const styles = styleId === "all" ? cast!.styles : cast!.styles.filter((s) => s.style === styleId);
     const note = document.createElement("p");
     note.className = "lt-note";
     note.textContent =
-      `${d!.character} from ${d!.source}. Camera ${d!.cameraPitchDeg} degrees above level, orthographic. ` +
-      `Every style below is the same poses, framing and palette; only the conversion differs. ` +
-      `At ${size}, one floor tile is ${meta.tokenW} sprite pixels wide, so the figure stands in the same one-tile footprint as the game's tokens.`;
+      `Every character is a KayKit model by Kay Lousberg (CC0), rendered in Blender through the same camera (${cast!.cameraPitchDeg} degrees down), ` +
+      `framing and palette as the Knight. Each stands in the game's one-tile footprint.`;
     body.appendChild(note);
 
     const grid = document.createElement("div");
     grid.className = "lt-kk-grid";
-    grid.style.setProperty("--kk-cols", String(K_DIRS.length));
+    grid.style.setProperty("--kk-cols", String(CAST_DIRS.length));
     body.appendChild(grid);
     grid.appendChild(document.createElement("div"));
-    for (const dir of K_DIRS) {
+    for (const dir of CAST_DIRS) {
       const h = document.createElement("div");
       h.className = "lt-kk-colhead";
-      h.textContent = KK_DIR_LABEL[dir];
+      h.textContent = DIR_LABEL[dir];
       grid.appendChild(h);
     }
-    for (const s of d!.styles) {
-      const label = document.createElement("div");
-      label.className = "lt-kk-rowhead";
-      const b = document.createElement("b");
-      b.textContent = s.label;
-      const p = document.createElement("span");
-      p.textContent = s.description;
-      label.append(b, p);
-      grid.appendChild(label);
-      for (const dir of K_DIRS) {
-        const canvas = document.createElement("canvas");
-        canvas.className = "lt-canvas lt-kk-cell";
-        canvas.width = meta.canvasW * zoom;
-        canvas.height = meta.canvasH * zoom;
-        canvas.title = `${s.label}, ${KK_DIR_LABEL[dir]}, ${KK_CLIP_LABEL[clip]}`;
-        grid.appendChild(canvas);
-        cells.push({ canvas, style: s.style, dir, shown: -1 });
+    for (const first of styles[0]?.characters ?? []) {
+      for (const style of styles) {
+        const entry = castEntry(style, first.id);
+        const meta = entry?.sizes[size];
+        if (!entry || !meta) continue;
+        const label = document.createElement("div");
+        label.className = "lt-kk-rowhead";
+        const b = document.createElement("b");
+        b.textContent = styles.length > 1 ? `${entry.label}, ${style.label}` : entry.label;
+        const sub = document.createElement("span");
+        const notes = entry.notes.replace(/.+$/, "");
+        const standIn = entry.standIn ? ` Stand-in: ${notes || "no free Kay model"}.` : notes ? ` ${notes}.` : "";
+        sub.textContent = `${KIND_LABEL[entry.kind]}, KayKit ${entry.model}.${standIn}`;
+        label.append(b, sub);
+        grid.appendChild(label);
+        for (const dir of CAST_DIRS) {
+          const canvas = document.createElement("canvas");
+          canvas.className = "lt-canvas lt-kk-cell";
+          canvas.width = meta.canvasW * zoom;
+          canvas.height = meta.canvasH * zoom;
+          canvas.title = `${entry.label}, ${DIR_LABEL[dir]}, ${CLIP_LABEL[clip]}`;
+          grid.appendChild(canvas);
+          cells.push({ canvas, style, entry, dir, shown: -1 });
+        }
       }
     }
-    void tilePx;
     draw(true);
   }
 
   const redrawAll = (): void => draw(true);
 
   function draw(force = false): void {
-    const meta = d!.sizes[size]!;
-    const tilePx = meta.tokenW * zoom;
+    const size = String(art.size);
     for (const cell of cells) {
-      const c = findClip(d!, cell.style, loadout, size, clip, cell.dir);
-      if (!c) continue;
-      const frames = framesNow(d!, cell.style, c, redrawAll);
-      if (!frames) continue;
-      const span = c.loop ? clipDurationMs(c) : clipDurationMs(c) + KK_ONCE_PAUSE_MS;
-      const i = frameIndex(c, clock % span);
+      const c = findCastClip(cell.entry, size, clip, cell.dir) ?? findCastClip(cell.entry, size, "idle", cell.dir);
+      const meta = cell.entry.sizes[size];
+      if (!c || !meta) continue;
+      const span = c.loop ? castClipMs(c) : castClipMs(c) + ONCE_PAUSE_MS;
+      const i = castFrameIndex(c, clock % span);
       if (!force && i === cell.shown) continue;
-      cell.shown = i;
       const ctx = cell.canvas.getContext("2d")!;
       ctx.imageSmoothingEnabled = false;
-      paintFloor(ctx, floorId, tilePx, cell.canvas.width, cell.canvas.height);
-      ctx.drawImage(frames[i]!, 0, 0, cell.canvas.width, cell.canvas.height);
+      paintFloor(ctx, floorId, meta.tokenW * zoom, cell.canvas.width, cell.canvas.height);
+      const layers = withGear ? starterLayers(cell.style, cell.entry) : [];
+      const drew = drawCastFrame(ctx, cell.style, cell.entry, c, i, layers, { x: 0, y: 0, w: cell.canvas.width, h: cell.canvas.height }, redrawAll);
+      cell.shown = drew ? i : -1;
     }
   }
 
   let raf = 0;
   function loop(now: number): void {
-    if (playing) clock += (now - last) * speed;
+    if (playing) clock += now - last;
     last = now;
     draw();
     raf = requestAnimationFrame(loop);
+  }
+  // The floor comes from the converted ground once it is decoded.
+  if (kaykitLibrary() && !artDecoded) {
+    void decodeLibrary().then((d) => {
+      artDecoded = d;
+      draw(true);
+    });
   }
   build();
   raf = requestAnimationFrame(loop);
@@ -1992,9 +1944,9 @@ function mountKayKitPanel(el: HTMLElement, _api: unknown): () => void {
 }
 
 // ===========================================================================
-// Panel: Converted. Every in-play fantasy sprite the game uses, the current
-// hand-drawn one beside the KayKit conversion chosen in the Art row (ground
-// style, character style, detail), grouped the way the conversion was
+// Panel: Pieces. Every in-play fantasy sprite the game uses, as a still: the
+// current hand-drawn one beside the KayKit conversion chosen in the Art row
+// (ground style, character style, detail), grouped the way the conversion was
 // split. An id the chosen parts do not cover says so. The Healer's pieces are
 // out of play and not listed; sci-fi is paused.
 // ===========================================================================
@@ -2037,14 +1989,14 @@ function spriteCanvas(pixels: number[][], palette: string[], cssPxPer16: number,
   return canvas;
 }
 
-function mountConvertedPanel(el: HTMLElement, _api: unknown): void {
+function mountPiecesPanel(el: HTMLElement, _api: unknown): void {
   injectPanelStyle();
   el.innerHTML = "";
   if (!kaykitLibrary()) {
     el.innerHTML = '<p class="lt-note">No converted library in this build. Run the scripts/kaykit/lib_*.py makers, then <code>npm run bench</code>.</p>';
     return;
   }
-  el.appendChild(buildArtControls(() => mountConvertedPanel(el, _api)));
+  el.appendChild(buildArtControls(() => mountPiecesPanel(el, _api)));
   const body = document.createElement("div");
   el.appendChild(body);
   const render = () => {
@@ -2055,8 +2007,8 @@ function mountConvertedPanel(el: HTMLElement, _api: unknown): void {
     const summary = document.createElement("p");
     summary.className = "lt-note";
     summary.textContent =
-      `${inPlay.length} in-play fantasy pieces: ${covered} converted from KayKit, ${inPlay.length - covered} still the hand-drawn art. ` +
-      `Showing ground "${art.ground}", characters "${art.chars}", ${art.size} px. Left of each pair is the game today, right is the conversion.`;
+      `${inPlay.length} in-play fantasy pieces, ${covered} converted from KayKit. Left of each pair is the game today, right is the conversion. ` +
+      `Characters and gear here are the stills the game would load; the Characters tab shows them moving.`;
     body.appendChild(summary);
     for (const group of CONVERTED_GROUPS) {
       const members = inPlay.filter(group.test);
@@ -2107,11 +2059,43 @@ function mountConvertedPanel(el: HTMLElement, _api: unknown): void {
 }
 
 // ===========================================================================
-// Panel: Doll. The inventory screen's paper-doll figure, via render/doll.ts's
-// renderDoll, at its real DOLL_MIN_SCALE..DOLL_MAX_SCALE range.
+// Panel: Gear. One hero's equipment, two ways the game draws it: the
+// inventory screen's paper doll (render/doll.ts's renderDoll, at its real
+// DOLL_MIN_SCALE..DOLL_MAX_SCALE range), and every item's inventory icon at
+// every tier it exists at (render/gearIcon.ts's renderGearIcon), at the
+// phone's 48 px slot size and at 4x, plus the empty-slot silhouettes.
 // ===========================================================================
 
-function mountDollPanel(el: HTMLElement, _api: unknown): () => void {
+const ICON_NATIVE_PX = 48;
+const ICON_ZOOM_PX = ICON_NATIVE_PX * 4;
+
+interface IconEntry {
+  label: string;
+  source: NonNullable<ReturnType<typeof gearIconSource>> | ReturnType<typeof emptySlotIconSource>;
+}
+
+function collectIcons(archetypeId: ArchetypeId): IconEntry[] {
+  const template = TEMPLATE_OF_ARCHETYPE[archetypeId];
+  const out: IconEntry[] = [];
+  for (const role of DRAWN_ROLES) {
+    for (const tier of EQUIPMENT_TIERS) {
+      const source = gearIconSource(archetypeId, role, tier);
+      if (!source) continue;
+      out.push({ label: `${slotNaming(archetypeId, role).slot}: ${gearItemName(archetypeId, role, tier) ?? role} (${tier})`, source });
+    }
+  }
+  for (const role of SHEET_ONLY_ROLES) {
+    for (const tier of EQUIPMENT_TIERS) {
+      const source = gearIconSource(archetypeId, role, tier);
+      if (!source) continue;
+      out.push({ label: `${ACCESSORY_SLOT_WORD[template][role]}: ${gearItemName(archetypeId, role, tier) ?? role} (${tier})`, source });
+    }
+    out.push({ label: `${ACCESSORY_SLOT_WORD[template][role]}: empty slot`, source: emptySlotIconSource(template, role) });
+  }
+  return out;
+}
+
+function mountGearPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
   el.appendChild(buildArtControls(() => draw()));
@@ -2126,167 +2110,92 @@ function mountDollPanel(el: HTMLElement, _api: unknown): () => void {
   canvas.className = "lt-canvas";
   stage.appendChild(canvas);
   el.appendChild(stage);
+  const iconHead = document.createElement("h3");
+  iconHead.className = "lt-section-head";
+  iconHead.textContent = "Inventory icons";
+  el.appendChild(iconHead);
+  const iconNote = document.createElement("p");
+  iconNote.className = "lt-note";
+  iconNote.textContent = "Every piece this hero can own, at every tier, at the phone's 48 px slot size and at 4x.";
+  el.appendChild(iconNote);
+  const iconGrid = document.createElement("div");
+  iconGrid.className = "lt-icon-grid";
+  el.appendChild(iconGrid);
 
-  let template: TemplateGenre = "fantasy";
-  let archetypeId: ArchetypeId = ARCHETYPES_BY_TEMPLATE.fantasy[0]!;
+  let archetypeId: ArchetypeId = PLAYABLE_HEROES[0]!;
   let scale = DOLL_MAX_SCALE;
-  let frame: GlowFrame = 0;
   const picked: Partial<Record<GearRole, EquipmentTier | "empty">> = {};
 
-  const templateField = document.createElement("label");
-  templateField.className = "bn-field";
-  templateField.textContent = "Template ";
-  templateField.appendChild(
-    buildTemplateSelect((t) => {
-      template = t;
-      archetypeId = ARCHETYPES_BY_TEMPLATE[t][0]!;
-      rebuildArchetype();
+  const heroField = document.createElement("label");
+  heroField.className = "bn-field";
+  heroField.textContent = "Hero ";
+  heroField.appendChild(
+    buildHeroSelect(archetypeId, (id) => {
+      archetypeId = id;
+      rebuildTiers();
     }),
   );
-  controls.appendChild(templateField);
-
-  const archetypeField = document.createElement("label");
-  archetypeField.className = "bn-field";
-  archetypeField.textContent = "Archetype ";
-  controls.appendChild(archetypeField);
+  controls.appendChild(heroField);
 
   const scaleField = document.createElement("label");
   scaleField.className = "bn-field";
-  scaleField.textContent = "Scale ";
+  scaleField.textContent = "Doll size ";
   const scaleOptions: number[] = [];
   for (let s = DOLL_MIN_SCALE; s <= DOLL_MAX_SCALE; s++) scaleOptions.push(s);
-  scaleField.appendChild(buildScaleSelect(scaleOptions, scale, (n) => { scale = n; draw(); }));
+  scaleField.appendChild(
+    buildScaleSelect(scaleOptions, scale, (n) => {
+      scale = n;
+      draw();
+    }),
+  );
   controls.appendChild(scaleField);
 
-  const frameField = document.createElement("label");
-  frameField.className = "bn-field";
-  frameField.textContent = "Glow frame ";
-  const frameSelect = document.createElement("select");
-  frameSelect.className = "bn-select";
-  frameSelect.innerHTML = '<option value="0">A (bright)</option><option value="1">B (dim)</option>';
-  frameSelect.onchange = () => {
-    frame = Number(frameSelect.value) as GlowFrame;
-    draw();
-  };
-  frameField.appendChild(frameSelect);
-  controls.appendChild(frameField);
-
-  function rebuildArchetype() {
-    archetypeField.querySelectorAll("select").forEach((s) => s.remove());
-    const archSelect = buildArchetypeSelect(template, (id) => {
-      archetypeId = id;
-      rebuildTiers();
-    });
-    archSelect.value = archetypeId;
-    archetypeField.appendChild(archSelect);
-    rebuildTiers();
-  }
-
-  function rebuildTiers() {
+  function rebuildTiers(): void {
     tierHost.innerHTML = "";
     tierHost.appendChild(buildTierControls(archetypeId, picked, draw));
     draw();
   }
 
-  function draw() {
-    const manifest = artManifest(template);
+  function draw(): void {
+    const manifest = artManifest("fantasy");
     canvas.width = DOLL_CANVAS_SIZE * scale;
     canvas.height = DOLL_CANVAS_SIZE * scale;
     const ctx = canvas.getContext("2d")!;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const equipment = equipmentFrom(picked);
-    const sheet = sheetWithEquipment(archetypeId, equipment);
-    const plan = renderPlanFor(sheet);
-    renderDoll(ctx, plan, manifest, scale, frame);
+    renderDoll(ctx, renderPlanFor(sheetWithEquipment(archetypeId, equipmentFrom(picked))), manifest, scale, 0);
+
+    iconGrid.innerHTML = "";
+    for (const entry of collectIcons(archetypeId)) {
+      const card = document.createElement("div");
+      card.className = "lt-icon-card";
+      const label = document.createElement("div");
+      label.className = "lt-icon-label";
+      label.textContent = entry.label;
+      card.appendChild(label);
+      const row = document.createElement("div");
+      row.className = "lt-icon-row";
+      for (const px of [ICON_NATIVE_PX, ICON_ZOOM_PX]) {
+        const icon = document.createElement("canvas");
+        icon.width = px;
+        icon.height = px;
+        icon.className = "lt-icon-canvas";
+        const ictx = icon.getContext("2d")!;
+        ictx.imageSmoothingEnabled = false;
+        if (!renderGearIcon(ictx, entry.source, manifest, px)) icon.title = "missing sprite: draws nothing, same as the phone screen's text fallback";
+        row.appendChild(icon);
+      }
+      card.appendChild(row);
+      iconGrid.appendChild(card);
+    }
   }
 
-  rebuildArchetype();
+  rebuildTiers();
   return () => {};
 }
 
 // ===========================================================================
-// Panel: Icons. Every gear item's inventory icon at every tier, via
-// render/gearIcon.ts's renderGearIcon, plus the empty-slot silhouettes; at
-// the size the phone inventory shows them (48 CSS px, InventoryScreen.tsx's
-// SLOT_ICON_PX) and at 4x (192px, so the icon's own internal scale cap of 4
-// is actually reachable).
-// ===========================================================================
-
-const ICON_NATIVE_PX = 48;
-const ICON_ZOOM_PX = ICON_NATIVE_PX * 4;
-
-interface IconEntry {
-  label: string;
-  source: NonNullable<ReturnType<typeof gearIconSource>> | ReturnType<typeof emptySlotIconSource>;
-  template: TemplateGenre;
-}
-
-function collectIcons(): IconEntry[] {
-  const out: IconEntry[] = [];
-  for (const template of TEMPLATES) {
-    for (const archetypeId of ARCHETYPES_BY_TEMPLATE[template]) {
-      for (const role of DRAWN_ROLES) {
-        for (const tier of EQUIPMENT_TIERS) {
-          const source = gearIconSource(archetypeId, role, tier);
-          if (!source) continue;
-          const name = gearItemName(archetypeId, role, tier) ?? role;
-          out.push({ label: `${ARCHETYPE_LABEL[archetypeId]}, ${slotNaming(archetypeId, role).slot.toLowerCase()}: ${name} (${tier})`, source, template });
-        }
-      }
-    }
-    // Ring/amulet icons are shared per template (not per archetype); one
-    // representative archetype is enough to enumerate every tier's item.
-    const rep = ARCHETYPES_BY_TEMPLATE[template][0]!;
-    for (const role of SHEET_ONLY_ROLES) {
-      for (const tier of EQUIPMENT_TIERS) {
-        const source = gearIconSource(rep, role, tier);
-        if (!source) continue;
-        const name = gearItemName(rep, role, tier) ?? role;
-        out.push({ label: `${TEMPLATE_LABEL[template]} ${ACCESSORY_SLOT_WORD[template][role].toLowerCase()}: ${name} (${tier})`, source, template });
-      }
-      out.push({ label: `${TEMPLATE_LABEL[template]} ${ACCESSORY_SLOT_WORD[template][role].toLowerCase()}: empty slot`, source: emptySlotIconSource(template, role), template });
-    }
-  }
-  return out;
-}
-
-function mountIconsPanel(el: HTMLElement, _api: unknown): void {
-  injectPanelStyle();
-  el.innerHTML = '<p class="lt-note">Every gear item\'s inventory icon at every tier it exists at (render/gearIcon.ts), plus the four empty-slot silhouettes. Native size is InventoryScreen.tsx\'s 48px slot icon; the second canvas is 4x that box so the icon\'s own internal scale cap is reachable.</p>';
-  el.insertBefore(buildArtControls(() => mountIconsPanel(el, _api)), el.firstChild);
-  const grid = document.createElement("div");
-  grid.className = "lt-icon-grid";
-  el.appendChild(grid);
-
-  for (const entry of collectIcons()) {
-    const manifest = artManifest(entry.template);
-    const card = document.createElement("div");
-    card.className = "lt-icon-card";
-    const label = document.createElement("div");
-    label.className = "lt-icon-label";
-    label.textContent = entry.label;
-    card.appendChild(label);
-    const row = document.createElement("div");
-    row.className = "lt-icon-row";
-    for (const px of [ICON_NATIVE_PX, ICON_ZOOM_PX]) {
-      const canvas = document.createElement("canvas");
-      canvas.width = px;
-      canvas.height = px;
-      canvas.className = "lt-icon-canvas";
-      const ctx = canvas.getContext("2d")!;
-      ctx.imageSmoothingEnabled = false;
-      const drew = renderGearIcon(ctx, entry.source, manifest, px);
-      if (!drew) canvas.title = "missing sprite: draws nothing, same as the phone screen's text fallback";
-      row.appendChild(canvas);
-    }
-    card.appendChild(row);
-    grid.appendChild(card);
-  }
-}
-
-// ===========================================================================
-// Panel: Terrain. A preset 20x15 scene per template, raw versus run through
+// Panel: Terrain. A preset 20x15 fantasy scene, raw versus run through
 // the real applyDisplayTiles (variant scatter + edge substitution), with a
 // seed control and an autotiling on/off toggle so before and after sit side
 // by side.
@@ -2335,22 +2244,16 @@ function paintRawTiles(ctx: CanvasRenderingContext2D, tiles: TileId[][], manifes
 function mountTerrainPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
-  el.appendChild(buildArtControls(() => draw()));
+  el.appendChild(buildArtControls(() => draw(), { chars: false }));
   const controls = document.createElement("div");
   controls.className = "bn-controls";
   el.appendChild(controls);
 
-  let template: TemplateGenre = "fantasy";
+  const template: TemplateGenre = "fantasy";
   let seed = 0;
   let autotile = true;
   // Per SOURCE pixel, integers only (see paintRawTiles).
   let scale = 2;
-
-  const templateField = document.createElement("label");
-  templateField.className = "bn-field";
-  templateField.textContent = "Template ";
-  templateField.appendChild(buildTemplateSelect((t) => { template = t; draw(); }));
-  controls.appendChild(templateField);
 
   const seedField = document.createElement("label");
   seedField.className = "bn-field";
@@ -2439,7 +2342,7 @@ function luminance(r: number, g: number, b: number): number {
 function mountPalettePanel(el: HTMLElement, _api: unknown): void {
   injectPanelStyle();
   el.innerHTML = "";
-  for (const template of TEMPLATES) {
+  for (const template of PLAYABLE_TEMPLATES) {
     const section = document.createElement("section");
     section.className = "lt-palette-section";
     const h = document.createElement("h3");
@@ -2500,13 +2403,8 @@ function injectPanelStyle(): void {
 #bench-root .lt-conv-pair{display:flex;gap:6px;align-items:flex-end}
 #bench-root .lt-conv-canvas{image-rendering:pixelated}
 #bench-root .lt-conv-gap{font-size:11px;color:var(--bn-danger);align-self:center}
-#bench-root .lt-kk-controls{margin-top:-4px}
-#bench-root .lt-kk-controls[hidden]{display:none}
-#bench-root .lt-kk-note{flex-basis:100%;margin:0}
-#bench-root .lt-kk-top{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin:4px 0 8px}
-#bench-root .lt-kk-fig{margin:0;display:flex;flex-direction:column;align-items:flex-start;gap:6px;max-width:100%}
-#bench-root .lt-kk-fig figcaption{font-size:12px;color:var(--bn-muted);max-width:34ch}
-#bench-root .lt-kk-ref{display:block;width:192px;max-width:100%;height:auto;background:var(--bn-panel-alt);border:1px solid var(--bn-line);border-radius:8px}
+#bench-root .lt-picture-note{margin:0 0 8px}
+#bench-root .lt-section-head{font-size:13px;margin:18px 0 4px}
 #bench-root .lt-kk-grid{display:grid;grid-template-columns:minmax(120px,220px) repeat(var(--kk-cols),auto);gap:10px 12px;align-items:end;overflow-x:auto;max-width:100%;padding-bottom:6px}
 #bench-root .lt-kk-colhead{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--bn-muted)}
 #bench-root .lt-kk-rowhead{display:flex;flex-direction:column;gap:2px;font-size:12px;align-self:center}
@@ -2583,30 +2481,13 @@ function injectPanelStyle(): void {
 
 export default {
   title: "Living Table Bench",
-  source: "scripts/assets/fantasy.ts + scripts/assets/scifi.ts, built by scripts/asset-bench/build-bench.mjs",
+  source: "scripts/assets/fantasy.ts + scripts/assets/scifi.ts, KayKit renders from scripts/kaykit/, built by scripts/asset-bench/build-bench.mjs",
   notes: [
-    "Every sprite in both templates' SPRITES arrays, prefixed \"fantasy:\" or \"scifi:\" so the two id spaces " +
-      "can never collide. Library groups follow the sprite id grammar in characters/equipmentTypes.ts: tiles, " +
-      "props, tokens, gear overlays (weapon/outer/crown), boots, ring & amulet icons, and the four slot " +
-      "silhouettes.",
-    "The Character, Doll and Icons panels call the game's own renderPlanFor (menu/equipment.ts), renderCell " +
-      "and compositeToken (render/canvasRenderer.ts, render/equipmentCompositor.ts), renderDoll (render/doll.ts) " +
-      "and renderGearIcon (render/gearIcon.ts) directly, against a RenderManifest built straight from each " +
-      "template's SPRITES + PALETTE. The Terrain panel calls the real applyDisplayTiles (render/terrainEdges.ts). " +
-      "Nothing here redraws game logic; only the trivial indexed-pixel-to-canvas blit (paintRawTiles, for the " +
-      "Terrain panel's 'raw' half, which has no real function to call since applyDisplayTiles IS the substitution " +
-      "step) is local, and it mirrors the same one-line fillRect loop canvasRenderer.ts's own private drawSprite " +
-      "and this template's shell.js drawAsset both already use.",
-    "Every equipment tier offered in a control is one gearItemExists() reports as real for that archetype and " +
-      "role; boots never offers legendary and ring/amulet always offer an explicit empty option, because that " +
-      "is what the game itself allows. Slots are named the way the inventory screen names them (slotLabelFor, " +
-      "ACCESSORY_SLOT_WORD), never by their storage keys: a Knight's `outer` is its shield and its `crown` is its " +
-      "armour.",
-    "The Character panel is playable. Walking, the room and the monster's turn are the bench's own and kept " +
-      "simple (one tile per press, no initiative round, the container always opens). Everything with a number in " +
-      "it is the game's: equipping goes through stageEquip / stageUnequip / commitLoadout (attunement cap " +
-      "included); attacks through attackBlockedReason, resolveAttack, resolveDamage, damageMonster and " +
-      "applyDamage, printed by attackLine; loot through lootFor and lootLine, two rolls per room as in play.",
+    "Play is the game in miniature: walk, fight, loot and dress the hero, with the game's own rules behind every button. " +
+      "The Art row on each tab switches between the game's current hand-drawn art and the KayKit art (Kay Lousberg, CC0); " +
+      "the choice holds across tabs. Characters shows the whole animated cast, Pieces every still sprite, Gear the paper " +
+      "doll and inventory icons. The Library tab lists every sprite in both templates, sci-fi included.",
+    "Fantasy only: sci-fi is paused and the Healer is out of play, so neither is offered outside the Library.",
   ],
   palettes: {
     fantasy: FANTASY_PALETTE,
@@ -2618,12 +2499,15 @@ export default {
   ],
   assets,
   panels: [
-    { id: "character", label: "Character", mount: mountCharacterPanel },
-    { id: "kaykit", label: "KayKit", mount: mountKayKitPanel },
-    { id: "converted", label: "Converted", mount: mountConvertedPanel },
-    { id: "doll", label: "Doll", mount: mountDollPanel },
-    { id: "icons", label: "Icons", mount: mountIconsPanel },
+    { id: "play", label: "Play", mount: mountPlayPanel },
+    { id: "characters", label: "Characters", mount: mountCharactersPanel },
+    { id: "pieces", label: "Pieces", mount: mountPiecesPanel },
+    { id: "gear", label: "Gear", mount: mountGearPanel },
     { id: "terrain", label: "Terrain", mount: mountTerrainPanel },
     { id: "palette", label: "Palette", mount: mountPalettePanel },
   ],
+  // This project's additions to the shell (shell.js): open on Play, Library last.
+  defaultPanel: "play",
+  libraryLast: true,
+  libraryLabel: "Library",
 };

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-30, repo set up; the game still also lives inside Conjure Games.
+Last updated: 2026-09-30, the whole cast animated like the KayKit Knight, and the bench cleaned up.
 
 ## Where the move stands
 
@@ -34,8 +34,20 @@ serving the new art and `spriteSize` (or the Supabase Storage hosting already
 agreed), and `STORAGE_PREFIX` in manifestCache.ts bumped to v4 in the same
 release.
 
+**The whole cast is animated KayKit, drawn like the Knight (2026-09-30):** the
+owner saw the other characters looked like another art style and were static.
+`scripts/kaykit/cast.py` renders all 8 characters through the Knight's own
+pipeline (proved pixel-identical for the Knight), 7 animations x 4 facings x
+2 sizes x 4 styles, with each hero's gear as animated layers, and remade the
+static token parts from the same renders. The goblin is a stand-in (recoloured
+Rogue). The bench was reorganised: Play (opens first; hero and goblin animate,
+gear shows on the moving hero), Characters, Pieces, Gear, Terrain, Palette,
+Library last. Known weak spots: the Pixel artist style turns non-Knight
+clothing drab, and the skeleton is near white in Cel bands and Plain.
+
 ## Next
 
 - Publishing: add the five Actions secrets (see the publish workflow's header), then the first publish per project.
-- The KayKit 3D-to-pixel trial is on the asset bench; the owner is judging whether it looks good enough to pursue.
+- Owner picks: ground style, character style and size for the game. Then the game needs an animation system to use the cast (the bench's Actor in `scripts/asset-bench/cast.ts` is the model).
+- Authored campaigns (owner-written outlines plus a freestyle option) and real-cost pricing for campaign generation.
 - Art hosting in Supabase Storage.
