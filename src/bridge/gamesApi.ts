@@ -784,17 +784,31 @@ export const MOCK_LT_ASSETS: Record<LtTemplate, ReturnType<typeof mockAsset>[]> 
       cliff_edge_
     `),
     ...mockEdgeSets(false, "water_edge_ water_edge_grass_ water_edge_sand_"),
+    // Wall profiles (render/wallProfiles.ts): the sixteen wall joins and the
+    // four long-run variants, drawn from a wall cell's neighbours. Like the
+    // transitions above they are the renderer's, never the DM's: adaptManifest
+    // keeps them out of the world manifest and the prompt's id lists. They are
+    // listed so the dev roster stays id-for-id with the real template and the
+    // dev renderer takes the same wall path. Not walkable, like the wall.
+    ...mockAssets("tile", false, `
+      wall_stone_join_none wall_stone_join_n wall_stone_join_e wall_stone_join_ne
+      wall_stone_join_s wall_stone_join_ns wall_stone_join_es wall_stone_join_nes
+      wall_stone_join_w wall_stone_join_nw wall_stone_join_ew wall_stone_join_new
+      wall_stone_join_sw wall_stone_join_nsw wall_stone_join_esw wall_stone_join_nesw
+      wall_stone_join_ew_b wall_stone_join_ew_c wall_stone_join_ns_b wall_stone_join_ns_c
+    `),
     // Props. The multi-tile structures (cottage, arch, stair, pillar, table,
     // bed, fence, well) are ordinary props the DM lays in a block; only the
     // members you walk through are walkable.
     ...mockAssets("prop", false, `
+      wall_stone_jambs_ns door_closed_ns
       door_closed tree tree_left tree_right chest chest_open
       cottage_nw cottage_n cottage_ne cottage_w cottage_e cottage_sw cottage_s cottage_se
       arch_jamb_w arch_jamb_e pillar_top pillar_base table_w table_e bed_head bed_foot
       fence_w fence_mid fence_e well_nw well_ne well_sw well_se
     `),
     ...mockAssets("prop", true, `
-      door_open torch torch_left torch_right cottage_door arch_passage stair_up_w stair_up_e
+      door_open door_open_ns torch torch_left torch_right cottage_door arch_passage stair_up_w stair_up_e
     `),
     ...mockAssets("token", false, `
       token_knight token_shadow token_healer token_fireball_person token_goblin

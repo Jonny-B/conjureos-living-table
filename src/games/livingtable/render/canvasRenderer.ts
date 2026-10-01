@@ -48,6 +48,7 @@ import type { CellLayout, TileId } from "../world/cell";
 import type { BonusSource, PaletteRemap, GlowFrame, TokenRenderPlans } from "../characters/equipmentTypes";
 import { applyDisplayTiles } from "./terrainEdges";
 import { propVariantAt } from "./tileVariants";
+import { doorProfileFor } from "./wallProfiles";
 import { compositeToken, remappedIndex } from "./equipmentCompositor";
 import { BASE_SPRITE_SIZE, spriteDimensions, spriteSizeOf, TRANSPARENT, type SpriteAsset, type SpriteGrid } from "./spritePixels";
 
@@ -338,17 +339,25 @@ function drawSpriteRuns(
  * pixels, at the cost of dropping source pixels (`drawSpriteRuns`).
  *
  * The tile grid goes through terrainEdges.ts's `applyDisplayTiles` first,
- * which runs two display passes: tileVariants.ts scatters each base material
+ * which runs the display passes: tileVariants.ts scatters each base material
  * across its authored field tiles so a floor is not one sprite repeated three
- * hundred times, and then the autotiler swaps the patch's boundary cells for
- * their transition variants so grass and water stop ending in a straight seam.
- * Both are display-only and return a copy: `layout.tiles` is untouched, so
- * walkability and every validated world action still read the ids the DM
- * placed.
+ * hundred times, the autotiler swaps the patch's boundary cells for their
+ * transition variants so grass and water stop ending in a straight seam, and,
+ * because the layout's props are passed as its fourth argument, wallProfiles.ts
+ * draws each wall cell as the strip it is seen from above (corners, junctions
+ * and wall ends from the cell's neighbours). All are display-only and return a
+ * copy: `layout.tiles` is untouched, so walkability and every validated world
+ * action still read the ids the DM placed. The wall pass is gated on the
+ * manifest carrying its whole set, so a manifest without it draws the walls it
+ * always drew.
  *
  * Props go through the same per-coordinate variant pick, for the same reason:
  * a wood of six trees was six copies of one sprite in one panel, which is the
- * tile pass's own defect on the objects the eye actually tracks.
+ * tile pass's own defect on the objects the eye actually tracks. A door in a
+ * north-south wall is the one prop that draws as two sprites: its jamb overlay
+ * (the wall strip's ends, drawn on the door's own cell), then the side-on leaf
+ * over it, both named by `doorProfileFor`. Any other door, and any manifest
+ * without the set, draws the door as it is stored.
  *
  * `seed` varies the variant scatter between cells that hold the same material,
  * so a corridor of identical rooms does not repeat one field pixel for pixel.
@@ -387,7 +396,8 @@ export function renderCell(
   // overlay line up with its body pixel for pixel.
   const size = spriteSizeOf(manifest);
   const hasTile = (assetId: TileId) => manifest.tiles[assetId] !== undefined;
-  const tiles = applyDisplayTiles(layout.tiles, hasTile, seed);
+  const hasProp = (assetId: TileId) => manifest.props[assetId] !== undefined;
+  const tiles = applyDisplayTiles(layout.tiles, hasTile, seed, { props: layout.props, hasProp });
 
   for (let y = 0; y < CELL_HEIGHT; y++) {
     const row = tiles[y];
@@ -399,16 +409,20 @@ export function renderCell(
     }
   }
 
-  const hasProp = (assetId: TileId) => manifest.props[assetId] !== undefined;
   for (const prop of layout.props) {
-    const sprite = manifest.props[propVariantAt(prop.assetId, prop.x, prop.y, hasProp, seed)];
-    if (!sprite) continue;
-    // The feet anchor rather than tileOrigin: identical for the 16x16 every
-    // prop is today, and correct rather than upside down if one is ever drawn
-    // taller. `propVariantAt` returns the id the DM placed when it has nothing
-    // to substitute, so a prop with no set is unchanged.
-    const origin = tokenOrigin(prop, spriteDimensions(sprite.pixels).height, scale, size);
-    drawSprite(ctx, manifest.palette, sprite.pixels, origin, scale, null, size);
+    // A side-on door is the jambs then the leaf; every other prop is one sprite.
+    const profile = doorProfileFor(layout.tiles, prop, layout.props, hasTile, hasProp);
+    const ids = profile ? [profile.jambs, profile.leaf] : [propVariantAt(prop.assetId, prop.x, prop.y, hasProp, seed)];
+    for (const id of ids) {
+      const sprite = manifest.props[id];
+      if (!sprite) continue;
+      // The feet anchor rather than tileOrigin: identical for the 16x16 every
+      // prop is today, and correct rather than upside down if one is ever drawn
+      // taller. `propVariantAt` returns the id the DM placed when it has nothing
+      // to substitute, so a prop with no set is unchanged.
+      const origin = tokenOrigin(prop, spriteDimensions(sprite.pixels).height, scale, size);
+      drawSprite(ctx, manifest.palette, sprite.pixels, origin, scale, null, size);
+    }
   }
 
   const lookup = (spriteId: TileId): SpriteGrid | undefined => manifest.tokens[spriteId]?.pixels;

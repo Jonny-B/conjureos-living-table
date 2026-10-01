@@ -34,6 +34,9 @@ import { complete, parseLoose } from "../src/bridge/ai";
 import { BEGIN_CAMPAIGN_MESSAGE, describeMoveIntoFog } from "../src/games/livingtable/session/dmContext";
 import { SPRITES as FANTASY_SPRITES } from "../scripts/assets/fantasy";
 import { SPRITES as SCIFI_SPRITES } from "../scripts/assets/scifi";
+import { PALETTE as FANTASY_PALETTE } from "../scripts/assets/fantasy";
+import { adaptManifest } from "../src/games/livingtable/assets/manifestCache";
+import { RENDER_ONLY_ASSET_IDS } from "../src/games/livingtable/render/wallProfiles";
 
 // ── fixtures ─────────────────────────────────────────────────────────────
 
@@ -1510,6 +1513,28 @@ test("buildDmSystemPrompt never names an id the template does not ship", () => {
     const unknown = [...suffixed].filter((w) => !ids.has(w) && !ids.has(`${w}_top`));
     assert.deepEqual(unknown, [], `${template} prompt names ids the template does not ship: ${unknown.join(", ")}`);
   }
+});
+
+test("a prompt built from the adapted real fantasy roster names no render-only wall-profile id", () => {
+  // The wall-profile sprites (the joins, the jamb overlay, the side-on door
+  // leaves) are the renderer's. adaptManifest keeps them out of
+  // `availableAssetIds`, and this is the property that matters to the model:
+  // built from the roster the game really ships, the prompt never offers one.
+  const adapted = adaptManifest({ template: "fantasy", palette: FANTASY_PALETTE, assets: FANTASY_SPRITES as never });
+  const prompt = buildDmSystemPrompt({ ...sampleArgs(), availableAssetIds: adapted.availableAssetIds });
+
+  const named = [...RENDER_ONLY_ASSET_IDS].filter((id) => prompt.includes(id));
+  assert.deepEqual(named, [], `the prompt offers render-only ids: ${named.join(", ")}`);
+
+  // Not vacuous: the roster it was built from does carry them, and the ordinary
+  // wall and door ids around them are still offered.
+  const shipped = new Set(FANTASY_SPRITES.map((s) => s.assetId));
+  assert.ok([...RENDER_ONLY_ASSET_IDS].every((id) => shipped.has(id)), "the fantasy roster ships the profile art");
+  for (const id of ["wall_stone", "wall_stone_top", "wall_stone_base", "door_closed", "door_open"]) {
+    assert.ok(prompt.includes(id), `${id} is still offered`);
+  }
+  assert.ok(adapted.availableAssetIds.tiles.every((id) => !RENDER_ONLY_ASSET_IDS.has(id)));
+  assert.ok(adapted.availableAssetIds.props.every((id) => !RENDER_ONLY_ASSET_IDS.has(id)));
 });
 
 // ── the voice rules: what two blind table judges said would end the run ───

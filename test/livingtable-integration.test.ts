@@ -79,8 +79,10 @@ import {
   emptyWorld,
   getCell,
   placeToken,
+  placeProp,
   setCell,
   setDoorState,
+  validateLayout,
   type AssetManifest,
   type CellLayout,
 } from "../src/games/livingtable/world";
@@ -970,6 +972,108 @@ test("a closed door adapted off the wire actually stops a token, and opening it 
   world = opened.world;
   const through = placeToken(world, 0, 0, { id: "g1", assetId: "token_goblin", x: 8, y: 8, kind: "monster" }, manifest);
   assert.equal(through.ok, true, "opening the door has to actually let something through");
+});
+
+// ── the wall-profile art is the renderer's, never the DM's ────────────────
+//
+// render/wallProfiles.ts draws walls from their neighbours with 23 sprites the
+// DM has no business naming: the sixteen joins, four run variants, the jamb
+// overlay and the two side-on door leaves. adaptManifest keeps them in the
+// render manifest ONLY, which closes the hole at both ends: the prompt never
+// lists one, and naming one is rejected as an unknown asset.
+
+function wallProfileWire() {
+  const px = [[0]];
+  return {
+    template: "fantasy" as const,
+    palette: [[0, 0, 0]],
+    assets: [
+      { assetId: "floor_stone", kind: "tile" as const, name: "Stone", size: 16, walkable: true, pixels: px },
+      { assetId: "wall_stone", kind: "tile" as const, name: "Wall", size: 16, walkable: false, pixels: px },
+      { assetId: "wall_stone_join_ns", kind: "tile" as const, name: "Run", size: 16, walkable: false, pixels: [[1]] },
+      { assetId: "wall_stone_join_ns_b", kind: "tile" as const, name: "Run B", size: 16, walkable: false, pixels: [[2]] },
+      { assetId: "wall_stone_join_nesw", kind: "tile" as const, name: "Crossing", size: 16, walkable: false, pixels: [[3]] },
+      { assetId: "wall_stone_jambs_ns", kind: "prop" as const, name: "Jambs", size: 16, walkable: false, pixels: [[4]] },
+      { assetId: "door_closed_ns", kind: "prop" as const, name: "Closed leaf", size: 16, walkable: false, pixels: [[5]] },
+      { assetId: "door_open_ns", kind: "prop" as const, name: "Open leaf", size: 16, walkable: true, pixels: [[6]] },
+      { assetId: "door_closed", kind: "prop" as const, name: "Door", size: 16, walkable: false, pixels: px },
+      { assetId: "door_open", kind: "prop" as const, name: "Open door", size: 16, walkable: true, pixels: px },
+      { assetId: "token_goblin", kind: "token" as const, name: "Goblin", size: 16, walkable: false, pixels: px },
+    ],
+  };
+}
+
+test("adaptManifest puts the render-only wall-profile ids in render but not in world or availableAssetIds", () => {
+  const adapted = adaptManifest(wallProfileWire());
+
+  // The renderer gets every one of them, as the right kind.
+  assert.deepEqual(adapted.render.tiles.wall_stone_join_ns, { pixels: [[1]] });
+  assert.deepEqual(adapted.render.tiles.wall_stone_join_ns_b, { pixels: [[2]] });
+  assert.deepEqual(adapted.render.tiles.wall_stone_join_nesw, { pixels: [[3]] });
+  assert.deepEqual(adapted.render.props.wall_stone_jambs_ns, { pixels: [[4]] });
+  assert.deepEqual(adapted.render.props.door_closed_ns, { pixels: [[5]] });
+  assert.deepEqual(adapted.render.props.door_open_ns, { pixels: [[6]] });
+
+  // The engine does not: nothing in world/ can be asked to place one.
+  for (const id of ["wall_stone_join_ns", "wall_stone_join_ns_b", "wall_stone_join_nesw"]) assert.ok(!(id in adapted.world.tiles), `${id} is not a world tile`);
+  for (const id of ["wall_stone_jambs_ns", "door_closed_ns", "door_open_ns"]) assert.ok(!(id in adapted.world.props), `${id} is not a world prop`);
+
+  // The DM is not told about them.
+  assert.deepEqual(adapted.availableAssetIds, { tiles: ["floor_stone", "wall_stone"], tokens: ["token_goblin"], props: ["door_closed", "door_open"] });
+
+  // And the ordinary ids around them are adapted exactly as before.
+  assert.deepEqual(adapted.world.tiles.wall_stone, { walkable: false });
+  assert.deepEqual(adapted.world.props.door_closed, { blocks: true });
+  assert.ok("wall_stone" in adapted.render.tiles && "door_closed" in adapted.render.props);
+});
+
+test("a layout that names a wall-profile id is rejected as an unknown asset", () => {
+  const manifest = adaptManifest(wallProfileWire()).world;
+  const tiles = Array.from({ length: CELL_HEIGHT }, () => Array.from({ length: CELL_WIDTH }, () => "floor_stone"));
+  const here = { cx: 0, cy: 0 };
+
+  const joinLayout: CellLayout = { tiles: tiles.map((row, y) => (y === 3 ? row.map((id, x) => (x === 4 ? "wall_stone_join_ns" : id)) : row)), props: [], tokens: [], exits: [], sealed: true };
+  const joinCheck = validateLayout(joinLayout, manifest, here);
+  assert.equal(joinCheck.ok, false);
+  if (!joinCheck.ok) assert.match(joinCheck.errors.join("\n"), /tile \(4,3\) references unknown asset "wall_stone_join_ns"/);
+
+  const propLayout: CellLayout = {
+    tiles,
+    props: [{ id: "arch", assetId: "wall_stone_jambs_ns", x: 5, y: 5 }, { id: "leaf", assetId: "door_closed_ns", x: 6, y: 5 }],
+    tokens: [],
+    exits: [],
+    sealed: true,
+  };
+  const propCheck = validateLayout(propLayout, manifest, here);
+  assert.equal(propCheck.ok, false);
+  if (!propCheck.ok) {
+    assert.match(propCheck.errors.join("\n"), /prop "arch" references unknown asset "wall_stone_jambs_ns"/);
+    assert.match(propCheck.errors.join("\n"), /prop "leaf" references unknown asset "door_closed_ns"/);
+  }
+
+  // The same layout with the stored ids is fine, so the rejection is about the ids and nothing else.
+  assert.equal(validateLayout({ tiles, props: [{ id: "door", assetId: "door_closed", x: 5, y: 5 }], tokens: [], exits: [], sealed: true }, manifest, here).ok, true);
+});
+
+test("setDoorState to a side-on leaf, and placeProp of a jamb overlay, are rejected: the DM cannot reach the render-only art", () => {
+  const manifest = adaptManifest(wallProfileWire()).world;
+  const tiles = Array.from({ length: CELL_HEIGHT }, () => Array.from({ length: CELL_WIDTH }, () => "floor_stone"));
+  const layout: CellLayout = { tiles, props: [{ id: "door1", assetId: "door_closed", x: 8, y: 8 }], tokens: [], exits: [], sealed: true };
+  const world = setCell(emptyWorld(), { cx: 0, cy: 0 }, layout);
+
+  const leaf = setDoorState(world, 0, 0, "door1", "door_closed_ns", manifest);
+  assert.equal(leaf.ok, false);
+  if (!leaf.ok) assert.match(leaf.error, /unknown prop asset "door_closed_ns"/);
+  const open = setDoorState(world, 0, 0, "door1", "door_open_ns", manifest);
+  assert.equal(open.ok, false);
+
+  const jambs = placeProp(world, 0, 0, { id: "j", assetId: "wall_stone_jambs_ns", x: 3, y: 3 }, manifest);
+  assert.equal(jambs.ok, false);
+  if (!jambs.ok) assert.match(jambs.error, /unknown prop asset "wall_stone_jambs_ns"/);
+
+  // The stored door states still work.
+  const opened = setDoorState(world, 0, 0, "door1", "door_open", manifest);
+  assert.equal(opened.ok, true);
 });
 
 // ── the dev mock's roster is a hard gate, so it has to match the real one ─

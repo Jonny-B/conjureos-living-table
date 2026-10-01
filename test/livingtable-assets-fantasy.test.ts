@@ -1106,6 +1106,200 @@ test("the wall base casts a graded shadow down onto the floor", () => {
   );
 });
 
+// ── wall profiles: walls seen from above, one render-only tile per shape ──
+//
+// render/wallProfiles.ts reads each wall cell's neighbours as a 4-bit mask
+// (N=1, E=2, S=4, W=8) and swaps in `wall_stone_join_<join>`, where <join>
+// spells the joined sides in n, e, s, w order. A wall with nothing wall to its
+// south is FACED (cap band rows 0..5, face rows 6..15); one with wall to its
+// south is CAP ONLY. These tests measure the art against that contract.
+
+const JOIN_PREFIX = "wall_stone_join_";
+const OUTLINE_INDEX = 0;
+
+/** The join name for a mask: the joined sides in n, e, s, w order, "none" for 0. */
+const joinName = (mask: number): string => (mask === 0 ? "none" : [..."nesw"].filter((_, i) => (mask & (1 << i)) !== 0).join(""));
+const joinSprite = (mask: number): Sprite => byId(`${JOIN_PREFIX}${joinName(mask)}`);
+const MASKS = Array.from({ length: 16 }, (_, mask) => mask);
+const WALL_RUN_VARIANT_IDS = ["ew_b", "ew_c", "ns_b", "ns_c"].map((s) => `${JOIN_PREFIX}${s}`);
+const WALL_PROFILE_PROP_IDS = ["wall_stone_jambs_ns", "door_closed_ns", "door_open_ns"];
+/** Every join sprite, base and variant, with the mask it draws. A run variant draws its base shape's mask. */
+const ALL_JOINS = (): Array<{ sprite: Sprite; mask: number }> => [
+  ...MASKS.map((mask) => ({ sprite: joinSprite(mask), mask })),
+  ...WALL_RUN_VARIANT_IDS.map((id) => ({ sprite: byId(id), mask: id.includes("ew") ? 10 : 5 })),
+];
+const isFaced = (mask: number) => (mask & 4) === 0;
+const fillLuma = (grid: readonly (readonly number[])[]): number => {
+  const fill = grid.flat().filter((v) => v !== -1 && v !== OUTLINE_INDEX);
+  return fill.reduce((sum, v) => sum + L(v), 0) / fill.length;
+};
+
+test("wall profiles ship 23 render-only sprites: 16 joins, 4 run variants, the jambs and two leaves", () => {
+  for (const mask of MASKS) {
+    const sprite = joinSprite(mask);
+    assert.equal(sprite.kind, "tile", `${sprite.assetId} is not a tile`);
+    assert.equal(sprite.walkable, false, `${sprite.assetId} must not be walkable`);
+  }
+  for (const id of WALL_RUN_VARIANT_IDS) {
+    assert.equal(byId(id).kind, "tile", `${id} is not a tile`);
+    assert.equal(byId(id).walkable, false, `${id} must not be walkable`);
+  }
+  const joins = SPRITES.filter((s) => s.assetId.startsWith(JOIN_PREFIX));
+  assert.equal(joins.length, 20, `expected 16 joins and 4 run variants, found ${joins.length}`);
+  for (const id of WALL_PROFILE_PROP_IDS) assert.equal(byId(id).kind, "prop", `${id} is not a prop`);
+  const names = [...joins.map((s) => s.name), ...WALL_PROFILE_PROP_IDS.map((id) => byId(id).name)];
+  assert.equal(new Set(names).size, 23, "two wall profile sprites share a name");
+});
+
+test("wall profile sprites are not terrain the DM or the variant scatter can reach", () => {
+  // They are render-only: FIELD_TILES drives the autocorrelation tests, and
+  // MATERIAL_VARIANTS is what terrainEdges and the variant scatter read.
+  const profileIds = new Set([...SPRITES.filter((s) => s.assetId.startsWith(JOIN_PREFIX)).map((s) => s.assetId), ...WALL_PROFILE_PROP_IDS]);
+  for (const id of Object.keys(FIELD_TILES)) assert.ok(!profileIds.has(id), `${id} is in FIELD_TILES`);
+  for (const ids of Object.values(MATERIAL_VARIANTS)) {
+    for (const id of ids) assert.ok(!profileIds.has(id), `${id} is in MATERIAL_VARIANTS`);
+  }
+});
+
+test("a wall join is opaque, so no floor shows through a wall", () => {
+  for (const { sprite } of ALL_JOINS()) {
+    const holes = sprite.pixels.flat().filter((v) => v === -1).length;
+    assert.equal(holes, 0, `${sprite.assetId} has ${holes} transparent pixels`);
+  }
+});
+
+test("a faced join's cap reads brighter than its face, the way the stone cap reads brighter than the face", () => {
+  // Measured on FILL, the convention fillPixels sets everywhere in this file:
+  // the OUTLINE pixels are the derived edge, near-black on cap and face alike,
+  // so counting them only dilutes both sides toward the same dark.
+  for (const { sprite, mask } of ALL_JOINS()) {
+    if (!isFaced(mask)) continue;
+    const cap = fillLuma(sprite.pixels.slice(0, 6));
+    const face = fillLuma(sprite.pixels.slice(6, 13));
+    assert.ok(cap - face >= 20, `${sprite.assetId}'s cap rows 0..5 are L${cap.toFixed(0)} against the face's L${face.toFixed(0)}, expected at least 20L brighter`);
+  }
+});
+
+test("a faced join's base casts the same graded shadow wall_stone_base does", () => {
+  for (const { sprite, mask } of ALL_JOINS()) {
+    if (!isFaced(mask)) continue;
+    const counts = [13, 14, 15].map((y) => sprite.pixels[y]!.filter((v) => v === OUTLINE_INDEX).length);
+    assert.ok(
+      counts[0]! < counts[1]! && counts[1]! < counts[2]!,
+      `${sprite.assetId} rows 13/14/15 hold ${counts.join("/")} outline pixels, expected a strictly increasing gradient`,
+    );
+  }
+});
+
+test("a faced join is a cap band over a face: the cap lip is a shade row then a dark line, and the face is the shipped ashlar", () => {
+  const faceIds = ["wall_stone", "wall_stone_b", "wall_stone_c"];
+  for (const { sprite, mask } of ALL_JOINS()) {
+    if (!isFaced(mask)) continue;
+    assert.ok(sprite.pixels[4]!.slice(2, 14).every((v) => v === 26), `${sprite.assetId} row 4 is not the lip shade (ROCK_BODY)`);
+    assert.ok(sprite.pixels[5]!.every((v) => v === OUTLINE_INDEX), `${sprite.assetId} row 5 is not the lip line`);
+  }
+  // The east-west run reuses the wall_stone / _b / _c face rows, centre columns, so its three variants scatter like the wall does.
+  for (const [i, suffix] of ["", "_b", "_c"].entries()) {
+    const run = byId(`${JOIN_PREFIX}ew${suffix}`).pixels;
+    const face = byId(faceIds[i]!).pixels;
+    for (let y = 6; y <= 12; y++) {
+      assert.deepEqual(run[y], face[y + 1], `${JOIN_PREFIX}ew${suffix} face row ${y} is not ${faceIds[i]} row ${y + 1}`);
+    }
+  }
+});
+
+test("every open side of a join is drawn as an OUTLINE edge, top to bottom", () => {
+  for (const { sprite, mask } of ALL_JOINS()) {
+    const px = sprite.pixels;
+    const open = (bit: number) => (mask & bit) === 0;
+    if (open(1)) assert.ok(px[0]!.every((v) => v === OUTLINE_INDEX), `${sprite.assetId} has an open north side with no outline row`);
+    if (open(8)) assert.ok(px.every((row) => row[0] === OUTLINE_INDEX), `${sprite.assetId} has an open west side with no outline column`);
+    if (open(2)) assert.ok(px.every((row) => row[15] === OUTLINE_INDEX), `${sprite.assetId} has an open east side with no outline column`);
+    if (open(4)) assert.ok(px[15]!.every((v) => v === OUTLINE_INDEX), `${sprite.assetId} has an open south side with no outline row`);
+  }
+});
+
+test("a joined side has no outline across the cap, so a run reads as one strip and a corner as one L", () => {
+  for (const { sprite, mask } of ALL_JOINS()) {
+    const px = sprite.pixels;
+    if (mask & 8) for (const y of [2, 3]) assert.notEqual(px[y]![0], OUTLINE_INDEX, `${sprite.assetId} outlines its joined west side at row ${y}`);
+    if (mask & 2) for (const y of [2, 3]) assert.notEqual(px[y]![15], OUTLINE_INDEX, `${sprite.assetId} outlines its joined east side at row ${y}`);
+    if (mask & 1) for (const x of [4, 8, 11]) assert.notEqual(px[0]![x], OUTLINE_INDEX, `${sprite.assetId} outlines its joined north side at column ${x}`);
+  }
+});
+
+test("a cap-only join that meets a neighbour's face edges its cap from row 6, where the cap drops to that face", () => {
+  for (const { sprite, mask } of ALL_JOINS()) {
+    if (isFaced(mask)) continue;
+    if (mask & 8) for (let y = 6; y < 16; y++) assert.equal(sprite.pixels[y]![0], OUTLINE_INDEX, `${sprite.assetId} west edge row ${y}`);
+    if (mask & 2) for (let y = 6; y < 16; y++) assert.equal(sprite.pixels[y]![15], OUTLINE_INDEX, `${sprite.assetId} east edge row ${y}`);
+  }
+});
+
+test("the wall join names spell the joined sides in n, e, s, w order, and only the two long runs have variants", () => {
+  assert.equal(new Set(MASKS.map(joinName)).size, 16);
+  assert.deepEqual(MASKS.map(joinName), ["none", "n", "e", "ne", "s", "ns", "es", "nes", "w", "nw", "ew", "new", "sw", "nsw", "esw", "nesw"]);
+  // The variants are where the joints fall and the specks, not a different shape.
+  for (const id of WALL_RUN_VARIANT_IDS) {
+    const base = byId(id.replace(/_[bc]$/, "")).pixels.flat();
+    const variant = byId(id).pixels.flat();
+    let same = 0;
+    for (let i = 0; i < base.length; i++) if (base[i] === variant[i]) same += 1;
+    assert.ok(same < 245, `${id} is the same image as its base`);
+    assert.ok(same > 100, `${id} agrees with its base on only ${same}/256 pixels, so it is a different shape`);
+  }
+  assert.notDeepEqual(byId(`${JOIN_PREFIX}ns_b`).pixels, byId(`${JOIN_PREFIX}ns_c`).pixels);
+  assert.notDeepEqual(byId(`${JOIN_PREFIX}ew_b`).pixels, byId(`${JOIN_PREFIX}ew_c`).pixels);
+});
+
+test("the door jambs are derived from the joins, so they always match them", () => {
+  const jambs = byId("wall_stone_jambs_ns").pixels;
+  const run = joinSprite(5).pixels;
+  const end = joinSprite(4).pixels;
+  assert.deepEqual(jambs.slice(0, 2), run.slice(14, 16), "jambs rows 0..1 are not the north-south run's last two");
+  assert.ok(jambs[2]!.every((v) => v === OUTLINE_INDEX), "jambs row 2 is not the north jamb's end line");
+  for (let y = 3; y <= 12; y++) assert.ok(jambs[y]!.every((v) => v === -1), `jambs row ${y} is not transparent, so the floor would not show through the gap`);
+  assert.deepEqual(jambs.slice(13, 16), end.slice(0, 3), "jambs rows 13..15 are not the north end of a run's first three");
+});
+
+test("the closed leaf is a wood bar from jamb to jamb and the open leaf folds inside its own square, passage clear", () => {
+  const closed = byId("door_closed_ns").pixels;
+  const open = byId("door_open_ns").pixels;
+  // Closed: columns 5..10 are opaque in rows 2..13 and nothing is drawn in rows 0..1 or 14..15.
+  for (let y = 0; y < 16; y++) {
+    for (let x = 5; x <= 10; x++) assert.equal(closed[y]![x] !== -1, y >= 2 && y <= 13, `closed leaf (${x},${y})`);
+    // Nothing is drawn outside columns 5..10 but the ring pull, so the leaf never reaches the strip's own outline columns.
+    for (const x of [0, 1, 2, 3, 4, 13, 14, 15]) assert.equal(closed[y]![x], -1, `closed leaf (${x},${y}) should be transparent`);
+  }
+  assert.equal(closed[7]![11], 13, "the ring pull is the gold at (11,7)");
+  // Open: one 10x4 slab in rows 9..12, columns 6..15, and rows 0..8 (the passage) and 13..15 are clear.
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const inSlab = y >= 9 && y <= 12 && x >= 6;
+      assert.equal(open[y]![x] !== -1, inSlab, `open leaf (${x},${y}) is ${inSlab ? "missing" : "outside its slab"}`);
+    }
+  }
+});
+
+test("the side-on leaves keep walkability parity with the doors they stand for, and the jambs never reach the engine as terrain", () => {
+  assert.equal(byId("door_closed_ns").walkable, byId("door_closed").walkable);
+  assert.equal(byId("door_open_ns").walkable, byId("door_open").walkable);
+  assert.equal(byId("door_closed_ns").walkable, false);
+  assert.equal(byId("door_open_ns").walkable, true);
+  assert.equal(byId("wall_stone_jambs_ns").walkable, false);
+});
+
+test("the wall profile sprites only draw in the stone wall's own ramp and the door's wood and iron", () => {
+  const STONE = new Set([0, 5, 8, 24, 25, 26, 27]);
+  const WOOD = new Set([0, 2, 13, 32, 44, 45]);
+  for (const { sprite } of ALL_JOINS()) {
+    for (const v of sprite.pixels.flat()) assert.ok(STONE.has(v), `${sprite.assetId} paints index ${v}, which is not in the wall's stone ramp`);
+  }
+  for (const [id, allowed] of [["wall_stone_jambs_ns", new Set([-1, ...STONE])], ["door_closed_ns", new Set([-1, ...WOOD])], ["door_open_ns", new Set([-1, ...WOOD])]] as const) {
+    for (const v of byId(id).pixels.flat()) assert.ok(allowed.has(v), `${id} paints index ${v}`);
+  }
+});
+
 // ── terrain transitions ───────────────────────────────────────────────────
 
 test("every transition tile draws a bank, and the bank is visible against both materials", () => {

@@ -25,6 +25,7 @@ import type { LtAssetWire, LtTemplate } from "../../../bridge/gamesApi";
 import type { AssetManifest } from "../world/cell";
 import type { RenderManifest, SpriteAsset } from "../render/canvasRenderer";
 import { isUsableSpriteSize } from "../render/spritePixels";
+import { isRenderOnlyAssetId } from "../render/wallProfiles";
 import type { AvailableAssetIds } from "../dm/promptBuilder";
 
 export interface LoadedManifest {
@@ -118,6 +119,18 @@ export function adaptManifest(wire: WireManifest): LoadedManifest {
 
   for (const asset of wire.assets) {
     const sprite: SpriteAsset = { pixels: asset.pixels };
+    // The wall-profile art is the renderer's and nobody else's: the joins, the
+    // jamb overlay and the side-on door leaves go into `render` and NOWHERE
+    // ELSE. Left out of `world`, naming one is rejected as an unknown asset
+    // (validateLayout, setDoorState, placeProp); left out of
+    // `availableAssetIds`, the prompt never lists one. That closes the hole at
+    // both ends, the same way the gear sprites are kept out of what the DM may
+    // place. They only ever arrive as tiles or props; any other kind is dropped.
+    if (isRenderOnlyAssetId(asset.assetId)) {
+      if (asset.kind === "tile") render.tiles[asset.assetId] = sprite;
+      else if (asset.kind === "prop") render.props[asset.assetId] = sprite;
+      continue;
+    }
     if (asset.kind === "tile") {
       world.tiles[asset.assetId] = { walkable: asset.walkable };
       render.tiles[asset.assetId] = sprite;
