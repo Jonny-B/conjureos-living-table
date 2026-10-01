@@ -31,6 +31,17 @@
  * at sub-tile offsets. A judge who knows the era sorts on this before looking
  * at any craft." At height 16 the anchor reduces exactly to `tileOrigin`, so
  * the hundreds of shipped 16x16 sprites draw byte-identically.
+ *
+ * SOURCE RESOLUTION. How many source pixels make one tile edge is a property of
+ * the whole library, so it lives on the manifest as `spriteSize` (default 16,
+ * the library every shipped sprite and every older test was drawn for). At 16 a
+ * tile is 16x16 and a token is 16x24. At 32 a tile is 32x32 and a token is
+ * 32x48: still exactly one tile wide and a tile and a half tall on screen.
+ * Every function below that turns sprite pixels into canvas pixels takes the
+ * resolution as a trailing optional argument defaulting to 16, so a caller that
+ * does not pass it gets the arithmetic it always got, to the last digit.
+ * `scale` keeps its meaning at every resolution: canvas pixels per TILE, never
+ * per source pixel.
  */
 import { CELL_HEIGHT, CELL_WIDTH, type TileCoord } from "../world/coordinates";
 import type { CellLayout, TileId } from "../world/cell";
@@ -38,17 +49,24 @@ import type { BonusSource, PaletteRemap, GlowFrame, TokenRenderPlans } from "../
 import { applyDisplayTiles } from "./terrainEdges";
 import { propVariantAt } from "./tileVariants";
 import { compositeToken, remappedIndex } from "./equipmentCompositor";
-import { spriteDimensions, TRANSPARENT, type SpriteAsset, type SpriteGrid } from "./spritePixels";
+import { BASE_SPRITE_SIZE, spriteDimensions, spriteSizeOf, TRANSPARENT, type SpriteAsset, type SpriteGrid } from "./spritePixels";
 
 // The pixel-grid primitives moved to spritePixels.ts so that the compositor
 // could use them without importing the painter that calls it. They are
 // re-exported here because they have been part of this file's public surface
 // since the renderer existed, and half a dozen files import them from here.
-export { spriteDimensions, TRANSPARENT };
+export { spriteDimensions, spriteSizeOf, TRANSPARENT };
 export type { SpriteAsset, SpriteGrid };
 
-/** The tile grid's native pixel pitch: every tile and every prop is exactly this square, and a token is exactly this wide. DESIGN.md pins it as part of "the actual target" the asset library hits. */
-export const SPRITE_SIZE = 16;
+/**
+ * The tile grid's native pixel pitch, and the default source resolution: every
+ * tile and every prop is exactly this square, and a token is exactly this wide.
+ * DESIGN.md pins it as part of "the actual target" the asset library hits. A
+ * manifest may declare a finer one (`RenderManifest.spriteSize`); this constant
+ * is what it means when it declares nothing, and it is the pitch the board's
+ * canvas is sized in.
+ */
+export const SPRITE_SIZE = BASE_SPRITE_SIZE;
 
 /**
  * The render-time asset library: one shared palette (hex color strings,
@@ -57,6 +75,13 @@ export const SPRITE_SIZE = 16;
  * loose validation-only AssetManifest in world/cell.ts.
  */
 export interface RenderManifest {
+  /**
+   * Source pixels per tile edge: 16 when absent, which is every library shipped
+   * before this field existed. A 32 here means tiles are 32x32 and tokens are
+   * 32x48, and `spritePixelSize` halves accordingly. Read it through
+   * `spriteSizeOf`, never directly, so a zero or a string degrades to 16.
+   */
+  spriteSize?: number;
   palette: string[];
   tiles: Record<TileId, SpriteAsset>;
   props: Record<TileId, SpriteAsset>;
@@ -93,19 +118,28 @@ export function canvasDimensions(scale: number): { width: number; height: number
 }
 
 /**
- * How many canvas pixels one source pixel of a sprite's 16x16 grid covers,
- * at a given tile scale. Exact (an integer) only when `scale` is a multiple
- * of SPRITE_SIZE; a non-multiple still produces a valid (fractional) draw,
- * it just isn't pixel-perfect -- callers that care about crisp pixel art
- * should pick a multiple of 16.
+ * How many canvas pixels one source pixel of a sprite covers, at a given tile
+ * scale and source resolution (`spriteSize`, source pixels per tile edge,
+ * default 16). Exact (an integer) only when `scale` is a multiple of
+ * `spriteSize`; a non-multiple still produces a valid (fractional) number,
+ * it just isn't pixel-perfect -- callers that care about crisp pixel art should
+ * pick a multiple of the library's own resolution. A finer library's fractional
+ * case is snapped to whole canvas pixels when it is painted (`drawSpriteRuns`);
+ * the 16 pixel case paints exactly as it always has.
  */
-export function spritePixelSize(scale: number): number {
-  return scale / SPRITE_SIZE;
+export function spritePixelSize(scale: number, spriteSize: number = SPRITE_SIZE): number {
+  return scale / spriteSize;
 }
 
-/** Where one cell of a sprite's pixel-index grid lands on the canvas, given the origin it's being drawn from and the render scale. */
-export function spritePixelRect(tileOriginPx: PixelPoint, spriteX: number, spriteY: number, scale: number): PixelRect {
-  const size = spritePixelSize(scale);
+/** Where one cell of a sprite's pixel-index grid lands on the canvas, given the origin it's being drawn from and the render scale. Exact and unsnapped: the pure arithmetic, at any resolution. */
+export function spritePixelRect(
+  tileOriginPx: PixelPoint,
+  spriteX: number,
+  spriteY: number,
+  scale: number,
+  spriteSize: number = SPRITE_SIZE,
+): PixelRect {
+  const size = spritePixelSize(scale, spriteSize);
   return { x: tileOriginPx.x + spriteX * size, y: tileOriginPx.y + spriteY * size, width: size, height: size };
 }
 
@@ -121,14 +155,18 @@ export function spritePixelRect(tileOriginPx: PixelPoint, spriteX: number, sprit
  * it has always drawn on. That equality is a test of its own, because it is the
  * thing that makes a geometry change to the whole renderer safe to ship.
  *
+ * `height` is in SOURCE rows, so the anchor reduces to `tileOrigin` when it
+ * equals the resolution: a 32 tall sprite at `spriteSize` 32 is one tile, and a
+ * 48 tall one is a tile and a half (`originY = (tile.y + 1) * scale - 1.5 * scale`).
+ *
  * The overhang goes UP rather than down for one reason: a character's feet are
  * where they stand, and standing is what a tile means. A token that hung
  * downward would be standing a half-tile in front of the square the engine
  * thinks it occupies, and every reach, range and line-of-sight read on screen
  * would be off by half a tile from the one the rules ran.
  */
-export function tokenOrigin(tile: TileCoord, height: number, scale: number): PixelPoint {
-  return { x: tile.x * scale, y: (tile.y + 1) * scale - height * spritePixelSize(scale) };
+export function tokenOrigin(tile: TileCoord, height: number, scale: number, spriteSize: number = SPRITE_SIZE): PixelPoint {
+  return { x: tile.x * scale, y: (tile.y + 1) * scale - height * spritePixelSize(scale, spriteSize) };
 }
 
 /**
@@ -138,10 +176,13 @@ export function tokenOrigin(tile: TileCoord, height: number, scale: number): Pix
  * rows are SKIPPED here rather than left for the canvas to swallow, so the clip
  * is a property of the arithmetic and can be checked under node with no 2D
  * context. There is no horizontal case: a sprite is never wider than its tile.
+ * Rows are SOURCE rows, so the count scales with `spriteSize`: a 48 tall token
+ * on row 0 at 32 source pixels per tile skips 16 of them where a 24 tall one at
+ * 16 skips 8.
  */
-export function firstVisibleSpriteRow(originY: number, scale: number): number {
+export function firstVisibleSpriteRow(originY: number, scale: number, spriteSize: number = SPRITE_SIZE): number {
   if (originY >= 0) return 0;
-  return Math.ceil(-originY / spritePixelSize(scale));
+  return Math.ceil(-originY / spritePixelSize(scale, spriteSize));
 }
 
 /**
@@ -185,7 +226,17 @@ function drawSprite(
   origin: PixelPoint,
   scale: number,
   remap: PaletteRemap | null = null,
+  spriteSize: number = SPRITE_SIZE,
 ): void {
+  // The default resolution keeps the loop below exactly as it has always been:
+  // one rect per source pixel at unsnapped coordinates, which is what keeps
+  // every 16 px draw byte-identical. A finer library goes through the run
+  // painter, because 32 px art is four times the pixels and a full board of it
+  // would otherwise be a few hundred thousand fillRects per repaint.
+  if (spriteSize !== SPRITE_SIZE) {
+    drawSpriteRuns(ctx, palette, pixels, origin, scale, remap, spriteSize);
+    return;
+  }
   for (let sy = firstVisibleSpriteRow(origin.y, scale); sy < pixels.length; sy++) {
     const row = pixels[sy];
     if (!row) continue;
@@ -206,11 +257,85 @@ function drawSprite(
 }
 
 /**
+ * The same paint as `drawSprite` for a library finer than 16, with two
+ * differences that only exist there.
+ *
+ * SNAPPED. Every edge is rounded to a whole canvas pixel (see
+ * `sourceCellRect`), because 32 px art at a 16 px tile scale is half a canvas
+ * pixel per source pixel, and a half pixel `fillRect` composites as a partly
+ * transparent seam: a tile would come out see-through. Snapped, a tile covers
+ * exactly its own box. A source pixel that rounds to zero width is skipped (at
+ * half a pixel that is every other one, which is nearest-neighbour, and honest:
+ * the art has more detail than the canvas has pixels), and it does not end a
+ * run, because it occupies nothing.
+ *
+ * RUN-MERGED. Consecutive source pixels of one row that resolve to the same
+ * colour and touch edge to edge paint as one rect. The canvas comes out the
+ * same pixel for pixel, for a fraction of the calls: the art is a small palette
+ * of flat regions, and `renderCell` repaints a whole 20x15 board whenever the
+ * world changes. A transparent, unmapped or off-palette pixel ends the run,
+ * exactly as `drawSprite` skips it.
+ */
+function drawSpriteRuns(
+  ctx: CanvasRenderingContext2D,
+  palette: string[],
+  pixels: SpriteGrid,
+  origin: PixelPoint,
+  scale: number,
+  remap: PaletteRemap | null,
+  spriteSize: number,
+): void {
+  const px = spritePixelSize(scale, spriteSize);
+  for (let sy = firstVisibleSpriteRow(origin.y, scale, spriteSize); sy < pixels.length; sy++) {
+    const row = pixels[sy];
+    if (!row) continue;
+    const top = Math.round(origin.y + sy * px);
+    const bottom = Math.round(origin.y + (sy + 1) * px);
+    if (bottom <= top) continue;
+
+    let runColor: string | undefined;
+    let runLeft = 0;
+    let runRight = 0;
+    for (let sx = 0; sx < row.length; sx++) {
+      const left = Math.round(origin.x + sx * px);
+      const right = Math.round(origin.x + (sx + 1) * px);
+      if (right <= left) continue;
+
+      const index = row[sx];
+      const drawn = index === undefined ? TRANSPARENT : remappedIndex(index, remap);
+      const color = drawn < 0 ? undefined : palette[drawn];
+      if (color !== undefined && color === runColor && left === runRight) {
+        runRight = right;
+        continue;
+      }
+      if (runColor !== undefined) {
+        ctx.fillStyle = runColor;
+        ctx.fillRect(runLeft, top, runRight - runLeft, bottom - top);
+      }
+      runColor = color;
+      runLeft = left;
+      runRight = right;
+    }
+    if (runColor !== undefined) {
+      ctx.fillStyle = runColor;
+      ctx.fillRect(runLeft, top, runRight - runLeft, bottom - top);
+    }
+  }
+}
+
+/**
  * Draw one assembled cell. Tiles first (the dense 20x15 grid, one draw per
  * populated cell), then props, then tokens -- see the file header for why
  * that order isn't optional. A tile/prop/token whose assetId isn't in the
  * manifest is skipped rather than thrown on: a manifest gap should read as a
  * blank tile during play, not a crashed renderer.
+ *
+ * The whole manifest is drawn at one source resolution, `manifest.spriteSize`
+ * (16 when absent; see the file header). `scale` is canvas pixels per TILE
+ * regardless, and a caller that wants every source pixel to be a whole number
+ * of canvas pixels picks a scale that is a multiple of the resolution (32, 64
+ * for a 32 px library). Any other scale still draws, snapped to whole canvas
+ * pixels, at the cost of dropping source pixels (`drawSpriteRuns`).
  *
  * The tile grid goes through terrainEdges.ts's `applyDisplayTiles` first,
  * which runs two display passes: tileVariants.ts scatters each base material
@@ -257,6 +382,10 @@ export function renderCell(
   plans?: TokenRenderPlans,
   frame: GlowFrame = 0,
 ): void {
+  // One resolution for the whole manifest: tiles, props, bodies and every gear
+  // layer are drawn from one library and share it, which is what lets a gear
+  // overlay line up with its body pixel for pixel.
+  const size = spriteSizeOf(manifest);
   const hasTile = (assetId: TileId) => manifest.tiles[assetId] !== undefined;
   const tiles = applyDisplayTiles(layout.tiles, hasTile, seed);
 
@@ -266,7 +395,7 @@ export function renderCell(
     for (let x = 0; x < CELL_WIDTH; x++) {
       const assetId = row[x];
       const sprite = assetId ? manifest.tiles[assetId] : undefined;
-      if (sprite) drawSprite(ctx, manifest.palette, sprite.pixels, tileOrigin({ x, y }, scale), scale);
+      if (sprite) drawSprite(ctx, manifest.palette, sprite.pixels, tileOrigin({ x, y }, scale), scale, null, size);
     }
   }
 
@@ -278,15 +407,15 @@ export function renderCell(
     // prop is today, and correct rather than upside down if one is ever drawn
     // taller. `propVariantAt` returns the id the DM placed when it has nothing
     // to substitute, so a prop with no set is unchanged.
-    const origin = tokenOrigin(prop, spriteDimensions(sprite.pixels).height, scale);
-    drawSprite(ctx, manifest.palette, sprite.pixels, origin, scale);
+    const origin = tokenOrigin(prop, spriteDimensions(sprite.pixels).height, scale, size);
+    drawSprite(ctx, manifest.palette, sprite.pixels, origin, scale, null, size);
   }
 
   const lookup = (spriteId: TileId): SpriteGrid | undefined => manifest.tokens[spriteId]?.pixels;
   for (const token of tokenDrawOrder(layout.tokens)) {
     const body = manifest.tokens[token.assetId];
     if (!body) continue;
-    const origin = tokenOrigin(token, spriteDimensions(body.pixels).height, scale);
+    const origin = tokenOrigin(token, spriteDimensions(body.pixels).height, scale, size);
 
     // A plan whose body disagrees with the token's own assetId is not this
     // token's plan: the layout is what the DM placed and what was validated, so
@@ -294,14 +423,16 @@ export function renderCell(
     // character.
     const plan = plans?.[token.id];
     if (!plan || plan.bodySpriteId !== token.assetId) {
-      drawSprite(ctx, manifest.palette, body.pixels, origin, scale);
+      drawSprite(ctx, manifest.palette, body.pixels, origin, scale, null, size);
       continue;
     }
 
-    const px = spritePixelSize(scale);
-    for (const draw of compositeToken(plan, lookup, frame)) {
+    // Draw offsets (the glow raster's margin, a shorter layer's feet alignment)
+    // are in SOURCE pixels, so they convert at the manifest's own resolution.
+    const px = spritePixelSize(scale, size);
+    for (const draw of compositeToken(plan, lookup, frame, size)) {
       const at = { x: origin.x + draw.offsetX * px, y: origin.y + draw.offsetY * px };
-      drawSprite(ctx, manifest.palette, draw.pixels, at, scale, draw.remap);
+      drawSprite(ctx, manifest.palette, draw.pixels, at, scale, draw.remap, size);
     }
   }
 }

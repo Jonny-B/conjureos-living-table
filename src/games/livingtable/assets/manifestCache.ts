@@ -24,6 +24,7 @@ import * as api from "../../../bridge/gamesApi";
 import type { LtAssetWire, LtTemplate } from "../../../bridge/gamesApi";
 import type { AssetManifest } from "../world/cell";
 import type { RenderManifest, SpriteAsset } from "../render/canvasRenderer";
+import { isUsableSpriteSize } from "../render/spritePixels";
 import type { AvailableAssetIds } from "../dm/promptBuilder";
 
 export interface LoadedManifest {
@@ -40,6 +41,14 @@ interface WireManifest {
   template: LtTemplate;
   palette: unknown;
   assets: LtAssetWire[];
+  /**
+   * Source pixels per tile edge, when the library is drawn at something other
+   * than 16 (a 32 means 32x32 tiles and 32x48 tokens). Absent on every
+   * manifest served before the field existed, which therefore still reads as
+   * 16. Typed `unknown` because nothing shares a type with games-db across the
+   * wire; `adaptManifest` keeps it only when it is a usable size.
+   */
+  spriteSize?: unknown;
 }
 
 const memoryCache = new Map<LtTemplate, LoadedManifest>();
@@ -54,6 +63,11 @@ const memoryCache = new Map<LtTemplate, LoadedManifest>();
 // an already-cached v2 manifest would ever pick up on its own, so a
 // returning player would keep the pre-loot art generation until the cache
 // happened to expire, which reads exactly like this feature never shipped.
+// NOT bumped for the source-resolution field: `adaptManifest` reads an
+// optional `spriteSize` off the wire, and a cached manifest without one is a
+// self-consistent 16 px library. Bump this (v3 -> v4) in the same release that
+// starts serving a 32 px library, or returning players keep the cached 16 px
+// art and it reads exactly like the new art never shipped.
 const STORAGE_PREFIX = "livingtable:manifest:v3:";
 
 /** "#rrggbb" from an [r,g,b] byte triple, each channel clamped so a stray out-of-range value can't produce invalid CSS. */
@@ -94,6 +108,12 @@ export function adaptPalette(wirePalette: unknown): string[] {
 export function adaptManifest(wire: WireManifest): LoadedManifest {
   const world: AssetManifest = { tiles: {}, tokens: {}, props: {} };
   const render: RenderManifest = { palette: adaptPalette(wire.palette), tiles: {}, tokens: {}, props: {} };
+  // The resolution rides on the wire manifest, not on any one asset (a sprite's
+  // own pixel grid is its size; how many source pixels make a TILE is a
+  // property of the whole library). Left OFF when absent or unusable rather than
+  // written as 16, so a manifest from before the field existed adapts to exactly
+  // the object it always did.
+  if (isUsableSpriteSize(wire.spriteSize)) render.spriteSize = wire.spriteSize;
   const availableAssetIds: AvailableAssetIds = { tiles: [], tokens: [], props: [] };
 
   for (const asset of wire.assets) {
