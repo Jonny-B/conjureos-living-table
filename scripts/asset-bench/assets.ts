@@ -81,24 +81,35 @@ import { decodeLibrary, kaykitLibrary, partFile } from "./kaykit";
 import {
   CAST_CLIPS,
   CAST_DIRS,
+  STEP_MS,
   actorAt,
   actorClip,
+  actorFrame,
+  cameraTarget,
+  castClipKey,
   castClipMs,
   castData,
   castDirToward,
   castFrameIndex,
   castFrames,
+  castFramesIfReady,
+  castPrefetch,
+  easeToward,
   findCastClip,
   newActor,
   playClips,
   spriteClips,
   spritePose,
+  startStep,
+  stepBusy,
   type Actor,
   type CastCharacter,
   type CastClip,
   type CastClipId,
+  type CastClipRequest,
   type CastDir,
   type CastGear,
+  type CastSizeMeta,
   type CastStyle,
   type SpritePose,
 } from "./cast";
@@ -310,12 +321,34 @@ function artSpriteSize(template: TemplateGenre): number {
   return spriteSizeOf(artManifest(template));
 }
 
+// What each Art row choice means, in plain words: shown under the row for the
+// current choices only (and in full on hover over a choice's label).
+const ART_EXPLAIN: Record<ArtChoice["source"], string> = {
+  current: "Art: Current = the game's hand-drawn art today.",
+  kaykit: "Art: KayKit = Kay Lousberg's free 3D models rendered into pixels in Blender.",
+};
+const GROUND_EXPLAIN: Record<GroundStyle, string> = {
+  painted: "Ground: Painted = Kay's dungeon pieces for the layout, surface painted in code (mortar, speckle, a lit rim).",
+  lit: "Ground: Lit = every floor built as a bumpy 3D surface and lit from the upper left (real bevels and shadows).",
+};
+const CHAR_EXPLAIN: Record<CharStyle, string> = {
+  bands: "Characters: Cel bands = material per pixel, three flat light bands and a dark outline (classic JRPG).",
+  pixelart: "Characters: Pixel artist = hand pixel-art rules: clean silhouette, coloured outlines, edge highlights, stray pixels cleaned.",
+  toon: "Characters: Toon = a cartoon shader in Blender: three bands, an outline and a shine spot on metal.",
+  plain: "Characters: Plain = a straight shrink of the 3D render snapped to the game's colours (the baseline).",
+};
+const DETAIL_EXPLAIN: Record<16 | 32, string> = {
+  16: "Detail: 16 px is the game's tile size today.",
+  32: "Detail: 32 px has twice the detail of the game's 16 px tile.",
+};
+
 /**
  * The shared Art row: Current or KayKit, and for KayKit the ground style,
  * the character style and the detail. One state for every panel, so a choice
  * made on one tab holds on the next. The first switch to KayKit decodes the
  * library (once) before redrawing. A tab with no characters on it passes
- * { chars: false } and the Characters choice is left off.
+ * { chars: false } and the Characters choice is left off. Under the row, one
+ * muted line per current choice says what it means (ART_EXPLAIN and friends).
  */
 function buildArtControls(onChange: () => void, opts: { chars?: boolean } = {}): HTMLElement {
   const row = document.createElement("div");
@@ -323,10 +356,13 @@ function buildArtControls(onChange: () => void, opts: { chars?: boolean } = {}):
   const lib = kaykitLibrary();
   const status = document.createElement("span");
   status.className = "lt-note lt-art-status";
-  const pick = (label: string, options: [string, string][], value: string, set: (v: string) => void): HTMLLabelElement => {
+  const explain = document.createElement("div");
+  explain.className = "lt-art-explain";
+  const pick = (label: string, options: [string, string][], value: string, set: (v: string) => void, hint?: string): HTMLLabelElement => {
     const field = document.createElement("label");
     field.className = "bn-field";
     field.textContent = `${label} `;
+    if (hint) field.title = hint;
     const select = document.createElement("select");
     select.className = "bn-select";
     for (const [v, text] of options) {
@@ -349,17 +385,41 @@ function buildArtControls(onChange: () => void, opts: { chars?: boolean } = {}):
     lib ? [["current", "Current (hand-drawn)"], ["kaykit", "KayKit (converted)"]] : [["current", "Current (hand-drawn)"]],
     art.source,
     (v) => (art.source = v as ArtChoice["source"]),
+    Object.values(ART_EXPLAIN).join("\n"),
   );
-  extras.push(pick("Ground", [["painted", "Painted"], ["lit", "Lit"]], art.ground, (v) => (art.ground = v as GroundStyle)));
+  extras.push(pick("Ground", [["painted", "Painted"], ["lit", "Lit"]], art.ground, (v) => (art.ground = v as GroundStyle), Object.values(GROUND_EXPLAIN).join("\n")));
   if (opts.chars !== false) {
-    extras.push(pick("Characters", [["bands", "Cel bands"], ["pixelart", "Pixel artist"], ["toon", "Toon"], ["plain", "Plain"]], art.chars, (v) => (art.chars = v as CharStyle)));
+    extras.push(
+      pick(
+        "Characters",
+        [["bands", "Cel bands"], ["pixelart", "Pixel artist"], ["toon", "Toon"], ["plain", "Plain"]],
+        art.chars,
+        (v) => (art.chars = v as CharStyle),
+        Object.values(CHAR_EXPLAIN).join("\n"),
+      ),
+    );
   }
-  extras.push(pick("Detail", [["32", "32 px"], ["16", "16 px (the game's size)"]], String(art.size), (v) => (art.size = Number(v) as 16 | 32)));
-  row.append(sourceField, ...extras, status);
+  extras.push(pick("Detail", [["32", "32 px"], ["16", "16 px (the game's size)"]], String(art.size), (v) => (art.size = Number(v) as 16 | 32), Object.values(DETAIL_EXPLAIN).join("\n")));
+  row.append(sourceField, ...extras, status, explain);
   const sync = () => {
     for (const e of extras) e.hidden = art.source !== "kaykit";
     status.textContent =
       art.source === "kaykit" ? "KayKit packs by Kay Lousberg (CC0), rendered in Blender. Fantasy only; sci-fi is paused." : lib ? "" : "No converted library in this build.";
+    // One short line per choice in force, so the row never grows a wall of text.
+    const lines = [ART_EXPLAIN[art.source]];
+    if (art.source === "kaykit") {
+      lines.push(GROUND_EXPLAIN[art.ground]);
+      if (opts.chars !== false) lines.push(CHAR_EXPLAIN[art.chars]);
+      lines.push(DETAIL_EXPLAIN[art.size]);
+    }
+    explain.replaceChildren(
+      ...lines.map((text) => {
+        const line = document.createElement("div");
+        line.className = "lt-note";
+        line.textContent = text;
+        return line;
+      }),
+    );
   };
   async function apply(): Promise<void> {
     sync();
@@ -1270,18 +1330,505 @@ function tokenCanvas(manifest: RenderManifest, assetId: string, tint: string | n
  * its middle, so the body stays on its own tile.
  */
 function drawSpriteFigure(ctx: CanvasRenderingContext2D, manifest: RenderManifest, assetId: string, pose: SpritePose, feetX: number, feetY: number, px16: number): boolean {
+  const g = spriteGeometry(manifest, assetId, pose, feetX, feetY, px16);
+  if (!g) return false;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(g.tx, g.ty);
+  if (pose.lie > 0) ctx.rotate((pose.fall * pose.lie * Math.PI) / 2);
+  ctx.drawImage(g.sprite, -g.w / 2, -g.h / 2, g.w, g.h);
+  ctx.restore();
+  return true;
+}
+
+/** Where drawSpriteFigure puts a hand-drawn figure (its centre, and its size on the canvas), and a box that holds it at any angle, so a panel can repaint just that patch. */
+function spriteGeometry(
+  manifest: RenderManifest,
+  assetId: string,
+  pose: SpritePose,
+  feetX: number,
+  feetY: number,
+  px16: number,
+): { sprite: HTMLCanvasElement; w: number; h: number; tx: number; ty: number; box: Box } | null {
   const sprite = tokenCanvas(manifest, assetId, pose.tint);
-  if (!sprite) return false;
+  if (!sprite) return null;
   const k = (px16 * 16) / spriteSizeOf(manifest);
   const w = sprite.width * k;
   const h = sprite.height * k;
-  ctx.save();
-  ctx.imageSmoothingEnabled = false;
-  ctx.translate(Math.round(feetX + pose.dx * px16), Math.round(feetY + pose.dy * px16 - h / 2 + (pose.lie * (h - w)) / 2));
-  if (pose.lie > 0) ctx.rotate((pose.fall * pose.lie * Math.PI) / 2);
-  ctx.drawImage(sprite, -w / 2, -h / 2, w, h);
-  ctx.restore();
+  const tx = Math.round(feetX + pose.dx * px16);
+  const ty = Math.round(feetY + pose.dy * px16 - h / 2 + (pose.lie * (h - w)) / 2);
+  const reach = pose.lie > 0 ? Math.hypot(w, h) / 2 : null;
+  const box = reach === null ? { x: tx - w / 2, y: ty - h / 2, w, h } : { x: tx - reach, y: ty - reach, w: reach * 2, h: reach * 2 };
+  return { sprite, w, h, tx, ty, box };
+}
+
+// ===========================================================================
+// The Play tab's drawing engine. Everything that puts the scene on the canvas
+// lives here, apart from the panel's controls, so a different front end (a
+// point-and-move board, say) can sit on it. In short:
+//
+//   ROOM    drawn once (the game's own renderCell, no tokens) into an
+//           offscreen canvas and rebuilt only when tiles, props, art, detail
+//           or zoom change. A frame is that bitmap with the figures over it;
+//           only the patches a figure left and entered are redone.
+//   FIGURE  never empty. Every clip it can play, in all four facings, is
+//           decoded ahead for the hero (body and whatever it wears) and the
+//           monster whenever the look changes (mount, gear, art, style,
+//           detail, hero). Until a clip is ready the figure keeps its last
+//           complete frame (or the old gear's animation, or a ready idle).
+//   CAMERA  follows the hero's DRAWN position, glides, never reads the
+//           logical tile, and does not scroll at all while the room fits.
+//   PAINT   once per animation frame, from one rAF loop, and only when the
+//           canvas would differ. Callers invalidate(); they never paint.
+// ===========================================================================
+
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One figure's look: a style at a size, its body, and every piece it wears. */
+interface FigureSet {
+  style: CastStyle;
+  entry: CastCharacter;
+  size: string;
+  meta: CastSizeMeta;
+  layers: WornLayer[];
+  /** Worn pieces in the cast's draw order for each facing, bottom first (the body is under them all). */
+  byDir: Record<CastDir, WornLayer[]>;
+  bodyOwner: string;
+  /** Cache keys of a clip's pieces, body first, memoised per clip and facing; empty when the body lacks the clip. */
+  keys: Map<string, string[]>;
+}
+
+function buildFigureSet(style: CastStyle, entry: CastCharacter, size: string, layers: WornLayer[]): FigureSet | null {
+  const meta = entry.sizes[size];
+  if (!meta) return null;
+  const byDir = {} as Record<CastDir, WornLayer[]>;
+  for (const dir of CAST_DIRS) {
+    const order = (entry.archetype ? style.layerOrderByArchetype?.[entry.archetype]?.[dir] : undefined) ?? style.layerOrder[dir] ?? [];
+    const rank = (role: string) => {
+      const i = order.indexOf(role);
+      return i < 0 ? order.length : i;
+    };
+    byDir[dir] = [...layers].sort((a, b) => rank(a.gear.role) - rank(b.gear.role));
+  }
+  return { style, entry, size, meta, layers, byDir, bodyOwner: `${style.style}|${entry.id}`, keys: new Map() };
+}
+
+function pieceKeys(set: FigureSet, clip: CastClipId, dir: CastDir): string[] {
+  const id = `${clip}|${dir}`;
+  let keys = set.keys.get(id);
+  if (!keys) {
+    keys = [];
+    const body = findCastClip(set.entry, set.size, clip, dir);
+    if (body) {
+      keys.push(castClipKey(set.bodyOwner, body, null));
+      for (const l of set.byDir[dir]) {
+        const lc = findCastClip(l.gear, set.size, clip, dir);
+        if (lc) keys.push(castClipKey(`${set.style.style}|${l.gear.id}`, lc, l.remap));
+      }
+    }
+    set.keys.set(id, keys);
+  }
+  return keys;
+}
+
+/** One frame of a figure, body then each worn piece, as the canvases to stack; null unless every piece is decoded now. Never starts a decode. */
+function setFrames(set: FigureSet, clip: CastClipId, dir: CastDir, frame: number): HTMLCanvasElement[] | null {
+  const keys = pieceKeys(set, clip, dir);
+  if (keys.length === 0) return null;
+  const out: HTMLCanvasElement[] = [];
+  for (const key of keys) {
+    const frames = castFramesIfReady(key);
+    if (!frames) return null;
+    if (frames.length > 0) out.push(frames[Math.min(frame, frames.length - 1)]!);
+  }
+  return out;
+}
+
+/** The decode requests for these clips and facings, facings outermost so one facing's pieces arrive together. */
+function clipRequests(set: FigureSet, clips: readonly CastClipId[], dirs: readonly CastDir[]): CastClipRequest[] {
+  const out: CastClipRequest[] = [];
+  for (const dir of dirs) {
+    for (const clip of clips) {
+      const body = findCastClip(set.entry, set.size, clip, dir);
+      if (!body) continue;
+      out.push({ ownerKey: set.bodyOwner, clip: body, meta: set.meta, remap: null });
+      for (const l of set.byDir[dir]) {
+        const lc = findCastClip(l.gear, set.size, clip, dir);
+        if (lc) out.push({ ownerKey: `${set.style.style}|${l.gear.id}`, clip: lc, meta: set.meta, remap: l.remap });
+      }
+    }
+  }
+  return out;
+}
+
+/** What a figure last showed in full: the set it was drawn from and the exact canvases stacked. */
+interface Shown {
+  set: FigureSet;
+  canvases: HTMLCanvasElement[];
+}
+
+/**
+ * The frame to draw for a figure that wants `clip` at `frame` from `want`.
+ * Never nothing once it has shown anything: the wanted look if its clip is
+ * decoded; else the look it showed before (a gear or style change still
+ * decoding keeps animating the old one); else the frozen last frame; and a
+ * figure that has shown nothing yet takes any ready idle of the wanted look.
+ */
+function resolveCast(mem: { shown: Shown | null }, want: FigureSet | null, clip: CastClip, frame: number): Shown | null {
+  if (want) {
+    const canvases = setFrames(want, clip.clip, clip.dir, frame);
+    if (canvases) return (mem.shown = { set: want, canvases });
+  }
+  const prev = mem.shown?.set;
+  if (prev && prev !== want) {
+    const canvases = setFrames(prev, clip.clip, clip.dir, frame);
+    if (canvases) return (mem.shown = { set: prev, canvases });
+  }
+  if (mem.shown) return mem.shown;
+  if (want) {
+    for (const dir of [clip.dir, ...CAST_DIRS]) {
+      const canvases = setFrames(want, "idle", dir, 0);
+      if (canvases) return (mem.shown = { set: want, canvases });
+    }
+  }
+  return null;
+}
+
+/** What one paint puts on the canvas for one figure. */
+type StageItem =
+  | { kind: "cast"; canvases: HTMLCanvasElement[]; x: number; y: number; w: number; h: number }
+  | { kind: "sprite"; manifest: RenderManifest; assetId: string; pose: SpritePose; feetX: number; feetY: number; px16: number; box: Box };
+
+function sameItems(a: readonly StageItem[], b: readonly StageItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.kind === "cast" && y.kind === "cast") {
+      if (x.x !== y.x || x.y !== y.y || x.w !== y.w || x.h !== y.h || x.canvases.length !== y.canvases.length) return false;
+      for (let j = 0; j < x.canvases.length; j++) if (x.canvases[j] !== y.canvases[j]) return false;
+    } else if (x.kind === "sprite" && y.kind === "sprite") {
+      if (x.manifest !== y.manifest || x.assetId !== y.assetId || x.feetX !== y.feetX || x.feetY !== y.feetY || x.px16 !== y.px16) return false;
+      if (x.pose.dx !== y.pose.dx || x.pose.dy !== y.pose.dy || x.pose.lie !== y.pose.lie || x.pose.fall !== y.pose.fall || x.pose.tint !== y.pose.tint) return false;
+    } else {
+      return false;
+    }
+  }
   return true;
+}
+
+function boxOf(item: StageItem): Box {
+  return item.kind === "cast" ? { x: item.x, y: item.y, w: item.w, h: item.h } : item.box;
+}
+
+let nextManifestId = 1;
+const manifestIds = new WeakMap<RenderManifest, number>();
+function manifestId(m: RenderManifest): number {
+  let id = manifestIds.get(m);
+  if (id === undefined) manifestIds.set(m, (id = nextManifestId++));
+  return id;
+}
+
+/** What the worn gear looks like, as a string: changes exactly when a figure would be dressed differently. */
+function equipmentSig(hero: CharacterSheet): string {
+  return GEAR_ROLES.map((r) => hero.equipment?.[r]?.tier ?? "-").join(",");
+}
+
+/** The cast style the scene animates with, or null for the static tokens (the current art, or no cast for this hero). */
+function animatedStyle(p: PlayState): CastStyle | null {
+  if (art.source !== "kaykit") return null;
+  const style = castStyleNow();
+  if (!style) return null;
+  return castEntry(style, bodySpriteId(p.archetypeId)) ? style : null;
+}
+
+/** The monster's clip timings: its cast entry, or the hand-drawn figures' shared ones. */
+function monsterTimingFor(p: PlayState, style: CastStyle | null): { clips: CastClip[] } {
+  return (style ? castEntry(style, SCENE_KIT[p.template].monster) : null) ?? SPRITE_ENTRY;
+}
+
+/** The camera glides to the hero with this time constant: about a third of a second to settle, no overshoot. */
+const CAMERA_TAU_MS = 110;
+
+interface PlayStageHost {
+  viewport: HTMLElement;
+  canvas: HTMLCanvasElement;
+  state: () => PlayState;
+  /** Canvas pixels per SOURCE pixel: the Zoom control. */
+  zoom: () => number;
+  /** Runs first in every frame, before anything is drawn: the panel's input and turn clock. */
+  beforeFrame?: (now: number, dtMs: number) => void;
+}
+
+interface PlayStage {
+  /** Something the picture shows has changed: it is drawn on the next frame, never now. */
+  invalidate(): void;
+  /** Put the camera on the hero this frame instead of gliding there (a new scene). A new zoom does this on its own. */
+  snapCamera(): void;
+  dispose(): void;
+}
+
+function createPlayStage(host: PlayStageHost): PlayStage {
+  const { viewport, canvas } = host;
+  const ctx = canvas.getContext("2d")!;
+  let room: HTMLCanvasElement | null = null;
+  let roomKey = "";
+  /** Every pixel of the canvas needs redoing (new size, new room), not just the patches the figures moved over. */
+  let full = true;
+  let dirty = true;
+  let items: StageItem[] = [];
+  let boxes: Box[] = [];
+  const memory = { hero: { shown: null as Shown | null }, monster: { shown: null as Shown | null } };
+  let lookKey = "";
+  let heroSet: FigureSet | null = null;
+  let monsterSet: FigureSet | null = null;
+  // The camera: where it is (floats), what was last written to the viewport (integers), whether it is still gliding.
+  const cam = { x: 0, y: 0 };
+  const wrote = { x: 0, y: 0 };
+  const lastTarget = { x: null as number | null, y: null as number | null };
+  let snap = true;
+  let settling = false;
+  let lastT = performance.now();
+  let raf = 0;
+  let alive = true;
+
+  const invalidate = (): void => {
+    dirty = true;
+  };
+
+  /** Re-decode what the figures need whenever the look changes: hero, gear, art, style or detail. Self-detecting, so no caller has to remember to. */
+  function syncLook(p: PlayState, style: CastStyle | null, size: number): void {
+    if (!style) {
+      lookKey = "";
+      heroSet = monsterSet = null;
+      return;
+    }
+    // Until the KayKit library is decoded the scene draws at the current art's size; the real size comes next, so only the first clips are worth decoding now.
+    const loading = art.source === "kaykit" && !artDecoded;
+    const key = [loading ? "loading" : "ready", style.style, size, p.archetypeId, p.template, equipmentSig(p.hero)].join("|");
+    if (key === lookKey) return;
+    lookKey = key;
+    const sz = String(size);
+    const heroEntry = castEntry(style, bodySpriteId(p.archetypeId));
+    const monEntry = castEntry(style, SCENE_KIT[p.template].monster);
+    heroSet = heroEntry ? buildFigureSet(style, heroEntry, sz, wornLayers(style, p.hero)) : null;
+    monsterSet = monEntry ? buildFigureSet(style, monEntry, sz, []) : null;
+    const cast = castData();
+    if (!cast) return;
+    const first: CastClipId[] = ["idle", "walk"];
+    const rest = CAST_CLIPS.filter((c) => c !== "idle" && c !== "walk");
+    const facingFirst = (d: CastDir): CastDir[] => [d, ...CAST_DIRS.filter((x) => x !== d)];
+    const heroDirs = facingFirst(p.heroActor.dir);
+    const monDirs = facingFirst(p.monsterActor.dir);
+    const requests: CastClipRequest[] = [];
+    // What moves first, for the facing it is in; then everything else it can do.
+    if (heroSet) requests.push(...clipRequests(heroSet, first, heroDirs));
+    if (monsterSet) requests.push(...clipRequests(monsterSet, first, monDirs));
+    if (!loading) {
+      if (heroSet) requests.push(...clipRequests(heroSet, rest, heroDirs));
+      if (monsterSet) requests.push(...clipRequests(monsterSet, rest, monDirs));
+    }
+    castPrefetch(cast.palette, requests, invalidate);
+  }
+
+  function buildRoom(p: PlayState, manifest: RenderManifest, tileScale: number, isAnimated: boolean, w: number, h: number): void {
+    const layer = room ?? (room = document.createElement("canvas"));
+    layer.width = w;
+    layer.height = h;
+    const rctx = layer.getContext("2d")!;
+    rctx.imageSmoothingEnabled = false;
+    const plan = renderPlanFor(p.hero);
+    renderCell(rctx, sceneLayout(p, isAnimated), manifest, tileScale, 0, !isAnimated && plan ? { [HERO_ID]: plan } : undefined, 0);
+  }
+
+  /** Everything the room bitmap depends on. With the animated figures drawn over it that is the tiles, the props and the art; with static tokens it also holds them. */
+  function roomKeyFor(p: PlayState, manifest: RenderManifest, tileScale: number, isAnimated: boolean): string {
+    const scene = `${tileScale}|${p.template}|${p.floorId}|${p.doorOpen ? 1 : 0}|${p.searched ? 1 : 0}`;
+    // Animated, the room is only tiles and props, which do not depend on the character style: switching it must not repaint the room.
+    if (isAnimated) return `a|${art.ground}|${spriteSizeOf(manifest)}|${artDecoded ? 1 : 0}|${scene}`;
+    return `${manifestId(manifest)}|${scene}|${p.archetypeId}|${p.heroAt.x},${p.heroAt.y}|${p.monster ? `${p.monster.at.x},${p.monster.at.y},${p.monster.hp}` : "-"}|${equipmentSig(p.hero)}`;
+  }
+
+  /**
+   * The hero and the monster (or where it fell), back to front, each standing
+   * in the game's one-tile footprint with its feet on the tile's bottom edge.
+   * A monster with no cast entry (kept hand-drawn) is its own drawing, posed
+   * by the same clips. Returns the hero's DRAWN position, which the camera follows.
+   */
+  function placeFigures(p: PlayState, now: number, style: CastStyle, manifest: RenderManifest, tileScale: number): { items: StageItem[]; hero: XY } {
+    const size = String(spriteSizeOf(manifest));
+    const monsterId = SCENE_KIT[p.template].monster;
+    const monCast = castEntry(style, monsterId) !== null;
+    interface Fig {
+      id: "hero" | "monster";
+      set: FigureSet | null;
+      sprite: boolean;
+      timing: { clips: CastClip[] };
+      actor: Actor;
+      at: XY;
+      down: boolean;
+    }
+    const monster = (at: XY, down: boolean): Fig => ({ id: "monster", set: monsterSet, sprite: !monCast, timing: monsterTimingFor(p, style), actor: p.monsterActor, at, down });
+    const figs: Fig[] = [];
+    if (p.monster) figs.push(monster(p.monster.at, false));
+    const heroFig: Fig | null = heroSet ? { id: "hero", set: heroSet, sprite: false, timing: heroSet.entry, actor: p.heroActor, at: p.heroAt, down: heroDown(p) } : null;
+    if (heroFig) figs.push(heroFig);
+    // Positions first, for all of them: actorAt lands a finished step, which actorClip then relies on.
+    const placed = figs.map((f) => ({ f, pos: actorAt(f.actor, f.at, now) })).sort((a, b) => a.pos.y - b.pos.y);
+    // The fallen monster lies under everything.
+    if (!p.monster && p.fallenAt) placed.unshift({ f: monster(p.fallenAt, true), pos: p.fallenAt });
+    const out: StageItem[] = [];
+    let hero: XY = p.heroAt;
+    for (const { f, pos } of placed) {
+      if (f.id === "hero") hero = pos;
+      const c = actorClip(f.actor, f.timing, size, f.down, now);
+      if (!c) continue;
+      const frame = REDUCED_MOTION ? 0 : actorFrame(f.actor, c, now);
+      if (f.sprite) {
+        const pose = spritePose(c.clip, frame, c.dir);
+        const feetX = (pos.x + 0.5) * tileScale;
+        const feetY = (pos.y + 1) * tileScale;
+        const px16 = tileScale / 16;
+        const g = spriteGeometry(manifest, monsterId, pose, feetX, feetY, px16);
+        if (g) out.push({ kind: "sprite", manifest, assetId: monsterId, pose, feetX, feetY, px16, box: g.box });
+        continue;
+      }
+      const shown = resolveCast(memory[f.id], f.set, c, frame);
+      if (!shown) continue;
+      // The frames are in their own resolution; a stale set from another detail still lands at the right size.
+      const spx = tileScale / Number(shown.set.size);
+      const m = shown.set.meta;
+      out.push({
+        kind: "cast",
+        canvases: shown.canvases,
+        x: Math.round((pos.x + 0.5) * tileScale - m.anchorX * spx),
+        y: Math.round((pos.y + 1) * tileScale - m.anchorY * spx),
+        w: Math.round(m.canvasW * spx),
+        h: Math.round(m.canvasH * spx),
+      });
+    }
+    return { items: out, hero };
+  }
+
+  function restore(b: Box): void {
+    const x0 = Math.max(0, Math.floor(b.x) - 1);
+    const y0 = Math.max(0, Math.floor(b.y) - 1);
+    const x1 = Math.min(canvas.width, Math.ceil(b.x + b.w) + 1);
+    const y1 = Math.min(canvas.height, Math.ceil(b.y + b.h) + 1);
+    if (x1 <= x0 || y1 <= y0) return;
+    ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.drawImage(room!, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  }
+
+  function drawItem(it: StageItem): void {
+    if (it.kind === "cast") {
+      for (const c of it.canvases) ctx.drawImage(c, it.x, it.y, it.w, it.h);
+    } else {
+      drawSpriteFigure(ctx, it.manifest, it.assetId, it.pose, it.feetX, it.feetY, it.px16);
+    }
+  }
+
+  /** Glide the viewport toward the hero's drawn position, one frame. Leaves the scroll alone on an axis where the room fits, and while the hero's place has not changed, so a player's own scrolling sticks. */
+  function follow(hero: XY, tileScale: number, w: number, h: number, dt: number): void {
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    const tx = cameraTarget((hero.x + 0.5) * tileScale, vw, w);
+    const ty = cameraTarget((hero.y + 0.5) * tileScale, vh, h);
+    const ax = viewport.scrollLeft;
+    const ay = viewport.scrollTop;
+    // Scrolled by someone else (the player, a layout change): that is where the camera is now.
+    if (Math.abs(ax - wrote.x) > 1) cam.x = ax;
+    if (Math.abs(ay - wrote.y) > 1) cam.y = ay;
+    // The target moves when the hero does (every frame of a step, or at once for a static token) or the viewport is resized.
+    const moved = tx !== lastTarget.x || ty !== lastTarget.y;
+    lastTarget.x = tx;
+    lastTarget.y = ty;
+    if (moved) settling = true;
+    const step = (c: number, target: number | null, actual: number): number => {
+      if (target === null) return actual; // the whole room fits on this axis: nothing to follow
+      if (snap) return target;
+      return settling ? easeToward(c, target, dt, CAMERA_TAU_MS) : c;
+    };
+    cam.x = step(cam.x, tx, ax);
+    cam.y = step(cam.y, ty, ay);
+    if (settling && !moved) {
+      const near = (c: number, t: number | null) => t === null || Math.abs(c - t) < 0.75;
+      if (near(cam.x, tx) && near(cam.y, ty)) settling = false;
+    }
+    snap = false;
+    const nx = tx === null ? ax : Math.round(cam.x);
+    const ny = ty === null ? ay : Math.round(cam.y);
+    if (nx !== ax) viewport.scrollLeft = nx;
+    if (ny !== ay) viewport.scrollTop = ny;
+    wrote.x = nx;
+    wrote.y = ny;
+  }
+
+  function frame(): void {
+    if (!alive) return;
+    raf = requestAnimationFrame(frame);
+    const now = performance.now();
+    const dt = Math.min(100, now - lastT);
+    lastT = now;
+    host.beforeFrame?.(now, dt);
+
+    const p = host.state();
+    const manifest = artManifest(p.template);
+    const size = spriteSizeOf(manifest);
+    const tileScale = host.zoom() * size;
+    const w = CELL_WIDTH * tileScale;
+    const h = CELL_HEIGHT * tileScale;
+    const style = animatedStyle(p);
+    syncLook(p, style, size);
+
+    // The visible canvas keeps its size (and its pixels) unless the room changed size.
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      full = true;
+      snap = true;
+    }
+    const key = roomKeyFor(p, manifest, tileScale, style !== null);
+    if (!room || key !== roomKey) {
+      buildRoom(p, manifest, tileScale, style !== null, w, h);
+      roomKey = key;
+      full = true;
+    }
+
+    const placed = style ? placeFigures(p, now, style, manifest, tileScale) : { items: [] as StageItem[], hero: p.heroAt };
+    if (full || dirty || !sameItems(items, placed.items)) {
+      ctx.imageSmoothingEnabled = false;
+      if (full) {
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(room!, 0, 0);
+      } else {
+        for (const b of boxes) restore(b);
+      }
+      for (const it of placed.items) drawItem(it);
+      items = placed.items;
+      boxes = placed.items.map(boxOf);
+      full = false;
+      dirty = false;
+    }
+    follow(placed.hero, tileScale, w, h, dt);
+  }
+  raf = requestAnimationFrame(frame);
+
+  return {
+    invalidate,
+    snapCamera: () => {
+      snap = true;
+    },
+    dispose: () => {
+      alive = false;
+      cancelAnimationFrame(raf);
+    },
+  };
 }
 
 function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
@@ -1325,7 +1872,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   const heroField = el_("label", "bn-field", "Hero ");
   const heroSelect = buildHeroSelect(st().archetypeId, (id) => {
     play = newPlay("fantasy", id, ROOM_FLOOR.fantasy);
-    renderAll();
+    newScene();
   });
   heroField.appendChild(heroSelect);
   controls.appendChild(heroField);
@@ -1333,7 +1880,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   const scaleField = el_("label", "bn-field", "Zoom ");
   const scaleSelect = buildScaleSelect([1, 2, 3, 4], scale, (n) => {
     scale = n;
-    drawScene();
+    stage.invalidate();
   });
   scaleField.appendChild(scaleSelect);
   controls.appendChild(scaleField);
@@ -1365,7 +1912,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     b.style.gridColumn = col!;
     b.style.gridRow = row!;
     b.innerHTML = `<svg viewBox="0 0 320 512" aria-hidden="true" style="transform:rotate(${CARET_TURN[dir]}deg)"><path d="${CARET_PATH}"/></svg>`;
-    b.onclick = () => act(() => heroMove(st(), dir), "move");
+    b.onclick = () => press(moveAction(dir));
     dpad.appendChild(b);
   }
   padArea.appendChild(dpad);
@@ -1379,12 +1926,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     b.onclick = run;
     actions.appendChild(b);
   };
-  actionButton("Attack", "F", true, () => act(() => heroAttack(st()), "attack"));
-  actionButton("Interact", "E", false, () => act(() => heroInteract(st()), "interact"));
+  actionButton("Attack", "F", true, () => press(attackAction));
+  actionButton("Interact", "E", false, () => press(interactAction));
   actionButton("Reset scene", "", false, () => {
     const p = st();
     play = newPlay(p.template, p.archetypeId, p.floorId, p.hero);
-    renderAll();
+    newScene();
   });
   padArea.appendChild(actions);
   padArea.appendChild(el_("p", "lt-note lt-keys", "Arrow keys or WASD move. E interacts, F attacks."));
@@ -1422,17 +1969,10 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
    * (the current art, or no cast for this hero). The monster need not be in
    * the cast: one kept hand-drawn is its own drawing, posed.
    */
-  function animated(): CastStyle | null {
-    if (art.source !== "kaykit") return null;
-    const style = castStyleNow();
-    if (!style) return null;
-    return castEntry(style, bodySpriteId(st().archetypeId)) ? style : null;
-  }
+  const animated = (): CastStyle | null => animatedStyle(st());
 
   /** The monster's clip timings: its cast entry, or the hand-drawn figures' shared ones. */
-  function monsterTiming(style: CastStyle | null): { clips: CastClip[] } {
-    return (style ? castEntry(style, SCENE_KIT[st().template].monster) : null) ?? SPRITE_ENTRY;
-  }
+  const monsterTiming = (style: CastStyle | null): { clips: CastClip[] } => monsterTimingFor(st(), style);
 
   interface Before {
     at: XY;
@@ -1443,7 +1983,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     bag: number;
   }
 
-  function act(run: () => void, kind?: "move" | "attack" | "interact"): void {
+  /**
+   * One turn: the rules run now, and the picture's clips follow from what
+   * changed. It never paints (the stage does, once, on the next animation
+   * frame). `at` is when the hero's action begins in the picture: now for a
+   * fresh press, or the instant the last step landed for one that waited on
+   * it. Returns whether the hero changed tile.
+   */
+  function act(run: () => void, kind?: "move" | "attack" | "interact", at: number = performance.now()): boolean {
     const p0 = st();
     const before: Before = {
       at: { ...p0.heroAt },
@@ -1456,24 +2003,26 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     run();
     const p = st();
     if (p.log.length > LOG_KEEP) p.log.splice(0, p.log.length - LOG_KEEP);
-    if (kind) animate(p, kind, before);
-    renderAll();
+    if (kind) animate(p, kind, before, at);
+    refreshPanels();
+    stage.invalidate();
+    return !same(before.at, p.heroAt);
   }
 
   /**
    * Pick the clips a press produced, from what changed. The hero: a step
    * walks, a landed press swings or uses, a hit flinches, a fall dies, a find
    * cheers. The monster: a wound flinches, a step walks, a swing attacks, a
-   * kill dies and stays down.
+   * kill dies and stays down. A step starts from where the figure is DRAWN, so
+   * one begun mid-step carries on from there rather than from its old tile.
    */
-  function animate(p: PlayState, kind: "move" | "attack" | "interact", before: Before): void {
-    const now = performance.now();
+  function animate(p: PlayState, kind: "move" | "attack" | "interact", before: Before, now: number): void {
     const h = p.heroActor;
     const m = p.monsterActor;
     const heroQ: CastClipId[] = [];
     if (kind === "move" && !same(before.at, p.heroAt)) {
       h.dir = castDirToward(p.heroAt.x - before.at.x, p.heroAt.y - before.at.y);
-      if (!REDUCED_MOTION) h.tween = { from: before.at, start: now };
+      if (!REDUCED_MOTION) startStep(h, actorAt(h, before.at, now), now);
       heroQ.push("walk");
     } else if (kind === "attack" && before.monsterAt && p.note === null) {
       h.dir = castDirToward(before.monsterAt.x - p.heroAt.x, before.monsterAt.y - p.heroAt.y);
@@ -1499,7 +2048,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       }
       if (before.monsterAt && !same(before.monsterAt, p.monster.at)) {
         m.dir = castDirToward(p.monster.at.x - before.monsterAt.x, p.monster.at.y - before.monsterAt.y);
-        if (!REDUCED_MOTION) m.tween = { from: before.monsterAt, start: now + delay };
+        if (!REDUCED_MOTION) startStep(m, actorAt(m, before.monsterAt, now), now + delay);
         monQ.push("walk");
       }
       if (p.monsterSwings > before.swings) {
@@ -1511,6 +2060,68 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (REDUCED_MOTION) return;
     playClips(h, heroQ, now);
     playClips(m, monQ, now);
+  }
+
+  // ---- input: one step at a time, one waiting ---------------------------------
+
+  /** One thing the player asked for. `run` does the turn and says whether the hero changed tile. */
+  interface Action {
+    run: (at: number) => boolean;
+  }
+  const moveAction = (dir: Dir): Action => ({ run: (at) => act(() => heroMove(st(), dir), "move", at) });
+  const attackAction: Action = { run: (at) => act(() => heroAttack(st()), "attack", at) };
+  const interactAction: Action = { run: (at) => act(() => heroInteract(st()), "interact", at) };
+
+  /** At most ONE action waits for the step in progress to land; a newer one replaces it. */
+  let waiting: Action | null = null;
+  /** Direction keys down right now, oldest first. A held key keeps the hero walking from step to step; its OS repeat only vouches that it is still down. */
+  const keysDown: Dir[] = [];
+  let downUntil = 0;
+  /** How long a key press is trusted to be still down: until the OS's first repeat is due, then between repeats. A lost keyup cannot strand the hero. */
+  const HOLD_FIRST_MS = 1100;
+  const HOLD_REPEAT_MS = 450;
+
+  /** The player asked for something: do it now, or (while a step is playing) have it wait for the step to land. */
+  function press(action: Action): void {
+    const now = performance.now();
+    const h = st().heroActor;
+    if (waiting && !stepBusy(h, now)) {
+      const stale = waiting;
+      waiting = null;
+      stale.run(now);
+    }
+    if (stepBusy(h, now)) waiting = action;
+    else action.run(now);
+  }
+
+  /** Every frame, before drawing: once the step has landed, start what was waiting for it, or the next step of a held key. */
+  function pump(now: number): void {
+    const h = st().heroActor;
+    if (stepBusy(h, now)) return;
+    // The next step begins the instant the last one landed (a frame ago at most), so back-to-back steps have no seam.
+    const landed = h.tween ? h.tween.start + STEP_MS : h.gait ? h.gait.lastEnd : now;
+    const at = Math.min(now, Math.max(landed, now - 34));
+    if (waiting) {
+      const next = waiting;
+      waiting = null;
+      next.run(at);
+      return;
+    }
+    const dir = keysDown.length > 0 && now < downUntil ? keysDown[keysDown.length - 1]! : null;
+    // A held key that goes nowhere (a wall, a closed door) stops asking.
+    if (dir && !act(() => heroMove(st(), dir), "move", at)) keysDown.length = 0;
+  }
+
+  function cancelInput(): void {
+    waiting = null;
+    keysDown.length = 0;
+  }
+
+  /** A new hero, a reset: the old scene's pending input and camera do not carry over. */
+  function newScene(): void {
+    cancelInput();
+    stage.snapCamera();
+    renderAll();
   }
 
   function gearResult(outcome: GearOutcome): void {
@@ -1536,100 +2147,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     gearResult(payload.from === "armoury" ? equipFromArmoury(p, payload.role, payload.tier) : equipFromPack(p, payload.index));
   }
 
-  // Stable, so castFrames registers it once per clip however often the loop asks.
-  const redrawScene = (): void => drawScene();
-
-  function drawScene(): void {
-    const p = st();
-    const manifest = artManifest(p.template);
-    const tileScale = scale * spriteSizeOf(manifest);
-    canvas.width = CELL_WIDTH * tileScale;
-    canvas.height = CELL_HEIGHT * tileScale;
-    const ctx = canvas.getContext("2d")!;
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const style = animated();
-    const plan = renderPlanFor(p.hero);
-    renderCell(ctx, sceneLayout(p, style !== null), manifest, tileScale, 0, !style && plan ? { [HERO_ID]: plan } : undefined, 0);
-    if (style) drawFigures(ctx, p, style, String(spriteSizeOf(manifest)), tileScale);
-    // Keep the hero in the middle of the viewport (it matters at phone width),
-    // but only when it has moved: the animated scene redraws every frame and
-    // must not keep yanking a viewport the player scrolled.
-    const centreKey = `${p.heroAt.x},${p.heroAt.y},${tileScale}`;
-    if (centreKey !== lastCentre) {
-      lastCentre = centreKey;
-      viewport.scrollLeft = Math.max(0, p.heroAt.x * tileScale + tileScale / 2 - viewport.clientWidth / 2);
-      viewport.scrollTop = Math.max(0, p.heroAt.y * tileScale + tileScale / 2 - viewport.clientHeight / 2);
-    }
-  }
-  let lastCentre = "";
-
-  /**
-   * The hero and the monster (or where it fell), back to front, each standing
-   * in the game's one-tile footprint with its feet on the tile's bottom edge.
-   * A monster with no cast entry (kept hand-drawn) is its own drawing, posed
-   * by the same clips.
-   */
-  function drawFigures(ctx: CanvasRenderingContext2D, p: PlayState, style: CastStyle, size: string, tileScale: number): void {
-    const now = performance.now();
-    const manifest = artManifest(p.template);
-    const monsterId = SCENE_KIT[p.template].monster;
-    const heroEntry = castEntry(style, bodySpriteId(p.archetypeId));
-    if (!heroEntry) return;
-    const monEntry = castEntry(style, monsterId);
-    interface Figure {
-      entry: CastCharacter | null;
-      timing: { clips: CastClip[] };
-      actor: Actor;
-      at: XY;
-      down: boolean;
-      layers: WornLayer[];
-    }
-    const monster = (at: XY, down: boolean): Figure => ({ entry: monEntry, timing: monsterTiming(style), actor: p.monsterActor, at, down, layers: [] });
-    const figures: Figure[] = [];
-    if (p.monster) figures.push(monster(p.monster.at, false));
-    figures.push({ entry: heroEntry, timing: heroEntry, actor: p.heroActor, at: p.heroAt, down: heroDown(p), layers: wornLayers(style, p.hero) });
-    const placed = figures.map((f) => ({ ...f, pos: actorAt(f.actor, f.at, now) })).sort((a, b) => a.pos.y - b.pos.y);
-    // The fallen monster lies under everything.
-    if (!p.monster && p.fallenAt) placed.unshift({ ...monster(p.fallenAt, true), pos: p.fallenAt });
-    const spx = tileScale / Number(size);
-    for (const f of placed) {
-      const c = actorClip(f.actor, f.timing, size, f.down, now);
-      if (!c) continue;
-      const frame = castFrameIndex(c, now - f.actor.clipStart);
-      if (!f.entry) {
-        drawSpriteFigure(ctx, manifest, monsterId, spritePose(c.clip, frame, c.dir), (f.pos.x + 0.5) * tileScale, (f.pos.y + 1) * tileScale, tileScale / 16);
-        continue;
-      }
-      const meta = f.entry.sizes[size];
-      if (!meta) continue;
-      const dest = {
-        x: Math.round((f.pos.x + 0.5) * tileScale - meta.anchorX * spx),
-        y: Math.round((f.pos.y + 1) * tileScale - meta.anchorY * spx),
-        w: Math.round(meta.canvasW * spx),
-        h: Math.round(meta.canvasH * spx),
-      };
-      drawCastFrame(ctx, style, f.entry, c, frame, f.layers, dest, redrawScene);
-    }
-  }
-
-  /** Changes whenever the animated picture would: either figure's clip, facing, frame or step. */
-  function pictureSignature(): string {
-    const style = animated();
-    if (!style) return "";
-    const p = st();
-    const size = String(artSpriteSize(p.template));
-    const now = performance.now();
-    const part = (timing: { clips: CastClip[] } | null, actor: Actor, down: boolean): string => {
-      const c = timing ? actorClip(actor, timing, size, down, now) : null;
-      const fi = c ? castFrameIndex(c, now - actor.clipStart) : -1;
-      const tw = actor.tween ? Math.floor((now - actor.tween.start) / 30) : -1;
-      return `${actor.clip}|${actor.dir}|${fi}|${tw}`;
-    };
-    return `${style.style}|${size}|${part(castEntry(style, bodySpriteId(p.archetypeId)), p.heroActor, heroDown(p))}|${part(monsterTiming(style), p.monsterActor, !p.monster)}`;
-  }
-
-  function renderPictureNote(): void {
+  function pictureNoteText(): string {
     const style = animated();
     if (style) {
       const p = st();
@@ -1643,12 +2161,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
             : `${sentenceCase(monsterLabel(p))} has no animated figure in this build: it is the still, moved by the bench.`,
         );
       }
-      pictureNote.textContent = `Animated: KayKit ${style.label}, gear included. ${extra.join(" ")}`.trim();
-    } else if (art.source === "kaykit") {
-      pictureNote.textContent = castData() ? "No animated figure for this hero in this build: the tokens are the static conversion." : "No animated cast in this build: the tokens are the static conversion.";
-    } else {
-      pictureNote.textContent = "The game's current hand-drawn tokens: one facing, no animation.";
+      return `Animated: KayKit ${style.label}, gear included. ${extra.join(" ")}`.trim();
     }
+    if (art.source === "kaykit") {
+      return castData() ? "No animated figure for this hero in this build: the tokens are the static conversion." : "No animated cast in this build: the tokens are the static conversion.";
+    }
+    return "The game's current hand-drawn tokens: one facing, no animation.";
   }
 
   function stat(label: string, value: string, bad = false): HTMLElement {
@@ -1681,10 +2199,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
   }
 
-  function renderLog(): void {
+  function renderSay(): void {
     const p = st();
     say.textContent = p.note ?? "";
     say.hidden = !p.note;
+  }
+
+  function renderLog(): void {
+    const p = st();
     logEl.innerHTML = "";
     if (p.log.length === 0) {
       logEl.appendChild(el_("p", "lt-log-empty", `Walk to ${SCENE_KIT[p.template].doorLabel} and press Interact. Every roll lands here.`));
@@ -1764,15 +2286,41 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
   }
 
+  // Each part of the readout is rebuilt only when what it shows has changed, so
+  // a move leaves the gear panels alone and a gear change leaves the log alone.
+  const shownSig = new Map<string, string>();
+  const refresh = (part: string, sig: string, build: () => void): void => {
+    if (shownSig.get(part) === sig) return;
+    shownSig.set(part, sig);
+    build();
+  };
+
+  function refreshPanels(): void {
+    const p = st();
+    const h = p.hero;
+    // The icons are drawn from the chosen art, so a change of art redoes them too.
+    const look = `${art.source}|${art.ground}|${art.chars}|${art.size}|${artDecoded ? 1 : 0}`;
+    const worn = GEAR_ROLES.map((r) => wornTier(p, r) ?? "-").join(",");
+    const bag = (h.bag ?? []).map((b) => `${b.slot}:${b.tier}`).join(",");
+    const weapon = weaponFor(h);
+    refresh("note", pictureNoteText(), () => (pictureNote.textContent = pictureNoteText()));
+    refresh(
+      "stats",
+      [h.currentHp, h.maxHp, heroDown(p), effectiveArmorClass(h), attackerBonusFor(h), weaponDamageNotationFor(h), weapon.name, weapon.ranged, attunedRoles(p.archetypeId, h.equipment ?? {}).length, p.monster ? `${p.monster.hp},${p.monster.awake}` : "down"].join("|"),
+      renderStats,
+    );
+    refresh("say", p.note ?? "", renderSay);
+    refresh("log", `${p.log.length}|${p.log[0]?.text}|${p.log[p.log.length - 2]?.text}|${p.log[p.log.length - 1]?.text}`, renderLog);
+    refresh("slots", `${p.archetypeId}|${worn}|${look}`, renderSlots);
+    refresh("pack", `${p.archetypeId}|${bag}|${look}`, renderPack);
+    refresh("armoury", `${p.archetypeId}|${worn}|${bag}|${look}`, renderArmoury);
+  }
+
+  /** Everything the scene shows may have changed (a new hero, new gear, a new art choice): refresh the readout, and the stage redraws (and re-decodes what the figures need) on its next frame. */
   function renderAll(): void {
     heroSelect.value = st().archetypeId;
-    drawScene();
-    renderPictureNote();
-    renderStats();
-    renderLog();
-    renderSlots();
-    renderPack();
-    renderArmoury();
+    refreshPanels();
+    stage.invalidate();
   }
 
   // ---- keyboard, animation, first paint ------------------------------------
@@ -1787,34 +2335,42 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const key = e.key.toLowerCase();
     if (target?.closest?.("button") && (key === " " || key === "enter")) return;
     const dir = KEY_DIR[key];
-    if (dir) act(() => heroMove(st(), dir), "move");
-    else if (key === "e") act(() => heroInteract(st()), "interact");
-    else if (key === "f" || key === " ") act(() => heroAttack(st()), "attack");
-    else return;
+    if (dir) {
+      // A key being held is a held key: the hero walks on step after step, and OS repeats only keep it alive.
+      const at = keysDown.indexOf(dir);
+      if (at >= 0) keysDown.splice(at, 1);
+      keysDown.push(dir);
+      downUntil = performance.now() + (e.repeat ? HOLD_REPEAT_MS : HOLD_FIRST_MS);
+      if (!e.repeat) press(moveAction(dir));
+    } else if (key === "e") {
+      if (!e.repeat) press(interactAction);
+    } else if (key === "f" || key === " ") {
+      if (!e.repeat) press(attackAction);
+    } else {
+      return;
+    }
     e.preventDefault();
   };
+  const onKeyUp = (e: KeyboardEvent) => {
+    const dir = KEY_DIR[e.key.toLowerCase()];
+    const at = dir ? keysDown.indexOf(dir) : -1;
+    if (at >= 0) keysDown.splice(at, 1);
+  };
   document.addEventListener("keydown", onKey);
+  document.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", cancelInput);
 
-  let raf = 0;
-  let lastSig = "";
-  function loop() {
-    // Redraw only when the picture would change: a new frame, facing or step.
-    if (!REDUCED_MOTION) {
-      const sig = pictureSignature();
-      if (sig && sig !== lastSig) {
-        lastSig = sig;
-        drawScene();
-      }
-    }
-    raf = requestAnimationFrame(loop);
-  }
-  raf = requestAnimationFrame(loop);
+  // One animation-frame loop paints the scene, and runs the input clock first.
+  const stage = createPlayStage({ viewport, canvas, state: st, zoom: () => scale, beforeFrame: (now) => pump(now) });
 
   renderAll();
 
   return () => {
-    cancelAnimationFrame(raf);
+    stage.dispose();
+    cancelInput();
     document.removeEventListener("keydown", onKey);
+    document.removeEventListener("keyup", onKeyUp);
+    window.removeEventListener("blur", cancelInput);
   };
 }
 
@@ -2568,6 +3124,8 @@ function injectPanelStyle(): void {
 #bench-root .lt-art-controls{padding:8px 10px;border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel);margin-bottom:10px}
 #bench-root .lt-art-controls [hidden]{display:none}
 #bench-root .lt-art-status{margin:0;flex-basis:100%}
+#bench-root .lt-art-explain{flex-basis:100%;display:flex;flex-direction:column;gap:2px}
+#bench-root .lt-art-explain .lt-note{margin:0;max-width:none}
 #bench-root .lt-conv-group{margin:12px 0}
 #bench-root .lt-conv-group>h3,#bench-root .lt-conv-group>summary{font-size:13px;margin:0 0 8px;cursor:default}
 #bench-root .lt-conv-group>summary{cursor:pointer}

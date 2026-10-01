@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-01, the goblin stays the game's own hand-drawn one; the rest of the cast is animated KayKit.
+Last updated: 2026-10-01 (0.4.0), walls drawn from above, smooth bench motion, no idle shimmer; turn-based play is next.
 
 ## Where the move stands
 
@@ -51,8 +51,12 @@ gear shows on the moving hero), Characters, Pieces, Gear, Terrain, Palette,
 Library last. Known weak spots: the Pixel artist style turns non-Knight
 clothing drab, and the skeleton is near white in Cel bands and Plain.
 
+**0.4.0 (2026-10-01):** walls from above with a side-on door in north-south walls (display-only pass, render/wallProfiles.ts; hand-drawn and both KayKit ground styles; players get it with the games-db paste and STORAGE_PREFIX v4), KayKit idle shimmer removed (whole-pixel idle snap plus per-pixel hysteresis; walk only about 20 percent calmer), the bench Play tab never blanks or jumps (cached room layer, pre-decoded clips, continuous walk, gliding camera), and the engine pieces for turn-based play (world/pathing.ts, session/hostileTurns.ts with monsters that route round walls, session/combatEvents.ts, render/anchors.ts). The on-screen text layer (scripts/asset-bench/overlay.ts, pixel and storybook styles) is built but not wired in yet.
+
 ## Next
 
+- Turn-based point-and-move Play tab on the bench (#5): click to move, initiative, attack targets, dialogue box, floating numbers, both text styles; then into the game. Also: camera eases slightly backward after a step, dropdowns keep arrow keys after a change, the Characters tab stalls on a Style change.
+- Owner's call pending: a deliberate 1 px breathing bob for 16 px idles (they are now still).
 - Publishing: add the five Actions secrets (see the publish workflow's header), then the first publish per project.
 - Owner picks: ground style, character style and size for the game. Then the game needs an animation system to use the cast (the bench's Actor in `scripts/asset-bench/cast.ts` is the model).
 - Authored campaigns (owner-written outlines plus a freestyle option) and real-cost pricing for campaign generation.
