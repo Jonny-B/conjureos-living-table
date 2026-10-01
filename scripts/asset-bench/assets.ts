@@ -91,6 +91,8 @@ import {
   findCastClip,
   newActor,
   playClips,
+  spriteClips,
+  spritePose,
   type Actor,
   type CastCharacter,
   type CastClip,
@@ -98,6 +100,7 @@ import {
   type CastDir,
   type CastGear,
   type CastStyle,
+  type SpritePose,
 } from "./cast";
 import { applyDisplayTiles } from "../../src/games/livingtable/render/terrainEdges";
 import { CELL_WIDTH, CELL_HEIGHT } from "../../src/games/livingtable/world/coordinates";
@@ -1204,6 +1207,83 @@ function drawCastFrame(
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Figures kept hand-drawn: ids the KayKit library leaves out on purpose (its
+// parts list them as gaps whose reason starts "kept hand-drawn"), so the
+// game's own drawing shows wherever the KayKit art is on. The owner's call
+// for the goblin, 2026-10-01. The bench moves the one drawing with
+// spritePose (cast.ts), driven by the same Actor as the cast.
+// ---------------------------------------------------------------------------
+
+const KEPT_HAND_DRAWN = /^kept hand-drawn/;
+
+/** Ids the KayKit library keeps hand-drawn, with the reason it gives. */
+function keptHandDrawn(): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const part of kaykitLibrary() ?? []) {
+    for (const g of part.gaps) if (KEPT_HAND_DRAWN.test(g.reason)) out.set(g.assetId, g.reason);
+  }
+  return out;
+}
+
+/** Clip timings shared by every hand-drawn figure. */
+const SPRITE_ENTRY = spriteClips(["16", "32"]);
+
+const tokenCanvases = new WeakMap<RenderManifest, Map<string, HTMLCanvasElement>>();
+
+/** A manifest's token sprite as a canvas at its own resolution, washed with `tint` when given. Cached per manifest, id and tint. */
+function tokenCanvas(manifest: RenderManifest, assetId: string, tint: string | null): HTMLCanvasElement | null {
+  let cache = tokenCanvases.get(manifest);
+  if (!cache) tokenCanvases.set(manifest, (cache = new Map()));
+  const key = `${assetId}|${tint ?? ""}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const sprite = manifest.tokens[assetId];
+  if (!sprite) return null;
+  const h = sprite.pixels.length;
+  const w = sprite.pixels[0]?.length ?? 0;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = sprite.pixels[y]![x]!;
+      if (idx < 0) continue;
+      ctx.fillStyle = manifest.palette[idx] ?? "#ff00ff";
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  if (tint) {
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = tint;
+    ctx.fillRect(0, 0, w, h);
+  }
+  cache.set(key, canvas);
+  return canvas;
+}
+
+/**
+ * A hand-drawn figure in a pose, standing with its feet centred on
+ * (feetX, feetY). `px16` is canvas pixels per 16 px sprite pixel, so a 16 px
+ * drawing and its 2x upscale stand the same size. Lying down turns it about
+ * its middle, so the body stays on its own tile.
+ */
+function drawSpriteFigure(ctx: CanvasRenderingContext2D, manifest: RenderManifest, assetId: string, pose: SpritePose, feetX: number, feetY: number, px16: number): boolean {
+  const sprite = tokenCanvas(manifest, assetId, pose.tint);
+  if (!sprite) return false;
+  const k = (px16 * 16) / spriteSizeOf(manifest);
+  const w = sprite.width * k;
+  const h = sprite.height * k;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(Math.round(feetX + pose.dx * px16), Math.round(feetY + pose.dy * px16 - h / 2 + (pose.lie * (h - w)) / 2));
+  if (pose.lie > 0) ctx.rotate((pose.fall * pose.lie * Math.PI) / 2);
+  ctx.drawImage(sprite, -w / 2, -h / 2, w, h);
+  ctx.restore();
+  return true;
+}
+
 function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
@@ -1337,13 +1417,21 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   // ---- behaviour -----------------------------------------------------------
 
-  /** The cast style the scene animates with, or null for the static tokens (the current art, or no cast for these figures). */
+  /**
+   * The cast style the scene animates with, or null for the static tokens
+   * (the current art, or no cast for this hero). The monster need not be in
+   * the cast: one kept hand-drawn is its own drawing, posed.
+   */
   function animated(): CastStyle | null {
     if (art.source !== "kaykit") return null;
     const style = castStyleNow();
     if (!style) return null;
-    const p = st();
-    return castEntry(style, bodySpriteId(p.archetypeId)) && castEntry(style, SCENE_KIT[p.template].monster) ? style : null;
+    return castEntry(style, bodySpriteId(st().archetypeId)) ? style : null;
+  }
+
+  /** The monster's clip timings: its cast entry, or the hand-drawn figures' shared ones. */
+  function monsterTiming(style: CastStyle | null): { clips: CastClip[] } {
+    return (style ? castEntry(style, SCENE_KIT[st().template].monster) : null) ?? SPRITE_ENTRY;
   }
 
   interface Before {
@@ -1403,12 +1491,10 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       m.dir = castDirToward(p.heroAt.x - before.monsterAt.x, p.heroAt.y - before.monsterAt.y);
       monQ.push("death");
     } else if (p.monster) {
-      const style = animated();
-      const entry = style ? castEntry(style, SCENE_KIT[p.template].monster) : null;
       let delay = 0;
       if (p.monster.hp < before.monsterHp) {
         monQ.push("hit");
-        const hit = entry ? findCastClip(entry, String(artSpriteSize(p.template)), "hit", m.dir) : null;
+        const hit = findCastClip(monsterTiming(animated()), String(artSpriteSize(p.template)), "hit", m.dir);
         delay += hit ? castClipMs(hit) : 0;
       }
       if (before.monsterAt && !same(before.monsterAt, p.monster.at)) {
@@ -1478,30 +1564,52 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   }
   let lastCentre = "";
 
-  /** The hero and the monster (or where it fell), back to front, each standing in the game's one-tile footprint with its feet on the tile's bottom edge. */
+  /**
+   * The hero and the monster (or where it fell), back to front, each standing
+   * in the game's one-tile footprint with its feet on the tile's bottom edge.
+   * A monster with no cast entry (kept hand-drawn) is its own drawing, posed
+   * by the same clips.
+   */
   function drawFigures(ctx: CanvasRenderingContext2D, p: PlayState, style: CastStyle, size: string, tileScale: number): void {
     const now = performance.now();
+    const manifest = artManifest(p.template);
+    const monsterId = SCENE_KIT[p.template].monster;
     const heroEntry = castEntry(style, bodySpriteId(p.archetypeId));
-    const monEntry = castEntry(style, SCENE_KIT[p.template].monster);
-    if (!heroEntry || !monEntry) return;
-    const figures: { entry: CastCharacter; actor: Actor; at: XY; down: boolean; layers: WornLayer[] }[] = [];
-    if (p.monster) figures.push({ entry: monEntry, actor: p.monsterActor, at: p.monster.at, down: false, layers: [] });
-    figures.push({ entry: heroEntry, actor: p.heroActor, at: p.heroAt, down: heroDown(p), layers: wornLayers(style, p.hero) });
+    if (!heroEntry) return;
+    const monEntry = castEntry(style, monsterId);
+    interface Figure {
+      entry: CastCharacter | null;
+      timing: { clips: CastClip[] };
+      actor: Actor;
+      at: XY;
+      down: boolean;
+      layers: WornLayer[];
+    }
+    const monster = (at: XY, down: boolean): Figure => ({ entry: monEntry, timing: monsterTiming(style), actor: p.monsterActor, at, down, layers: [] });
+    const figures: Figure[] = [];
+    if (p.monster) figures.push(monster(p.monster.at, false));
+    figures.push({ entry: heroEntry, timing: heroEntry, actor: p.heroActor, at: p.heroAt, down: heroDown(p), layers: wornLayers(style, p.hero) });
     const placed = figures.map((f) => ({ ...f, pos: actorAt(f.actor, f.at, now) })).sort((a, b) => a.pos.y - b.pos.y);
     // The fallen monster lies under everything.
-    if (!p.monster && p.fallenAt) placed.unshift({ entry: monEntry, actor: p.monsterActor, at: p.fallenAt, down: true, layers: [], pos: p.fallenAt });
+    if (!p.monster && p.fallenAt) placed.unshift({ ...monster(p.fallenAt, true), pos: p.fallenAt });
     const spx = tileScale / Number(size);
     for (const f of placed) {
+      const c = actorClip(f.actor, f.timing, size, f.down, now);
+      if (!c) continue;
+      const frame = castFrameIndex(c, now - f.actor.clipStart);
+      if (!f.entry) {
+        drawSpriteFigure(ctx, manifest, monsterId, spritePose(c.clip, frame, c.dir), (f.pos.x + 0.5) * tileScale, (f.pos.y + 1) * tileScale, tileScale / 16);
+        continue;
+      }
       const meta = f.entry.sizes[size];
-      const c = actorClip(f.actor, f.entry, size, f.down, now);
-      if (!meta || !c) continue;
+      if (!meta) continue;
       const dest = {
         x: Math.round((f.pos.x + 0.5) * tileScale - meta.anchorX * spx),
         y: Math.round((f.pos.y + 1) * tileScale - meta.anchorY * spx),
         w: Math.round(meta.canvasW * spx),
         h: Math.round(meta.canvasH * spx),
       };
-      drawCastFrame(ctx, style, f.entry, c, castFrameIndex(c, now - f.actor.clipStart), f.layers, dest, redrawScene);
+      drawCastFrame(ctx, style, f.entry, c, frame, f.layers, dest, redrawScene);
     }
   }
 
@@ -1512,23 +1620,30 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const p = st();
     const size = String(artSpriteSize(p.template));
     const now = performance.now();
-    const part = (tokenId: string, actor: Actor, down: boolean): string => {
-      const entry = castEntry(style, tokenId);
-      const c = entry ? actorClip(actor, entry, size, down, now) : null;
+    const part = (timing: { clips: CastClip[] } | null, actor: Actor, down: boolean): string => {
+      const c = timing ? actorClip(actor, timing, size, down, now) : null;
       const fi = c ? castFrameIndex(c, now - actor.clipStart) : -1;
       const tw = actor.tween ? Math.floor((now - actor.tween.start) / 30) : -1;
       return `${actor.clip}|${actor.dir}|${fi}|${tw}`;
     };
-    return `${style.style}|${size}|${part(bodySpriteId(p.archetypeId), p.heroActor, heroDown(p))}|${part(SCENE_KIT[p.template].monster, p.monsterActor, !p.monster)}`;
+    return `${style.style}|${size}|${part(castEntry(style, bodySpriteId(p.archetypeId)), p.heroActor, heroDown(p))}|${part(monsterTiming(style), p.monsterActor, !p.monster)}`;
   }
 
   function renderPictureNote(): void {
     const style = animated();
     if (style) {
-      const hero = castEntry(style, bodySpriteId(st().archetypeId));
-      const monster = castEntry(style, SCENE_KIT[st().template].monster);
-      const standIns = [hero, monster].filter((c): c is CastCharacter => !!c && c.standIn).map((c) => `The ${c.label.toLowerCase()} is a stand-in (see Characters).`);
-      pictureNote.textContent = `Animated: KayKit ${style.label}, every figure rendered the same way as the Knight, gear included. ${standIns.join(" ")}`.trim();
+      const p = st();
+      const hero = castEntry(style, bodySpriteId(p.archetypeId));
+      const monster = castEntry(style, SCENE_KIT[p.template].monster);
+      const extra = [hero, monster].filter((c): c is CastCharacter => !!c && c.standIn).map((c) => `The ${c.label.toLowerCase()} is a stand-in (see Characters).`);
+      if (!monster) {
+        extra.push(
+          keptHandDrawn().has(SCENE_KIT[p.template].monster)
+            ? `${sentenceCase(monsterLabel(p))} is the game's own hand-drawn one, kept by your call: one drawing, moved by the bench.`
+            : `${sentenceCase(monsterLabel(p))} has no animated figure in this build: it is the still, moved by the bench.`,
+        );
+      }
+      pictureNote.textContent = `Animated: KayKit ${style.label}, gear included. ${extra.join(" ")}`.trim();
     } else if (art.source === "kaykit") {
       pictureNote.textContent = castData() ? "No animated figure for this hero in this build: the tokens are the static conversion." : "No animated cast in this build: the tokens are the static conversion.";
     } else {
@@ -1707,7 +1822,9 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 // Panel: Characters. Every figure the game uses, as the animated KayKit cast:
 // four facings, any animation, in one style or every style side by side.
 // Heroes wear their starting gear (the same layers the Play tab dresses them
-// in). Nothing is filtered or ranked here: the owner judges.
+// in). A figure kept hand-drawn (the goblin) sits among them as the game's own
+// drawing, posed by the same clips. Nothing is filtered or ranked here: the
+// owner judges.
 // ===========================================================================
 
 const CLIP_LABEL: Record<CastClipId, string> = {
@@ -1844,7 +1961,9 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
   interface Cell {
     canvas: HTMLCanvasElement;
     style: CastStyle;
-    entry: CastCharacter;
+    /** A cast member, or null for a figure kept hand-drawn (spriteId). */
+    entry: CastCharacter | null;
+    spriteId: string | null;
     dir: CastDir;
     shown: number;
   }
@@ -1859,9 +1978,10 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
     const styles = styleId === "all" ? cast!.styles : cast!.styles.filter((s) => s.style === styleId);
     const note = document.createElement("p");
     note.className = "lt-note";
+    const kept = [...keptHandDrawn().keys()].filter((id) => MANIFEST.fantasy.tokens[id] && !castEntry(styles[0]!, id));
     note.textContent =
       `Every character is a KayKit model by Kay Lousberg (CC0), rendered in Blender through the same camera (${cast!.cameraPitchDeg} degrees down), ` +
-      `framing and palette as the Knight. Each stands in the game's one-tile footprint.`;
+      `framing and palette as the Knight${kept.length ? ", except where a row says it is kept hand-drawn" : ""}. Each stands in the game's one-tile footprint.`;
     body.appendChild(note);
 
     const grid = document.createElement("div");
@@ -1875,7 +1995,20 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
       h.textContent = DIR_LABEL[dir];
       grid.appendChild(h);
     }
-    for (const first of styles[0]?.characters ?? []) {
+    // Kept hand-drawn figures sit after the cast's monsters, where the goblin always was.
+    type Row = { cast: CastCharacter } | { sprite: string };
+    const rows: Row[] = (styles[0]?.characters ?? []).map((c) => ({ cast: c }));
+    let lastMonster = -1;
+    rows.forEach((r, i) => {
+      if ("cast" in r && r.cast.kind === "monster") lastMonster = i;
+    });
+    rows.splice(lastMonster + 1, 0, ...kept.map((id) => ({ sprite: id })));
+    for (const row of rows) {
+      if ("sprite" in row) {
+        addSpriteRow(grid, row.sprite, styles[0]!, size);
+        continue;
+      }
+      const first = row.cast;
       for (const style of styles) {
         const entry = castEntry(style, first.id);
         const meta = entry?.sizes[size];
@@ -1885,7 +2018,7 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
         const b = document.createElement("b");
         b.textContent = styles.length > 1 ? `${entry.label}, ${style.label}` : entry.label;
         const sub = document.createElement("span");
-        const notes = entry.notes.replace(/.+$/, "");
+        const notes = entry.notes.replace(/\.+$/, "");
         const standIn = entry.standIn ? ` Stand-in: ${notes || "no free Kay model"}.` : notes ? ` ${notes}.` : "";
         sub.textContent = `${KIND_LABEL[entry.kind]}, KayKit ${entry.model}.${standIn}`;
         label.append(b, sub);
@@ -1897,11 +2030,36 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
           canvas.height = meta.canvasH * zoom;
           canvas.title = `${entry.label}, ${DIR_LABEL[dir]}, ${CLIP_LABEL[clip]}`;
           grid.appendChild(canvas);
-          cells.push({ canvas, style, entry, dir, shown: -1 });
+          cells.push({ canvas, style, entry, spriteId: null, dir, shown: -1 });
         }
       }
     }
     draw(true);
+  }
+
+  /** One row for a figure kept hand-drawn: the same drawing in every style, so one row whatever the Style choice. */
+  function addSpriteRow(grid: HTMLElement, spriteId: string, style: CastStyle, size: string): void {
+    const pixels = MANIFEST.fantasy.tokens[spriteId]?.pixels;
+    if (!pixels) return;
+    const k = Number(size) / 16;
+    const name = SPRITES_BY_TEMPLATE.fantasy.find((s) => s.assetId === spriteId)?.name ?? spriteId;
+    const label = document.createElement("div");
+    label.className = "lt-kk-rowhead";
+    const b = document.createElement("b");
+    b.textContent = name;
+    const sub = document.createElement("span");
+    sub.textContent = `Hand-drawn: the game's own ${name.toLowerCase()}, kept by your call. One drawing (no facings), moved by the bench.`;
+    label.append(b, sub);
+    grid.appendChild(label);
+    for (const dir of CAST_DIRS) {
+      const canvas = document.createElement("canvas");
+      canvas.className = "lt-canvas lt-kk-cell";
+      canvas.width = 2 * (pixels[0]?.length ?? 16) * k * zoom;
+      canvas.height = 1.5 * pixels.length * k * zoom;
+      canvas.title = `${name}, ${DIR_LABEL[dir]}, ${CLIP_LABEL[clip]}`;
+      grid.appendChild(canvas);
+      cells.push({ canvas, style, entry: null, spriteId, dir, shown: -1 });
+    }
   }
 
   const redrawAll = (): void => draw(true);
@@ -1909,14 +2067,23 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
   function draw(force = false): void {
     const size = String(art.size);
     for (const cell of cells) {
-      const c = findCastClip(cell.entry, size, clip, cell.dir) ?? findCastClip(cell.entry, size, "idle", cell.dir);
-      const meta = cell.entry.sizes[size];
-      if (!c || !meta) continue;
+      const timing = cell.entry ?? SPRITE_ENTRY;
+      const c = findCastClip(timing, size, clip, cell.dir) ?? findCastClip(timing, size, "idle", cell.dir);
+      if (!c) continue;
       const span = c.loop ? castClipMs(c) : castClipMs(c) + ONCE_PAUSE_MS;
       const i = castFrameIndex(c, clock % span);
       if (!force && i === cell.shown) continue;
       const ctx = cell.canvas.getContext("2d")!;
       ctx.imageSmoothingEnabled = false;
+      if (!cell.entry) {
+        // One tile is `size` sprite pixels, drawn `zoom` canvas pixels each.
+        paintFloor(ctx, floorId, Number(size) * zoom, cell.canvas.width, cell.canvas.height);
+        const pose = spritePose(c.clip, i, cell.dir);
+        cell.shown = drawSpriteFigure(ctx, artManifest("fantasy"), cell.spriteId!, pose, cell.canvas.width / 2, cell.canvas.height, (Number(size) / 16) * zoom) ? i : -1;
+        continue;
+      }
+      const meta = cell.entry.sizes[size];
+      if (!meta) continue;
       paintFloor(ctx, floorId, meta.tokenW * zoom, cell.canvas.width, cell.canvas.height);
       const layers = withGear ? starterLayers(cell.style, cell.entry) : [];
       const drew = drawCastFrame(ctx, cell.style, cell.entry, c, i, layers, { x: 0, y: 0, w: cell.canvas.width, h: cell.canvas.height }, redrawAll);
@@ -2004,11 +2171,13 @@ function mountPiecesPanel(el: HTMLElement, _api: unknown): void {
     const palette = MANIFEST.fantasy.palette;
     const inPlay = SPRITES_BY_TEMPLATE.fantasy.filter((s) => !/healer/.test(s.assetId));
     const covered = inPlay.filter((s) => kaykitHas(s.assetId)).length;
+    const kept = keptHandDrawn();
+    const keptCount = inPlay.filter((s) => kept.has(s.assetId) && !kaykitHas(s.assetId)).length;
     const summary = document.createElement("p");
     summary.className = "lt-note";
     summary.textContent =
-      `${inPlay.length} in-play fantasy pieces, ${covered} converted from KayKit. Left of each pair is the game today, right is the conversion. ` +
-      `Characters and gear here are the stills the game would load; the Characters tab shows them moving.`;
+      `${inPlay.length} in-play fantasy pieces, ${covered} converted from KayKit${keptCount ? `, ${keptCount} kept hand-drawn by your call` : ""}. ` +
+      `Left of each pair is the game today, right is the conversion. Characters and gear here are the stills the game would load; the Characters tab shows them moving.`;
     body.appendChild(summary);
     for (const group of CONVERTED_GROUPS) {
       const members = inPlay.filter(group.test);
@@ -2016,7 +2185,8 @@ function mountPiecesPanel(el: HTMLElement, _api: unknown): void {
       const section = document.createElement(group.collapsed ? "details" : "section");
       section.className = "lt-conv-group";
       const head = document.createElement(group.collapsed ? "summary" : "h3");
-      head.textContent = `${group.label} (${members.filter((s) => kaykitHas(s.assetId)).length} of ${members.length} converted)`;
+      const groupKept = members.filter((s) => kept.has(s.assetId) && !kaykitHas(s.assetId)).length;
+      head.textContent = `${group.label} (${members.filter((s) => kaykitHas(s.assetId)).length} of ${members.length} converted${groupKept ? `, ${groupKept} kept hand-drawn` : ""})`;
       section.appendChild(head);
       const grid = document.createElement("div");
       grid.className = "lt-conv-grid";
@@ -2037,8 +2207,11 @@ function mountPiecesPanel(el: HTMLElement, _api: unknown): void {
         if (conv) pair.appendChild(spriteCanvas(conv, palette, zoom, w16, h16));
         else {
           const gap = document.createElement("span");
-          gap.className = "lt-conv-gap";
-          gap.textContent = "not converted";
+          // Left out on purpose (the owner's call) reads differently from a piece the conversion missed.
+          const keep = kept.get(s.assetId);
+          gap.className = keep ? "lt-conv-kept" : "lt-conv-gap";
+          gap.textContent = keep ? "kept hand-drawn (your call)" : "not converted";
+          if (keep) gap.title = keep;
           pair.appendChild(gap);
         }
         card.append(label, pair);
@@ -2403,6 +2576,7 @@ function injectPanelStyle(): void {
 #bench-root .lt-conv-pair{display:flex;gap:6px;align-items:flex-end}
 #bench-root .lt-conv-canvas{image-rendering:pixelated}
 #bench-root .lt-conv-gap{font-size:11px;color:var(--bn-danger);align-self:center}
+#bench-root .lt-conv-kept{font-size:11px;color:var(--bn-muted);align-self:center;max-width:9em}
 #bench-root .lt-picture-note{margin:0 0 8px}
 #bench-root .lt-section-head{font-size:13px;margin:18px 0 4px}
 #bench-root .lt-kk-grid{display:grid;grid-template-columns:minmax(120px,220px) repeat(var(--kk-cols),auto);gap:10px 12px;align-items:end;overflow-x:auto;max-width:100%;padding-bottom:6px}

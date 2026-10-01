@@ -1,7 +1,8 @@
 """
 KayKit cast maker: every character the game uses, ANIMATED, rendered through
 the same pipeline as the KayKit Knight on the asset bench (scripts/kaykit/
-harness.py), so the whole cast shares one art style.
+harness.py), so the whole cast shares one art style. The exception is any id
+kept hand-drawn by the owner's call (HAND_DRAWN below; today the goblin).
 
 WHY THIS EXISTS
   The animated Knight came from harness.py: orthographic camera 30 degrees
@@ -9,9 +10,9 @@ WHY THIS EXISTS
   height, feet on the bottom edge, one of four style modules (plain, bands,
   toon, pixelart). The other characters came from lib_tokens.py, which stretched
   the models, shrank the weapons into the 16 px box and requantised the metals:
-  another art style, and static. This script renders EVERY character through the
-  harness's own framing and the unchanged style modules, with each model's own
-  KayKit animations.
+  another art style, and static. This script renders every character in CAST
+  through the harness's own framing and the unchanged style modules, with each
+  model's own KayKit animations.
 
 Run from the repo root (Blender 5.2 headless). One process per (style, group):
 
@@ -23,7 +24,7 @@ Run from the repo root (Blender 5.2 headless). One process per (style, group):
 
 Outputs
   .cache/kaykit/out/cast-<style>/cast.json     the animated cast (format below)
-  .cache/kaykit/out/cast-<style>/sheet.png     every character at 32 px, four facings, next to the harness Knight
+  .cache/kaykit/out/cast-<style>/sheet.png     every character in the cast at 32 px, four facings, next to the harness Knight
   .cache/kaykit/library/parts/tokens-<style>-<16|32>.json   the static tokens, gear overlays and icons
   scratch under .cache/kaykit/scratch/cast/
 
@@ -38,6 +39,16 @@ THE CAST
   combination composites, except that two pieces overlapping each other are
   resolved by draw order and outline pixels shared by two pieces may differ by
   a pixel from a render of both together.
+  The goblin is NOT in the cast. It is kept hand-drawn by the owner's call
+  (2026-10-01): the game's own hand-drawn token_goblin (scripts/assets/
+  fantasy.ts) is the one they prefer over a recoloured Rogue_Hooded stand-in.
+  The library never supplies it: HAND_DRAWN below holds the reason, assemble
+  writes token_goblin into every tokens part as a gap with that reason, and
+  the bench falls back to the hand-drawn sprite (artManifest in
+  scripts/asset-bench/assets.ts). The game has no KayKit loader yet: whoever
+  switches it over must keep the hand-drawn token_goblin in the served
+  manifest, upscaled to the manifest's spriteSize. Raw renders of it that
+  remain on disk are ignored (merge_raw follows CAST).
 
 cast.json
   { style, label, description, palette[52], cameraPitchDeg,
@@ -54,7 +65,8 @@ Framing rules (identical to harness.py)
   Per character the camera frames the FIT meshes (body plus head gear and cape,
   never weapons) in the Idle pose facing the camera so they fill token_h - 1
   pixels; the box comes from targets.json (16x24 for heroes, 16x16 for the
-  goblin, skeleton and robed figure, so a small creature stays small). The
+  skeleton and robed figure, so a small creature stays small; the goblin's
+  16x16 box is unused, it is kept hand-drawn by the owner's call). The
   style modules key their per-size tuning on size ids "16x24" and "32x48", so
   those ids are used for every character whatever its box.
 """
@@ -550,19 +562,6 @@ def spec_skeleton(B):
                 actions=actions_with(walk="Walking_D_Skeletons"))
 
 
-def spec_goblin(B):
-    B.load_main(adv("Rogue_Hooded.glb"))
-    body = ["Rogue_Body", "Rogue_Head_Hooded", "Rogue_ArmLeft", "Rogue_ArmRight", "Rogue_LegLeft", "Rogue_LegRight"]
-    for k in body:
-        B.uv_swap(k, {0: (18, -0.42), 8: 6, 9: 5})   # skin to a lighter green, the green tunic and hood to brown leather
-    fit = list(body)
-    body = body + ["Knife"]
-    return dict(id="token_goblin", label="Goblin", kind="monster", archetype=None, model="Rogue_Hooded", standIn=True,
-                notes="No free KayKit goblin exists: stand-in is Rogue_Hooded recoloured (green skin, brown leather) "
-                      "with its Knife, framed in the 16 px box so it stays small.",
-                body=body, fit=fit, pieces=[], actions=actions_with(attack="1H_Melee_Attack_Stab"))
-
-
 def spec_villager(B):
     B.load_main(adv("Barbarian.glb"))
     body = ["Barbarian_Body", "Barbarian_Head", "Barbarian_ArmLeft", "Barbarian_ArmRight", "Barbarian_LegLeft",
@@ -600,14 +599,22 @@ CAST = {
     "token_shadow": spec_shadow,
     "token_fireball_person": spec_fireball,
     "token_skeleton": spec_skeleton,
-    "token_goblin": spec_goblin,
     "token_villager": spec_villager,
     "token_guard": spec_guard,
     "token_robed_figure": spec_robed,
 }
 SHORT = {"knight": "token_knight", "shadow": "token_shadow", "fireball": "token_fireball_person",
-         "skeleton": "token_skeleton", "goblin": "token_goblin", "villager": "token_villager", "guard": "token_guard",
+         "skeleton": "token_skeleton", "villager": "token_villager", "guard": "token_guard",
          "robed": "token_robed_figure"}
+
+# Ids the library deliberately does NOT supply: the owner keeps the game's own hand-drawn sprite for them. The bench
+# falls back to it for any id the library does not cover; the game has no KayKit loader yet, so the switch-over must
+# carry these ids over itself. assemble records each one as a gap with this reason instead of the generic "not rendered
+# by cast.py". To keep another id hand-drawn, add it here AND drop it from CAST and SHORT (HAND_DRAWN alone only changes
+# the parts; the cast would still animate the KayKit figure).
+HAND_DRAWN = {
+    "token_goblin": "kept hand-drawn: the owner prefers the game's own goblin (2026-10-01)",
+}
 
 
 def tier_gear_id(spec, pc):
@@ -1205,6 +1212,8 @@ def merge_raw(style, quick):
             continue
         with open(f) as fh:
             doc = json.load(fh)
+        if doc["char"] not in CAST:
+            continue     # raw renders left on disk for a character that left the cast (the goblin) are never picked up
         by_char.setdefault(doc["char"], []).append(doc)
     merged = {}
     clip_rank = {c: i for i, c in enumerate(CLIP_NAMES)}
@@ -1462,6 +1471,9 @@ def cmd_assemble(opts):
             sprites, gaps = [], []
             for t in scope:
                 aid = t["assetId"]
+                if aid in HAND_DRAWN:
+                    gaps.append({"assetId": aid, "reason": HAND_DRAWN[aid]})
+                    continue
                 px = pixels.get(aid)
                 if px is None and t["group"] == "icon":
                     px = icons.get(aid)

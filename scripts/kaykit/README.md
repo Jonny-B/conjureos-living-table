@@ -13,7 +13,7 @@ bench. Nothing here ships in the game.
 | `export-palette.ts` | Writes the fantasy palette to `.cache/kaykit/palette-fantasy.json` so Blender quantises into the game's own 52 colours. |
 | `sheet.mjs` | Contact sheets from harness output, to look at renders without the bench. |
 | `pack.mjs` | The trial's packer (`.cache/kaykit/bench-data.json`). The bench no longer embeds it: the animated cast below replaced the trial panel. |
-| `cast.py` | Every character the game uses (heroes, monsters, townsfolk) rendered through this harness's camera, framing and styles, animated, with each hero's gear as separate animated layers. See "The animated cast" below. |
+| `cast.py` | Every character the game uses (heroes, monsters, townsfolk) except the goblin, which is kept hand-drawn, rendered through this harness's camera, framing and styles, animated, with each hero's gear as separate animated layers. See "The animated cast" below. |
 | `pack-cast.mjs` | Gathers `.cache/kaykit/out/cast-<style>/cast.json` into `.cache/kaykit/bench-cast.json`, which `npm run bench` embeds. |
 
 ## Running it
@@ -56,11 +56,16 @@ four makers, each owning one script and its parts:
 | `lib_ground_lit.py` | 40 ground, 5 wall and 190 edge tiles, Lit style | `ground-lit-16.json`, `ground-lit-32.json` |
 | `lib_ground_painted.py` | the same 235 tiles, Painted style | `ground-painted-16.json`, `ground-painted-32.json` |
 | `lib_props.py` | 37 props (multi-tile props are one model, sliced) | `props-16.json`, `props-32.json` |
-| `cast.py` | 8 tokens, 33 gear overlays, 7 icons, per character style (stills from the animated cast; replaced `lib_tokens.py`, whose figures did not match the Knight) | `tokens-<plain/bands/toon/pixelart>-<16/32>.json` |
+| `cast.py` | 7 tokens, 33 gear overlays, 7 icons, per character style (stills from the animated cast; replaced `lib_tokens.py`, whose figures did not match the Knight). The goblin is left out on purpose (a gap: kept hand-drawn) | `tokens-<plain/bands/toon/pixelart>-<16/32>.json` |
 
 The Healer's pieces are out of play and sci-fi is paused, so neither is
-converted. `token_goblin` has no free Kay source and is the hooded Rogue
-recoloured.
+converted. `token_goblin` is kept hand-drawn by the owner's call
+(2026-10-01): the free packs have no goblin, the recoloured Rogue stand-in did
+not read as one, and the owner preferred the game's own drawing. The parts
+list it as a gap, so the bench shows the game's sprite. The game has no KayKit
+loader yet: the switch-over must keep the hand-drawn `token_goblin` in the
+served manifest and upscale it to the manifest's `spriteSize` (the renderer
+draws a 16 px sprite at half a tile in a 32 px manifest).
 
 Run order, from the repo root (each step is safe to repeat):
 
@@ -84,7 +89,8 @@ games-db until it is switched over.
 ## The animated cast
 
 The owner's call (2026-09-30): every character must be a Kay model drawn the
-same way as the animated Knight. `cast.py` renders the whole cast through the
+same way as the animated Knight, except the goblin, kept hand-drawn by the
+owner's later call (2026-10-01). `cast.py` renders the whole cast through the
 harness's camera, framing and four styles, at 16 and 32 px, in seven
 animations and four facings. Heroes are rendered without their removable gear,
 and each gear piece (weapon, shield or cloak, armour or hat, boots; base, rare
@@ -96,6 +102,16 @@ plan): each plan layer's sprite id is a cast gear id.
 Output, per style: `.cache/kaykit/out/cast-<style>/cast.json` (the shape is
 in `scripts/asset-bench/cast.ts`), a contact sheet `sheet.png` beside the
 Knight, and the static `tokens-<style>-<size>.json` library parts.
+
+Seven characters are in the cast. To keep an id hand-drawn, make two edits in
+cast.py: add it to `HAND_DRAWN` (the parts then record it as a gap whose
+reason starts "kept hand-drawn"), and delete it from `CAST` and `SHORT`
+(that stops it being rendered into the cast). `HAND_DRAWN` alone only changes
+the parts, so the cast would still animate the KayKit figure. Today only
+`token_goblin` is kept this way.
+The bench reads that reason, shows the game's own sprite for it, and moves the
+one drawing with the same clips as the cast (`spritePose` in
+`scripts/asset-bench/cast.ts`).
 
 ```
 "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe" -b --factory-startup --python scripts/kaykit/cast.py -- render --style bands

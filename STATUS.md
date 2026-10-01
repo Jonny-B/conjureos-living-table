@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-30, the whole cast animated like the KayKit Knight, and the bench cleaned up.
+Last updated: 2026-10-01, the goblin stays the game's own hand-drawn one; the rest of the cast is animated KayKit.
 
 ## Where the move stands
 
@@ -23,8 +23,9 @@ Both stay in the code and still load; only `PLAYABLE_TEMPLATES` and
 start (0.2.0). The owner also wants the "not much use" free packs kept in mind:
 pieces of them can be pulled in and adapted.
 
-**The fantasy library is converted to KayKit (2026-09-30, 0.3.0):** all 320
-in-play fantasy pieces at 16 and 32 px, ground in two styles (Painted, Lit),
+**The fantasy library is converted to KayKit (2026-09-30, 0.3.0):** 319 of the
+320 in-play fantasy pieces at 16 and 32 px (token_goblin is kept hand-drawn,
+see below), ground in two styles (Painted, Lit),
 characters in four (Cel bands, Pixel artist, Toon, Plain), on the bench (Art
 row, Converted tab). The renderer draws 32 px art (`RenderManifest.spriteSize`).
 The game itself still shows the hand-drawn 16 px art: switching it needs the
@@ -32,15 +33,20 @@ owner's pick of styles and size, then LivingTable.tsx's board sizing
 (`SPRITE_SIZE * displayScale` must use the manifest's sprite size), games-db
 serving the new art and `spriteSize` (or the Supabase Storage hosting already
 agreed), and `STORAGE_PREFIX` in manifestCache.ts bumped to v4 in the same
-release.
+release. The served manifest must also keep the hand-drawn `token_goblin`,
+upscaled to its `spriteSize`: the game has no fallback for an id the library
+leaves out.
 
 **The whole cast is animated KayKit, drawn like the Knight (2026-09-30):** the
 owner saw the other characters looked like another art style and were static.
-`scripts/kaykit/cast.py` renders all 8 characters through the Knight's own
+`scripts/kaykit/cast.py` renders the 7 characters in the cast through the Knight's own
 pipeline (proved pixel-identical for the Knight), 7 animations x 4 facings x
 2 sizes x 4 styles, with each hero's gear as animated layers, and remade the
-static token parts from the same renders. The goblin is a stand-in (recoloured
-Rogue). The bench was reorganised: Play (opens first; hero and goblin animate,
+static token parts from the same renders. The goblin stays the game's own
+hand-drawn one (owner's call, 2026-10-01: "I liked the old goblin"): the
+KayKit library leaves it out on purpose (`HAND_DRAWN` in cast.py), so the
+bench shows the hand-drawn sprite and moves the one drawing alongside the
+cast. The bench was reorganised: Play (opens first; hero and goblin animate,
 gear shows on the moving hero), Characters, Pieces, Gear, Terrain, Palette,
 Library last. Known weak spots: the Pixel artist style turns non-Knight
 clothing drab, and the skeleton is near white in Cel bands and Plain.

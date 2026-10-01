@@ -2,7 +2,9 @@
  * The animated cast on the bench: every character the game uses, rendered by
  * scripts/kaykit/cast.py through the same pipeline as the KayKit Knight
  * (same camera, framing and styles), with each hero's gear as separate
- * animated layers so whatever is worn shows on the moving figure.
+ * animated layers so whatever is worn shows on the moving figure. The
+ * exception is a figure kept hand-drawn (the goblin): it has no frames here
+ * and is posed from its one drawing by spritePose, at the end of this file.
  *
  * Embedded with build-bench.mjs --data kaycast=.cache/kaykit/bench-cast.json
  * (scripts/kaykit/pack-cast.mjs). Per clip: every frame's palette indices
@@ -237,4 +239,85 @@ export function actorAt(actor: Actor, at: { x: number; y: number }, now: number)
     return at;
   }
   return { x: actor.tween.from.x + (at.x - actor.tween.from.x) * t, y: actor.tween.from.y + (at.y - actor.tween.from.y) * t };
+}
+
+// ---------------------------------------------------------------------------
+// A figure with no rendered animation: a single hand-drawn sprite the owner
+// chose to keep (the goblin, 2026-10-01). It plays the same clips as the cast
+// so the Actor drives it unchanged, but each clip is a pose of the one
+// drawing (a bob, a hop, a lunge, a flinch, a fall) rather than drawn frames.
+// spritePose is a pure function of the clip and frame, so the same frame
+// always shows the same pose.
+// ---------------------------------------------------------------------------
+
+export const SPRITE_FPS = 10;
+
+const SPRITE_FRAMES: Record<CastClipId, { count: number; loop: boolean }> = {
+  idle: { count: 10, loop: true },
+  walk: { count: 3, loop: true },
+  attack: { count: 4, loop: false },
+  hit: { count: 3, loop: false },
+  death: { count: 4, loop: false },
+  interact: { count: 4, loop: false },
+  cheer: { count: 6, loop: false },
+};
+
+/** Clip timings for a hand-drawn figure, in the cast's clip shape (no frame data), so actorClip and castFrameIndex treat it like any cast member. */
+export function spriteClips(sizes: readonly string[]): { clips: CastClip[] } {
+  const clips: CastClip[] = [];
+  for (const size of sizes) {
+    for (const clip of CAST_CLIPS) {
+      for (const dir of CAST_DIRS) clips.push({ size, clip, dir, count: SPRITE_FRAMES[clip].count, loop: SPRITE_FRAMES[clip].loop, fps: SPRITE_FPS, data: "" });
+    }
+  }
+  return { clips };
+}
+
+export interface SpritePose {
+  /** Offset in 16 px sprite pixels (scale by tile size / 16 to draw). */
+  dx: number;
+  dy: number;
+  /** 0 standing, 1 lying on its side. */
+  lie: number;
+  /** Which way it falls: 1 clockwise, -1 the other way. */
+  fall: 1 | -1;
+  /** A colour wash over the drawing for this frame, or null. */
+  tint: string | null;
+}
+
+const DIR_UNIT: Record<CastDir, { x: number; y: number }> = { down: { x: 0, y: 1 }, up: { x: 0, y: -1 }, right: { x: 1, y: 0 }, left: { x: -1, y: 0 } };
+
+export function spritePose(clip: CastClipId, frame: number, dir: CastDir): SpritePose {
+  const pose: SpritePose = { dx: 0, dy: 0, lie: 0, fall: dir === "left" ? 1 : -1, tint: null };
+  const at = <T>(values: readonly T[]): T => values[Math.min(frame, values.length - 1)]!;
+  const u = DIR_UNIT[dir];
+  switch (clip) {
+    case "idle":
+      pose.dy = frame >= 5 ? -1 : 0;
+      break;
+    case "walk":
+      pose.dy = at([-1, -2, -1]);
+      break;
+    case "attack": {
+      const reach = at([1, 3, 2, 0]);
+      pose.dx = u.x * reach;
+      pose.dy = u.y * reach;
+      break;
+    }
+    case "hit":
+      pose.dx = at([-1, 1, 0]);
+      pose.tint = frame < 2 ? "rgba(214,48,48,0.55)" : null;
+      break;
+    case "death":
+      pose.lie = at([0.25, 0.5, 0.85, 1]);
+      pose.tint = frame >= 3 ? "rgba(20,16,24,0.25)" : null;
+      break;
+    case "interact":
+      pose.dy = at([0, 1, 1, 0]);
+      break;
+    case "cheer":
+      pose.dy = at([-1, -3, -1, 0, -2, 0]);
+      break;
+  }
+  return pose;
 }

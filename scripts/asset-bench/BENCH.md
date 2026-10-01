@@ -7,8 +7,8 @@ second drawing of it.
 
 | Tab | What it is for |
 |---|---|
-| **Play** | The game in miniature: a two-room scene with a door, a chest and a goblin. Walk (d-pad, arrows or WASD), Attack (F), Interact (E); drag items onto the hero's slots and see them worn. With the KayKit art on, the hero and the goblin are the animated cast: they walk, swing, flinch, die and leave a body. |
-| **Characters** | Every figure the game uses, animated, in four facings: pick the animation, the style (or every style side by side), the detail and the floor. Heroes can wear their starting gear. |
+| **Play** | The game in miniature: a two-room scene with a door, a chest and a goblin. Walk (d-pad, arrows or WASD), Attack (F), Interact (E); drag items onto the hero's slots and see them worn. With the KayKit art on, the hero is the animated cast and the goblin is the game's own hand-drawn one (kept by the owner's call), moved by the bench: both walk, swing, flinch, die and leave a body. |
+| **Characters** | Every figure the game uses, animated, in four facings: pick the animation, the style (or every style side by side), the detail and the floor. Heroes can wear their starting gear. A figure kept hand-drawn (the goblin) has its own row, posed from its one drawing. |
 | **Pieces** | Every in-play fantasy sprite as a still: the game today beside the KayKit conversion. |
 | **Gear** | One hero's paper doll (the inventory screen's figure) and every item's inventory icon. |
 | **Terrain** | A preset map, raw beside the game's autotiling. |
