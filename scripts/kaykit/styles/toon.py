@@ -412,16 +412,37 @@ def _save_debug(ctx, rgb_top_first, name):
     bpy.data.images.remove(img)
 
 
-def majority_downscale(idx_ss, ss, is_outline, w_out):
+def majority_downscale(idx_ss, ss, is_outline, w_out, mem=None):
     """idx_ss: (h*ss, w*ss) uint8 with 255 transparent. A pixel is opaque if at least half its block is opaque.
     Its colour is the palette index with the largest weighted count among the opaque samples. Outline colours
     (is_outline, a 256 bool table) are scaled by w_out, a per-pixel (h, w) float weight: above 1 it keeps a
     sub-pixel outline a continuous line, below 1 it drops faint creases. Ties go to the lowest index, so the
-    same block always gives the same pixel."""
+    same block always gives the same pixel.
+
+    Inside a clip (mem.active, see harness.py) the vote has memory: a pixel keeps last frame's colour while that
+    colour still holds KEEP_RATIO of the winner's weight, and opacity is a dead band (opaque from 5/8 of the block,
+    transparent again below 3/8) instead of a hard half. The first frame of a clip, and any still, vote as before."""
     H, W = idx_ss.shape
     h, w = H // ss, W // ss
     blocks = idx_ss.reshape(h, ss, w, ss).transpose(0, 2, 1, 3).reshape(h, w, ss * ss)
     n_opaque = (blocks != TRANSPARENT).sum(-1)
+    if mem is not None and mem.active:
+        labels = np.array([v for v in np.unique(blocks) if v != TRANSPARENT], np.uint8)
+        out = np.full((h, w), TRANSPARENT, np.uint8)
+        if len(labels):
+            weights = np.stack([(blocks == v).sum(-1).astype(np.float32) * (w_out if is_outline[v] else 1.0)
+                                for v in labels])
+            lab, _ = mem.hold("col", labels, weights)
+            out = np.where(lab >= 0, lab, TRANSPARENT).astype(np.uint8)
+        prev_op = mem.get("opaque")
+        n = ss * ss
+        if prev_op is None:
+            opaque = n_opaque * 2 >= n
+        else:
+            opaque = np.where(prev_op, n_opaque * 8 >= 3 * n, n_opaque * 8 >= 5 * n)
+        mem.put("opaque", opaque)
+        out[~opaque] = TRANSPARENT
+        return out
     out = np.full((h, w), TRANSPARENT, np.uint8)
     best = np.zeros((h, w), np.float32)
     for v in np.unique(blocks):
@@ -487,4 +508,4 @@ def render_frame(ctx, size):
     is_outline = np.zeros(256, bool)
     for i in set(OUTLINE_FOR.values()):
         is_outline[i] = True
-    return majority_downscale(idx, SS, is_outline, w_out)
+    return majority_downscale(idx, SS, is_outline, w_out, getattr(ctx, "mem", None))

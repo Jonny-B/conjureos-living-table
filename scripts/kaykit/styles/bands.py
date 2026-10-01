@@ -34,6 +34,13 @@ TRANSPARENT = 255
 # ---------------------------------------------------------------------------
 SS = {"16x24": 12, "32x48": 8, "48x72": 8}   # supersample per size (same number of sub-pixels per block at 16x24 is cheap)
 COVER_THRESHOLD = 0.36                        # block coverage needed to be solid (lower keeps thin blades)
+# Inside a clip (ctx.mem.active, see harness.py) the decisions below have memory, so a pixel on a threshold does not
+# flicker: solid from COVER_THRESHOLD + COVER_MARGIN, empty again only below COVER_THRESHOLD - COVER_MARGIN; the
+# material a pixel had last frame stays while it holds KEEP_RATIO of the winner's weight; the band moves up past a cut
+# only at cut + BAND_MARGIN and back down below cut - BAND_MARGIN (while the material is the same). Stills use the
+# plain thresholds.
+COVER_MARGIN = 0.08
+BAND_MARGIN = 0.05
 LIGHT_DIR = np.array([-0.45, 0.60, 0.66], dtype=np.float32)   # camera space: x right, y up, z toward the viewer
 LIGHT_DIR = LIGHT_DIR / np.linalg.norm(LIGHT_DIR)
 BAND_CUTS = (0.35, 0.80)                      # n.L below the first is shadow, above the second is light
@@ -316,8 +323,13 @@ def render_frame(ctx, size):
         lum = np.array([0.30, 0.59, 0.11], dtype=np.float32)
         lam = lam + GRADIENT_K * ((orig[..., :3] - alb[..., :3]) * lum).sum(-1)
 
+    mem = getattr(ctx, "mem", None)
+    on = mem is not None and mem.active
     cover = _blk(opaque.astype(np.float32), H, W, ss) / float(ss * ss)
-    solid = cover >= COVER_THRESHOLD
+    if on:
+        solid = mem.level("solid", cover, (COVER_THRESHOLD,), COVER_MARGIN) > 0
+    else:
+        solid = cover >= COVER_THRESHOLD
 
     present = [int(m) for m in np.unique(mat) if m >= 0]
     counts = np.zeros((len(present), H, W), dtype=np.float32)
@@ -327,13 +339,20 @@ def render_frame(ctx, size):
         counts[j] = _blk(msk.astype(np.float32), H, W, ss)
         lsum[j] = _blk(np.where(msk, lam, 0.0).astype(np.float32), H, W, ss) + _state["bias"][m] * counts[j]
     weights = np.array([_state["weight"][m] for m in present], dtype=np.float32)[:, None, None]
-    win = (counts * weights).argmax(0)
+    if on:
+        prev_lab = mem.get("mat")
+        lab, win = mem.hold("mat", np.asarray(present), counts * weights)
+    else:
+        win = (counts * weights).argmax(0)
     wcount = np.take_along_axis(counts, win[None], 0)[0]
     wlight = np.take_along_axis(lsum, win[None], 0)[0] / np.maximum(wcount, 1.0)
     mat_id = np.asarray(present, dtype=np.int32)[win]
     conf = wcount / np.maximum(cover * ss * ss, 1.0)          # how much of the block's solid area is the winner
 
-    band = np.where(wlight < BAND_CUTS[0], 0, np.where(wlight < BAND_CUTS[1], 1, 2)).astype(np.int32)
+    if on:
+        band = mem.level("band", wlight, BAND_CUTS, BAND_MARGIN, None if prev_lab is None else prev_lab == lab).astype(np.int32)
+    else:
+        band = np.where(wlight < BAND_CUTS[0], 0, np.where(wlight < BAND_CUTS[1], 1, 2)).astype(np.int32)
     mat_id = np.where(solid, mat_id, -1)
 
     solid, mat_id, band = cleanup(solid, mat_id, band, conf, present)

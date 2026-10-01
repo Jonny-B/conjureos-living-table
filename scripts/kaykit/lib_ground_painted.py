@@ -1,7 +1,8 @@
 """
 KayKit library maker "ground-painted": every ground, wall and edge tile of the game's fantasy set, in the PAINTED style.
 
-Scope (targets in .cache/kaykit/library/targets.json): group ground (40 ids), wall (5) and edge (190), at 16 and 32 px per tile.
+Scope (targets in .cache/kaykit/library/targets.json): group ground (40 ids), wall (5), wall_join (21: the 16 wall profile joins, their 4 run variants and the
+north-south door jamb overlay, all render-only) and edge (190), at 16 and 32 px per tile.
 The approach is env_painted.py's: the 3D render supplies the layout, a pixel artist's texture pass (plain NumPy) supplies the surface.
 What each material takes from KayKit, and what it does not:
 
@@ -14,6 +15,9 @@ What each material takes from KayKit, and what it does not:
                  of ashlar and painted; no pixels come from the render. wall_stone, _b, _c are faces (the three differ in where the joints
                  fall), wall_stone_top the lit coping, wall_stone_base a face with the graded cast shadow the game's test counts. The game's
                  ONE row convention
+  wall joins     the wall profile set (render-only, see "Wall profiles" below): the same walls seen from above, one tile per shape of the
+                 4-bit neighbour mask, with the cap, band and face drawn from this maker's own wall faces and coping, and the north-south
+                 door's jamb overlay sliced from the joins
   forest canopy  Medieval Hexagon tree_single_B rendered from straight above (the crown's own facets and light), stamped on a periodic crown
                  lattice and painted leafy
   grass, pale grass, sand, water   painted: no KayKit piece is a tileable ground texture (the Hexagon grass and water are one flat colour)
@@ -1944,6 +1948,153 @@ def paint_walls(T, src=None):
 
 
 # ---------------------------------------------------------------------------
+# Wall profiles: stone walls seen from above, one tile per shape (render-only; src/games/livingtable/render/wallProfiles.ts).
+#
+# The DM keeps laying wall_stone (and _b, _c, _top, _base); at draw time the renderer reads each wall cell's four neighbours as a 4 bit mask
+# (N=1, E=2, S=4, W=8, targets.json `join.mask`) and draws wall_stone_join_<join> instead. A wall whose south neighbour is not wall shows a
+# FACE under a thin cap band; a wall whose south neighbour is wall shows CAP ONLY, so a north-south run is a stone strip seen from above.
+#
+# Every number below is in 16 px units and is multiplied by k = T / 16 (the band is 6k rows), the way the game's own wallJoinPixels draws
+# the hand-drawn set (scripts/assets/fantasy.ts), whose edge rule this follows exactly:
+#   open north  row 0 outline (index 0), row 1 STEEL_LIGHT (8) across the cap;   open west  col 0 outline, col 1 lit (rows 1..4 on a faced join)
+#   open east   col 15 outline, col 14 shade (25);   a cap-only cell that joins east or west gets that side's outline from row 6 down (its cap
+#   drops to the neighbour's face);   inner corners (0,0) / (15,0) outline when north and a side both join;   a cream speck at (1,1) when
+#   north and west are both open.
+# What comes from this maker's own walls: the cap surface is wall_stone_top's coping recipe (lit slabs, tonal patches, mortar joints with a
+# shaded edge at 32 px) laid with its slab joints ACROSS the strip for a run and DOWN the band for a faced join; the face is the bottom
+# (T - 6k) rows of faces a, b, c (a dict {"a": .., "b": .., "c": ..}) with the last 3k rows taken from wall_stone_base's cast shadow. Rows
+# 0..2k and 14k..16k of every run, and columns 0..2k and 14k..16k of every band, carry no joint, patch or clump, so a run, a jamb and a
+# junction meet without doubling a joint at the tile seam: any variant meets any variant.
+# ---------------------------------------------------------------------------
+OUTLINE = 0
+STEEL_LIGHT = 8
+CREAM = 5
+JOIN_NAMES = ["none", "n", "e", "ne", "s", "ns", "es", "nes", "w", "nw", "ew", "new", "sw", "nsw", "esw", "nesw"]     # indexed by mask (render/wallProfiles.ts)
+JOIN_VARIANT_SUFFIXES = {"ns": ["_b", "_c"], "ew": ["_b", "_c"]}
+JOIN_PREFIX = "wall_stone_join_"
+JAMBS_ID = "wall_stone_jambs_ns"
+RUN_JOINTS = {"a": (8,), "b": (4, 11), "c": (6,)}             # slab joint rows of a cap strip, 16 px units: 4 or more from the tile border, so runs, jambs and junctions meet
+BAND_JOINTS = {"a": 6, "b": 10, "c": 7}                       # the slab joint column of a cap band (none when the band continues a strip from the north)
+BAND_ROWS = 6                                                 # a faced join's cap band, 16 px units
+FACE_SHADOW_ROWS = 3                                          # the last rows of a face take wall_stone_base's cast shadow
+
+
+def cap_surface(T, key, rows_joints=(), cols_joint=None, bounds=None, clumps=2):
+    """A cap surface of the coping recipe on a T x T canvas (the caller crops it): lit slabs, a few tonal patches and clumps kept off the
+    outer 2k, and mortar joints (base, dark, mortar then lit shading at 32 px, mortar then lit at 16 px, as wall_stone_top draws its
+    joints) across the rows `rows_joints` (16 px units) or down the column `cols_joint`. `bounds` is (y0, y1) in pixels: the rows where
+    patches, clumps and the column joint may sit (a band's rows 2k..4k; a run's 2k..14k)."""
+    k = T // 16
+    r = rng("join-cap", T, key)
+    cap = np.full((T, T), STONE["lit"], np.int32)
+    cell = max(3, T // 8)
+    nz = pv_noise(T, T, cell, cell + 1, ("join-cap-tone", T, key))
+    lev = despeckle(despeckle(np.where(nz < 0.09, -1, 0).astype(np.int32)))
+    y0, y1 = bounds if bounds else (2 * k, T - 2 * k)
+    keep = np.zeros((T, T), bool)
+    keep[y0:y1, 2 * k:T - 2 * k] = True
+    cap = np.where((lev < 0) & keep, STONE["base"], cap)
+    joint = np.zeros((T, T), bool)
+    for j in rows_joints:                                                      # a joint across the strip: slab edge shading above, mortar, the next slab's lit edge
+        yy = j * k
+        cap[yy, :] = STONE["mortar"]
+        joint[max(0, yy - 2 * k):yy + k + 1, :] = True
+        if k > 1:
+            cap[yy - 1, :] = STONE["dark"]
+            cap[yy - 2, :] = STONE["base"]
+        cap[yy + 1, :] = STONE["lit"]
+    if cols_joint is not None:                                                 # a joint down the band, only in the rows decoration may sit
+        xx = cols_joint * k
+        cap[y0:y1, xx] = STONE["mortar"]
+        joint[y0:y1, max(0, xx - 2 * k):xx + k + 1] = True
+        if k > 1:
+            cap[y0:y1, xx - 1] = STONE["dark"]
+            cap[y0:y1, xx - 2] = STONE["base"]
+        cap[y0:y1, xx + 1] = STONE["lit"]
+    for _ in range(clumps):
+        for _try in range(40):
+            shape = clump_shapes()[int(r.randint(0, 6))]
+            x = int(r.randint(3 * k, T - 5 * k))
+            y = int(r.randint(y0, max(y0 + 1, y1 - 1)))
+            cells = [(x + dx * k + i, y + dy * k + j) for dy, row in enumerate(shape) for dx, ch in enumerate(row) if ch == "x" for i in range(k) for j in range(k)]
+            if all(y0 <= cy < y1 and 2 * k <= cx < T - 2 * k and not joint[cy, cx] and cap[cy, cx] in (STONE["lit"], STONE["base"]) for cx, cy in cells):
+                val = STONE["dark"] if r.rand() < 0.4 else STONE["base"]
+                for cx, cy in cells:
+                    cap[cy, cx] = val
+                break
+    return cap
+
+
+def join_pixels(T, mask, variant, faces, base):
+    """One wall join tile: a faced join (south open) is the cap band, a lip over the face and its cast shadow; a cap-only join is the run
+    surface top to bottom. Then the open-side edges and the inner corners (see the header above)."""
+    k = T // 16
+    n, e, s, w = bool(mask & 1), bool(mask & 2), bool(mask & 4), bool(mask & 8)
+    B = BAND_ROWS * k
+    if s:
+        px = cap_surface(T, ("run", variant), rows_joints=RUN_JOINTS[variant], clumps=2 + 2 * (k > 1))
+    else:
+        band = cap_surface(T, ("band", variant), cols_joint=None if n else BAND_JOINTS[variant], bounds=(2 * k, B - 2 * k), clumps=1 + (k > 1))[:B]
+        band[B - 2 * k:B - k, :] = STONE["base"]                               # the lip's shade
+        band[B - k:B, :] = OUTLINE                                             # and its line
+        face = faces[variant][B:T].copy()
+        face[T - B - FACE_SHADOW_ROWS * k:] = base[T - FACE_SHADOW_ROWS * k:]  # the last 3k rows: wall_stone_base's cast shadow
+        px = np.concatenate([band, face], 0)
+    fe = T - FACE_SHADOW_ROWS * k                                              # first row of the shadow: the face ends here
+    if not s:                                                                  # face ends: the lit edge of the first block on an open west, the dark joint on an open east
+        if not w:
+            px[B:fe, k:2 * k] = STONE["lit"]
+        if not e:
+            px[B:fe, 14 * k:15 * k] = STONE["mortar"]
+    if not n:
+        px[0:k, :] = OUTLINE
+        px[k:2 * k, :] = STEEL_LIGHT
+    if not w:
+        px[:, 0:k] = OUTLINE
+        px[(0 if n else k):(T if s else 5 * k), k:2 * k] = STEEL_LIGHT
+    if not e:
+        px[:, 15 * k:] = OUTLINE
+        px[(0 if n else 2 * k):(T if s else 4 * k), 14 * k:15 * k] = STONE["dark"]
+    if s and w:
+        px[B:, 0:k] = OUTLINE
+        px[B:, k:2 * k] = STEEL_LIGHT
+    if s and e:
+        px[B:, 15 * k:] = OUTLINE
+        px[B:, 14 * k:15 * k] = STONE["dark"]
+    if n and w:
+        px[0:k, 0:k] = OUTLINE
+    if n and e:
+        px[0:k, 15 * k:] = OUTLINE
+    if not n and not w:
+        px[k:2 * k, k:2 * k] = CREAM
+    return px.astype(np.uint8)
+
+
+def join_jambs(T, run, end):
+    """Both jambs of a north-south door as one overlay on the door's own square, SLICED from this maker's own joins so they always match
+    them: rows 0..1 are the run's last two, row 2 the north jamb's end line, rows 3..12 transparent (the room's floor shows through the
+    gap), rows 13..15 the first three of the north end of a run (the south jamb's outlined top)."""
+    k = T // 16
+    out = np.full((T, T), TRANSPARENT, np.uint8)
+    out[0:2 * k] = run[14 * k:]
+    out[2 * k:3 * k] = OUTLINE
+    out[13 * k:] = end[:3 * k]
+    return out
+
+
+def paint_joins(T, faces, top, base):
+    """The 16 base joins, the 4 run variants and the jamb overlay. `faces` is [a, b, c] (wall_stone, _b, _c), `top` the coping (the recipe the
+    cap surfaces follow, kept for the signature the maker's other painters share), `base` wall_stone_base. Returns {assetId: (T, T) uint8}."""
+    out = {}
+    for mask, join in enumerate(JOIN_NAMES):
+        out[JOIN_PREFIX + join] = join_pixels(T, mask, "a", faces, base)
+        for i, suffix in enumerate(JOIN_VARIANT_SUFFIXES.get(join, [])):
+            out[JOIN_PREFIX + join + suffix] = join_pixels(T, mask, "bc"[i], faces, base)
+    out[JAMBS_ID] = join_jambs(T, out[JOIN_PREFIX + "ns"], out[JOIN_PREFIX + "s"])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Edges: the game's own transition tiles (scripts/assets/fantasy.ts: EDGE_PAIRS, ORTHO_VARIANTS, INNER_VARIANTS, orthoMask, innerMask)
 # made from this library's base tiles, with a painted bank (a lit lip, a shadow, turf, foam) instead of the game's drawn one.
 #
@@ -2153,6 +2304,8 @@ def asset_tiles(T, src):
     four("cliff_face", "cliff_face")
     for k, v in m["walls"].items():
         tiles[k] = v
+    w = m["walls"]
+    tiles.update(paint_joins(T, {"a": w["wall_stone"], "b": w["wall_stone_b"], "c": w["wall_stone_c"]}, w["wall_stone_top"], w["wall_stone_base"]))
     base = {"grass": m["grass"]["a"], "pale": m["pale"]["a"], "dirt": m["dirt"]["a"], "sand": m["sand"]["a"], "stone": m["stone"]["a"],
             "water": m["water"]["a"], "cliff_top": m["cliff_top"]["a"]}
     for prefix, over, under, style, spec in FAMILIES:
@@ -2169,7 +2322,7 @@ def load_targets():
 
 
 def write_part(T, tiles):
-    targets = [t for t in load_targets() if t["group"] in ("ground", "wall", "edge")]
+    targets = [t for t in load_targets() if t["group"] in ("ground", "wall", "wall_join", "edge")]
     sprites, gaps = [], []
     for t in targets:
         if t.get("outOfPlay"):
@@ -2181,7 +2334,7 @@ def write_part(T, tiles):
         k = T // 16
         assert a.shape == (t["h16"] * k, t["w16"] * k), (t["assetId"], a.shape)
         sprites.append({"assetId": t["assetId"], "kind": t["kind"], "name": t["name"], "walkable": t["walkable"],
-                        "pixels": [[int(v) for v in row] for row in a]})
+                        "pixels": [[-1 if v == TRANSPARENT else int(v) for v in row] for row in a]})      # the jamb overlay has clear pixels (255 here, -1 in the part)
     part = {"maker": MAKER, "size": T, "style": STYLE, "sprites": sprites, "gaps": gaps}
     os.makedirs(PARTS, exist_ok=True)
     path = os.path.join(PARTS, f"{MAKER}-{T}.json")
@@ -2337,6 +2490,83 @@ def room_image(T, tiles, cols=12, rows=8, seed=5):
     return img
 
 
+# The wall profile mask (render/wallProfiles.ts wallMaskAt), ported: the scenes below draw the joins the way the game's wall pass picks them.
+BENCH_SCENE = ["".join("#" if (x in (0, 19) or y in (0, 14) or (x == 11 and y != 7)) else "d" if (x, y) == (11, 7) else "." for x in range(20)) for y in range(15)]
+DUNGEON_SCENE = [      # the DM's own convention (T the north edge, B the south edge, # the walls, d a door): L corners, T junctions, a crossing, a pillar, two doors, gaps
+    "TTTTTTTTTTTTTT.TTTTT", "#........#.........#", "#........#.........#", "#........d.........#", "#........#....#....#", "#........#.........#",
+    "####d#####.........#", "#........#......#..#", "#........#......#..#", "#........#...######X", ".........#...#..#..#", "#............#..#..#",
+    "#........#...#.....#", "#........#.........#", "BBBBBBBBBBBBBBBBBBBB"]
+
+
+def wall_mask(scene, x, y):
+    """The join mask of the wall at (x, y): N=1 E=2 S=4 W=8. A door joins the two walls either side of it (the cell beyond it must be on the wall line)."""
+    h, w = len(scene), len(scene[0])
+    inb = lambda cx, cy: 0 <= cx < w and 0 <= cy < h
+    wall = lambda cx, cy: inb(cx, cy) and scene[cy][cx] in "#TBX"
+    line = lambda cx, cy: wall(cx, cy) or (inb(cx, cy) and scene[cy][cx] == "d")
+    joins = lambda dx, dy: wall(x + dx, y + dy) or (inb(x + dx, y + dy) and scene[y + dy][x + dx] == "d" and line(x + 2 * dx, y + 2 * dy))
+    return (1 if joins(0, -1) else 0) | (2 if joins(1, 0) else 0) | (4 if joins(0, 1) else 0) | (8 if joins(-1, 0) else 0)
+
+
+def tile_hash(x, y, seed=0):
+    """tileVariantHash (render/tileVariants.ts), so the scatter here is the scatter the game draws."""
+    m = 0xffffffff
+    imul = lambda a, b: ((a & m) * (b & m)) & m
+    h = (imul(x, 374761393) ^ imul(y, 668265263) ^ imul(seed, 2246822519)) & m
+    h = imul(h ^ (h >> 15), 2246822519)
+    return (h ^ (h >> 13)) & m
+
+
+def side_on_door(scene, x, y):
+    """A door in a north-south wall (wall or door to its north and south, not on both east and west) draws side-on (doorProfileFor)."""
+    h, w = len(scene), len(scene[0])
+    line = lambda cx, cy: 0 <= cx < w and 0 <= cy < h and scene[cy][cx] in "#TBXd"
+    return line(x, y - 1) and line(x, y + 1) and not (line(x + 1, y) and line(x - 1, y))
+
+
+def join_image(T, tiles, scene, props=None, seed=0):
+    """A scene drawn through the wall pass: floor, every wall cell its join (the run variants scattered by the game's hash), and a door as its
+    jambs over the floor with the side-on leaf over them (props: {assetId: array}, optional; a door in an east-west wall shows its front sprite)."""
+    h, w = len(scene), len(scene[0])
+    img = np.zeros((h * T, w * T), np.uint8)
+    floor = SCENE_NAMES["stone"]
+    for y in range(h):
+        for x in range(w):
+            c = scene[y][x]
+            if c in "#TBX":
+                join = JOIN_NAMES[wall_mask(scene, x, y)]
+                ids = [JOIN_PREFIX + join] + [JOIN_PREFIX + join + sfx for sfx in JOIN_VARIANT_SUFFIXES.get(join, [])]
+                tid = ids[tile_hash(x, y, seed) % len(ids)]
+            else:
+                tid = floor[tile_hash(x, y, seed + 1) % 4]
+            img[y * T:(y + 1) * T, x * T:(x + 1) * T] = tiles[tid]
+    for y in range(h):
+        for x in range(w):
+            if scene[y][x] != "d":
+                continue
+            cell = img[y * T:(y + 1) * T, x * T:(x + 1) * T]
+            layers = [JAMBS_ID, "door_closed_ns"] if side_on_door(scene, x, y) else ["door_closed"]
+            for lid in layers:
+                a = tiles.get(lid) if lid == JAMBS_ID else (props or {}).get(lid)
+                if a is not None:
+                    cell[:] = np.where(a != TRANSPARENT, a, cell)
+    return img
+
+
+def jambs_door_sheet(T, tiles):
+    """The 20 joins by mask (plus variants) and the jamb overlay on a stone floor, for looking at every shape at once."""
+    ids = [JOIN_PREFIX + j for j in JOIN_NAMES] + [JOIN_PREFIX + j + s for j in ("ns", "ew") for s in ("_b", "_c")] + [JAMBS_ID]
+    items = []
+    for i, tid in enumerate(ids):
+        cell = tiles["floor_stone"].copy()
+        a = tiles[tid]
+        cell = np.where(a != TRANSPARENT, a, cell).astype(np.uint8)
+        items.append((tid.replace(JOIN_PREFIX, "").replace("wall_stone_", ""), cell))
+        if (i + 1) % 8 == 0:
+            items.append((None, None))
+    return items
+
+
 def jump_share(a, b, axis, lum):
     """Share of boundary pixel pairs between two abutting tiles whose luminance jumps by more than 14 (of 255)."""
     la, lb = lum[a.astype(np.int64)], lum[b.astype(np.int64)]
@@ -2375,7 +2605,8 @@ def field_checks(T, tiles):
     k = T // 16
     out = {"sdBelow18": [], "autocorrOver": {}, "wrapOver": []}
     ids = [i for i in tiles if i.startswith(("floor_grass", "floor_dirt", "floor_sand", "floor_stone", "water", "forest_canopy", "cliff_top", "cliff_face", "wall_stone"))
-           and "edge" not in i and i not in ("floor_grass_tufted", "floor_grass_flowers", "floor_stone_cracked", "floor_stone_drain", "wall_stone_top", "wall_stone_base")]
+           and "edge" not in i and i not in ("floor_grass_tufted", "floor_grass_flowers", "floor_stone_cracked", "floor_stone_drain", "wall_stone_top", "wall_stone_base")
+           and not i.startswith(("wall_stone_join_", "wall_stone_jambs"))]       # the wall profile joins are not field tiles (not in the game's FIELD_TILES)
     for i in ids:
         a = tiles[i]
         v = lum[a.astype(np.int64)]
@@ -2555,6 +2786,18 @@ def run(T, src, report):
     report.setdefault("variantChecks", {})[str(T)] = variant_checks(tiles)
     report.setdefault("edgeChecks", {})[str(T)] = edge_checks(T, tiles)
     report.setdefault("fieldChecks", {})[str(T)] = field_checks(T, tiles)
+    jt = {k_: v for k_, v in tiles.items() if k_ in ("floor_stone", "floor_stone_b", "floor_stone_c", "floor_stone_d") or k_.startswith(JOIN_PREFIX) or k_ == JAMBS_ID}
+    props_path = os.path.join(PARTS, f"props-{T}.json")
+    leaf = {}
+    if os.path.exists(props_path):
+        with open(props_path) as fh:
+            for sp in json.load(fh)["sprites"]:
+                leaf[sp["assetId"]] = np.array(sp["pixels"], np.int32)
+        leaf = {n_: np.where(a_ < 0, TRANSPARENT, a_).astype(np.uint8) for n_, a_ in leaf.items()}
+    sheet(jambs_door_sheet(T, jt), os.path.join(out, f"joins-{T}.png"), zoom=6 if T == 16 else 3, width=8 * (T + 4) * (6 if T == 16 else 3))
+    for nm, scn in (("bench", BENCH_SCENE), ("dungeon", DUNGEON_SCENE)):
+        img = join_image(T, jt, scn, leaf)
+        sheet([(nm.upper() + " JOINS", img)], os.path.join(out, f"joins-{nm}-{T}.png"), zoom=3 if T == 16 else 2, width=img.shape[1] * (3 if T == 16 else 2) + 10)
     room = room_image(T, tiles)
     sheet([("ROOM", room)], os.path.join(out, f"room-{T}.png"), zoom=4 if T == 16 else 2, width=room.shape[1] * (4 if T == 16 else 2) + 10)
     scene = scene_image(T, tiles)
@@ -2564,6 +2807,8 @@ def run(T, src, report):
     # numbers: every tile's luminance stats against the game's own test thresholds
     flags = []
     for aid, a in tiles.items():
+        if (a == TRANSPARENT).any():           # the jamb overlay: clear by design, no luminance of its own
+            continue
         s = tile_stats(a)
         stats[aid] = s
         t = targets[aid]

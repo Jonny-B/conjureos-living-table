@@ -21,6 +21,8 @@ Run from the repo root (Blender 5.2 headless). One process per (style, group):
   blender -b --factory-startup --python scripts/kaykit/cast.py -- assemble --style bands        (raw renders -> cast.json, parts, sheet)
   blender -b --factory-startup --python scripts/kaykit/cast.py -- preview                       (hi-res look at the 3D parts)
   blender -b --factory-startup --python scripts/kaykit/cast.py -- parity --style plain          (Knight vs the harness, pixel for pixel)
+  add  --stabilise off  to render, parity or assemble as it was before the temporal fixes below (A/B, regression checks)
+  add  --snap idle,walk to override which clips are snapped to whole pixels (default: harness.SNAP_CLIPS)
 
 Outputs
   .cache/kaykit/out/cast-<style>/cast.json     the animated cast (format below)
@@ -60,6 +62,20 @@ cast.json
     layerOrderByArchetype: { knight: { down: [...], ... }, ... } }
   data: every frame's palette indices (0..47, 255 transparent), canvasW*canvasH
   bytes per frame, concatenated, zlib, base64 (the harness encoding).
+
+Temporal stability (harness.ClipRun and ctx.mem; the harness draws its own frames through the same code)
+  Every pixel was decided on its own, frame by frame, so a pixel on a threshold flipped and flipped back (the idle's
+  only motion is a sub-pixel hip bob) and the figure shimmered. Three parts, all on by default:
+  * Frames are rendered in clip order through ClipRun. A looping clip (idle, walk) runs twice and keeps the second pass,
+    so the clip wraps cleanly; once-clips (attack, hit, death, interact, cheer) run once, cold at frame 0. Each thing
+    drawn each frame (the body, every gear layer, every gear mask) is its own memory stream.
+  * Each style's per-pixel decisions have a dead band (coverage, material, shade band, and here the gear mask): a pixel
+    keeps its colour while that colour still holds 75% of the winner's weight, and a threshold must be crossed by a
+    margin to flip back. Stills (the static tokens and overlays) have no memory and are unchanged.
+  * The idle is also snapped to whole pixels: the camera follows the fractional part of the hips' motion (one camera
+    per frame, shared by the body and every layer, so layers register), and never lifts the figure off the ground line.
+    Walk and the once-clips were measured with and without it and left alone (it helps the 16 px walk, hurts the 32 px
+    one, and is mixed on the rest); see harness.SNAP_CLIPS.
 
 Framing rules (identical to harness.py)
   Per character the camera frames the FIT meshes (body plus head gear and cape,
@@ -149,8 +165,15 @@ def ske_asset(name):
     return os.path.join(SKE, "Assets", "gltf", name)
 
 
+STAB = {"on": True, "snap": None}     # --stabilise on|off, --snap clip,clip|none (None keeps the harness's SNAP_CLIPS)
+
+
 def load_harness():
-    return load_module(os.path.join(ROOT, "scripts", "kaykit", "harness.py"), "kaykit_harness")
+    H = load_module(os.path.join(ROOT, "scripts", "kaykit", "harness.py"), "kaykit_harness")
+    H.STABILISE = STAB["on"]
+    if STAB["snap"] is not None:
+        H.SNAP_CLIPS = STAB["snap"]
+    return H
 
 
 def load_targets():
@@ -739,6 +762,7 @@ def postprocess(ov, pc, pal):
 class CastRender:
     MASK_SS = 8
     MASK_COVER = 0.40
+    MASK_MARGIN = 0.10      # dead band either side of MASK_COVER inside a clip (stills use the plain threshold)
 
     def __init__(self, H, char_id, style_name):
         self.H = H
@@ -781,8 +805,12 @@ class CastRender:
         for k, o in self.parts.items():
             o.hide_render = k not in ks
 
-    def render(self, keys):
+    def render(self, keys, stream="body"):
+        """One style render of the parts in `keys`. `stream` names the render for the temporal memory (ctx.mem): every
+        thing drawn each frame (the body, each gear layer) keeps its own memory, so two renders of one frame never
+        read each other's."""
         self.show(keys)
+        self.ctx.mem.stream = stream
         f = self.style.render_frame(self.ctx, self.ctx.size)
         size = self.ctx.size
         if f.shape != (size.canvas_h, size.canvas_w) or f.dtype != np.uint8:
@@ -793,9 +821,12 @@ class CastRender:
         self.stats["renders"] += 1
         return f
 
-    def gear_mask(self, gear_keys, vis_keys):
-        """Canvas-sized bool: the nearest surface is one of gear_keys (Workbench object colours, no AA, supersampled)."""
+    def gear_mask(self, gear_keys, vis_keys, stream="mask"):
+        """Canvas-sized bool: the nearest surface is one of gear_keys (Workbench object colours, no AA, supersampled).
+        Inside a clip the coverage threshold has a dead band (MASK_COVER +- MASK_MARGIN, remembered per `stream`), so
+        a layer's membership does not flicker on a pixel the piece only just covers."""
         ctx, s = self.ctx, self.ctx.scene
+        ctx.mem.stream = stream
         sh = s.display.shading
         saved = (s.render.engine, sh.light, sh.color_type, tuple(sh.single_color), s.display.render_aa,
                  s.view_settings.view_transform)
@@ -816,7 +847,7 @@ class CastRender:
         hit = ((rgba[..., 3] > 0.5) & (rgba[..., 0] > 0.5)).astype(np.float32)
         cover = hit.reshape(size.canvas_h, ss, size.canvas_w, ss).mean(axis=(1, 3))
         self.stats["mask_renders"] += 1
-        return cover >= self.MASK_COVER
+        return ctx.mem.level("cover", cover, (self.MASK_COVER,), self.MASK_MARGIN) > 0
 
     # -- layers -----------------------------------------------------------------
     def vis_with(self, pc):
@@ -825,8 +856,8 @@ class CastRender:
     def layer(self, pc, A, track=True):
         """The piece as an overlay on body render A: where it is the nearest surface, plus its own outline."""
         vis = self.vis_with(pc)
-        Bf = self.render(vis)
-        M = self.gear_mask(pc["add"], vis)
+        Bf = self.render(vis, "L:" + pc["id"])
+        M = self.gear_mask(pc["add"], vis, "M:" + pc["id"])
         near = dilate(M, 6 if (pc["hide"] or pc["role"] == "outer") else 4)
         sel = M | ((Bf != A) & near)
         ov = np.where(sel, Bf, TRANSPARENT).astype(np.uint8)
@@ -938,16 +969,19 @@ def render_character(H, char_id, style_name, quick=False, sizes_k=SIZES_K, clips
                 ctx.clip, ctx.facing = clip_id, facing
                 frames = []
                 gframes = {pc["id"]: [] for pc in pieces}
-                for tt in times:
-                    cr.pose(action, tt, deg)
-                    A = cr.render(spec["body"])
-                    frames.append(A)
+                # ClipRun poses the figure, snaps the camera to whole pixels where the clip asks for it, and runs a
+                # looping clip twice (a warm-up pass whose frames are dropped) so the temporal memory wraps.
+                for _i, tt, keep in H.ClipRun(ctx, action, times, deg, loop, clip_id).steps():
+                    A = cr.render(spec["body"], "body")
+                    if keep:
+                        frames.append(A)
                     for pc in pieces:
-                        ov = cr.layer(pc, A)
+                        ov = cr.layer(pc, A, track=keep)
                         if pc["tier"] == "base":
                             ov = postprocess(ov, pc, pal)
-                        gframes[pc["id"]].append(ov)
-                    n_frames += 1
+                        if keep:
+                            gframes[pc["id"]].append(ov)
+                    n_frames += int(keep)
                 body_clips.append(clip_entry(k, clip_id, facing, frames, loop, fps, H.pack_frames(frames)))
                 for pid, fl in gframes.items():
                     gear_clips[pid].append(clip_entry(k, clip_id, facing, fl, loop, fps, H.pack_frames(fl)))
@@ -1085,6 +1119,12 @@ def parse_args():
             i += 2
         elif a == "--sizes":
             opts["sizes"] = tuple(int(x) // 16 for x in argv[i + 1].split(","))
+            i += 2
+        elif a == "--stabilise":
+            STAB["on"] = argv[i + 1] != "off"
+            i += 2
+        elif a == "--snap":
+            STAB["snap"] = tuple(x for x in argv[i + 1].split(",") if x and x != "none")
             i += 2
         else:
             i += 1
@@ -1530,10 +1570,10 @@ def cmd_parity(opts):
                 for facing, deg in (("down", 0.0), ("right", 90.0), ("up", 180.0), ("left", -90.0)):
                     ref, _ = harness_frames(style, "sword_shield", sid, clip, facing)
                     bad = 0
-                    for i, t in enumerate(times):
-                        cr.pose(action, t, deg)
-                        f = cr.render(cr.kit_keys())
-                        bad += int((f != ref[i]).sum())
+                    for i, t, keep in H.ClipRun(ctx, action, times, deg, loop, clip).steps():
+                        f = cr.render(cr.kit_keys(), "kit")
+                        if keep:
+                            bad += int((f != ref[i]).sum())
                     total_bad += bad
                     if bad or facing == "down":
                         print(f"[parity {style}] {sid} {clip} {facing}: {bad} differing pixels over {n} frames", flush=True)

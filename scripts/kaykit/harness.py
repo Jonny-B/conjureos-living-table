@@ -32,6 +32,20 @@ STYLE CONTRACT (scripts/kaykit/styles/<name>.py):
                         The pose and camera are already set for this frame;
                         use ctx.render_rgba(ss) to render at ss x the canvas
                         resolution with the same framing.
+
+TEMPORAL STABILITY (shared with cast.py, which draws the whole cast through the same code):
+  A style decides every pixel on its own, so a pixel sitting on a threshold flips from frame to frame and the sprite
+  shimmers. Two fixes live here so the harness and cast.py cannot drift apart:
+  * ClipRun renders one clip's frames in clip order and, for a looping clip, runs the loop twice and keeps the
+    second pass, so frame 0 agrees with the last frame and the clip wraps cleanly. For the clips in SNAP_CLIPS it
+    also shifts the camera, per frame, by the fractional part of how far the hips have moved since frame 0, so the
+    figure moves in whole output pixels only (the figure, not the camera, carries the sub-pixel idle bob).
+  * ctx.mem (Temporal) is a per-pixel memory between consecutive frames of a clip, keyed by ctx.mem.stream (one
+    stream per thing rendered each frame: the figure, a gear layer, a mask). A style asks it for the previous
+    frame's decision and uses a dead band: a pixel keeps its colour while that colour still holds KEEP_RATIO of the
+    winner's weight, and a coverage or shade threshold has to be crossed by a margin before the pixel flips back.
+    ctx.mem.active is False outside a ClipRun (stills, framing probes), and then every style behaves exactly as it
+    did before the memory existed. `--stabilise off` turns both fixes off for a whole run.
 """
 import base64
 import importlib.util
@@ -54,6 +68,78 @@ PALETTE_JSON = os.path.join(ROOT, ".cache", "kaykit", "palette-fantasy.json")
 
 TRANSPARENT = 255
 CAMERA_PITCH_DEG = 30.0  # how far the camera looks down; SNES field sprites are close to front-on
+
+# Temporal stability (see the docstring). STABILISE is switched by --stabilise on|off; SNAP_CLIPS by --snap a,b.
+STABILISE = True
+SNAP_CLIPS = ("idle",)   # clips whose figure is snapped to whole pixels; the others were measured and left alone
+KEEP_RATIO = 0.75        # a pixel keeps last frame's colour while it holds this share of the winner's weight
+SNAP_GROUND = True       # a snapped figure may sink below the canvas bottom edge but never rise off it (feet stay on the ground line)
+
+
+class Temporal:
+    """Per-pixel memory between consecutive frames of one clip. A style reads what it decided for the same pixel on
+    the previous frame (get) and stores what it decides now (put); everything is keyed by (stream, name). hold() and
+    level() are the two dead-band decisions every style needs, so they behave the same in all four."""
+
+    def __init__(self):
+        self.active = False
+        self.stream = "main"
+        self._prev = {}
+
+    def reset(self, active):
+        self._prev = {}
+        self.active = bool(active)
+
+    def get(self, name):
+        """Last frame's array for this (stream, name), or None (inactive, first frame, or never stored)."""
+        if not self.active:
+            return None
+        return self._prev.get((self.stream, name))
+
+    def put(self, name, value):
+        if self.active:
+            self._prev[(self.stream, name)] = np.array(value, copy=True)
+
+    def hold(self, name, labels, weights, win=None, win_w=None, ratio=None):
+        """Winner per pixel with memory. labels (k,) candidate ids, ascending so ties go to the lowest; weights
+        (k, h, w) float. The winner is the heaviest candidate unless last frame's label is still a candidate holding
+        at least `ratio` of the winner's weight, in which case it stays. `win` / `win_w` let a style name its own
+        winner (and that winner's weight) instead of the argmax. Returns (labels (h, w) int16, -1 where no candidate
+        has any weight; index of each label in `labels`, (h, w))."""
+        ratio = KEEP_RATIO if ratio is None else ratio
+        labels = np.asarray(labels)
+        if win is None:
+            kidx = weights.argmax(0)
+            win_w = np.take_along_axis(weights, kidx[None], 0)[0]
+            win = labels[kidx]
+        out = np.asarray(win).astype(np.int16)
+        prev = self.get(name)
+        if prev is not None and prev.shape == out.shape:
+            pw = (weights * (labels[:, None, None] == prev[None])).sum(0)
+            keep = (pw > 0) & (pw >= ratio * win_w)
+            out = np.where(keep, prev, out)
+        out = np.where(win_w > 0, out, -1).astype(np.int16)
+        self.put(name, out)
+        return out, (labels[:, None, None] == out[None]).argmax(0)
+
+    def level(self, name, value, cuts, margin, valid=None):
+        """Quantise `value` into len(cuts) + 1 levels (how many of the ascending cuts it has passed) with a dead
+        band: a pixel moves up past a cut only at cut + margin and back down only below cut - margin. `valid` (bool
+        array) marks pixels whose last frame's level still means something (the material did not change); the
+        others, and every pixel on the first frame, use the plain cuts."""
+        v = np.asarray(value)
+        prev = self.get(name)
+        lv = np.zeros(v.shape, np.int16)
+        for i, c in enumerate(cuts):
+            fresh = v >= c
+            if prev is None or prev.shape != v.shape:
+                above = fresh
+            else:
+                held = np.where(prev > i, v >= c - margin, v >= c + margin)
+                above = held if valid is None else np.where(valid, held, fresh)
+            lv += above
+        self.put(name, lv)
+        return lv
 
 # ---------------------------------------------------------------------------
 # The plan. Identical for every style.
@@ -147,6 +233,7 @@ class Ctx:
         self.loadout = None
         self.clip = None
         self.facing = None
+        self.mem = Temporal()      # see the docstring: per-pixel memory between a clip's frames
 
     # -- rendering helpers --------------------------------------------------
     def render_rgba(self, ss=1):
@@ -327,6 +414,80 @@ def frame_camera(ctx, size):
 
 
 # ---------------------------------------------------------------------------
+# One clip, rendered in order (the harness and cast.py both go through this)
+# ---------------------------------------------------------------------------
+
+def anchor_world(ctx):
+    """The rig's hips head in world space, from the evaluated rig (every KayKit rig has a 'hips' bone)."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    rig = ctx.rig.evaluated_get(dg)
+    pb = rig.pose.bones.get("hips") or rig.pose.bones[0]
+    return rig.matrix_world @ pb.head
+
+
+class ClipRun:
+    """The frames of one clip, in order, ready to render.
+
+        run = ClipRun(ctx, action, times, deg, loop, clip_id)
+        for i, t, keep in run.steps():
+            ...render whatever this frame needs (the pose and camera are already set)...
+            if keep: frames.append(...)
+
+    Looping clips are stepped twice (a warm-up pass, then the kept pass) so frame 0 starts from the memory of the last
+    frame. Once-clips are stepped once. For the clips in SNAP_CLIPS the camera is shifted each frame by the fractional
+    part of the hips' screen motion since frame 0, so the figure only ever moves by whole pixels; every pass of a
+    frame (a hero's body and each gear layer) shares that camera, so layers still register. With STABILISE off this
+    poses frame by frame and changes nothing else."""
+
+    def __init__(self, ctx, action, times, deg, loop, clip_id=None):
+        self.ctx, self.action, self.times, self.deg, self.loop = ctx, action, list(times), deg, loop
+        self.on = STABILISE
+        self.snap = self.on and clip_id in SNAP_CLIPS
+
+    def snap_shifts(self):
+        """Per frame, the camera shift (right, up) in WORLD units that cancels the fractional pixel part of the hips'
+        motion since frame 0. Frame 0 is never shifted."""
+        ctx = self.ctx
+        wpp = ctx.size.world_per_px
+        r, u, _ = camera_basis()
+        pts = []
+        for t in self.times:
+            pose(ctx, self.action, t, self.deg)
+            w = anchor_world(ctx)
+            pts.append((w.dot(r) / wpp, w.dot(u) / wpp))
+        out = []
+        for x, y in pts:
+            dx, dy = x - pts[0][0], y - pts[0][1]
+            out.append([(dx - math.floor(dx + 0.5)) * wpp, (dy - math.floor(dy + 0.5)) * wpp])
+        if SNAP_GROUND:
+            # Never lift the figure: planted feet that rode up by a fraction of a pixel would leave the ground line
+            # half a pixel short and flicker. Pushing every frame down by the largest lift (a constant, so the hips
+            # keep one sub-pixel phase) means the figure only ever sinks below the canvas edge, where it is clipped.
+            lift = -min(c[1] for c in out)
+            for c in out:
+                c[1] += lift
+        return out
+
+    def steps(self):
+        ctx = self.ctx
+        cam = ctx.camera
+        base = cam.location.copy()
+        r, u, _ = camera_basis()
+        shifts = self.snap_shifts() if self.snap else [(0.0, 0.0)] * len(self.times)
+        passes = 2 if (self.on and self.loop) else 1
+        ctx.mem.reset(self.on)
+        try:
+            for p in range(passes):
+                for i, t in enumerate(self.times):
+                    pose(ctx, self.action, t, self.deg)
+                    cam.location = base + r * shifts[i][0] + u * shifts[i][1]
+                    yield i, t, p == passes - 1
+        finally:
+            cam.location = base
+            ctx.mem.reset(False)
+
+
+# ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 
@@ -403,6 +564,11 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     style_name = argv[argv.index("--style") + 1] if "--style" in argv else "plain"
     quick = "--quick" in argv
+    global STABILISE, SNAP_CLIPS
+    if "--stabilise" in argv:
+        STABILISE = argv[argv.index("--stabilise") + 1] != "off"
+    if "--snap" in argv:
+        SNAP_CLIPS = tuple(x for x in argv[argv.index("--snap") + 1].split(",") if x and x != "none")
     style_path = os.path.join(ROOT, "scripts", "kaykit", "styles", f"{style_name}.py")
     spec = importlib.util.spec_from_file_location(f"kaykit_style_{style_name}", style_path)
     style = importlib.util.module_from_spec(spec)
@@ -443,8 +609,7 @@ def main():
                 for facing, deg in FACINGS:
                     ctx.clip, ctx.facing = clip_id, facing
                     frames = []
-                    for t in times:
-                        pose(ctx, action, t, deg)
+                    for _i, _t, keep in ClipRun(ctx, action, times, deg, loop, clip_id).steps():
                         f = style.render_frame(ctx, size)
                         if f.shape != (size.canvas_h, size.canvas_w) or f.dtype != np.uint8:
                             raise RuntimeError(f"{style_name}: render_frame returned {f.shape} {f.dtype}, "
@@ -452,8 +617,9 @@ def main():
                         bad = (f != TRANSPARENT) & (f >= ctx.usable)
                         if bad.any():
                             raise RuntimeError(f"{style_name}: render_frame used reserved/out-of-range palette indices")
-                        frames.append(f)
-                        renders += 1
+                        if keep:
+                            frames.append(f)
+                            renders += 1
                     seconds = (b - a) / 24.0
                     clips_out.append({
                         "loadout": lo["id"], "size": size.id, "clip": clip_id, "dir": facing,

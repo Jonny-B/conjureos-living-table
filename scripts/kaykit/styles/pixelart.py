@@ -32,6 +32,11 @@ Everything after that is numpy, at sprite resolution:
 
 The processing (process()) is pure numpy so it can be tuned offline on dumped
 passes; only prepare() and the render helpers touch Blender.
+
+Inside a clip (mem.active, see harness.py) the per-pixel decisions have memory so a pixel on a threshold does not
+flicker from frame to frame: the silhouette coverage, the material class, the mesh part, the shade level and the
+metal highlight each get a dead band (COVER_MARGIN, KEEP_RATIO, LEVEL_MARGIN, HILITE_MARGIN). Stills use the plain
+thresholds.
 """
 import os
 
@@ -240,7 +245,7 @@ def render_passes(ctx, ss=SS):
 def render_frame(ctx, size):
     p = render_passes(ctx)
     cls = _class_tables()
-    return process(p, size.canvas_h, size.canvas_w, ctx.palette, cls, facing=ctx.facing)
+    return process(p, size.canvas_h, size.canvas_w, ctx.palette, cls, facing=ctx.facing, mem=getattr(ctx, "mem", None))
 
 
 def _class_tables():
@@ -277,6 +282,11 @@ W_LIT, W_AO, W_TONE = 0.72, 0.22, 0.9
 HILITE_LIT = 0.84
 MEDIAN_PASSES = 1
 HILITE_RUN = 3          # longest straight run of highlight pixels
+# Dead bands used only inside a clip (mem.active): the margin a value must cross beyond its threshold before the
+# decision flips back.
+COVER_MARGIN = 0.07     # silhouette coverage around T_COVER
+LEVEL_MARGIN = 0.04     # shade value around each LEVEL_T cut
+HILITE_MARGIN = 0.04    # lit value around HILITE_LIT
 OUTLINE_LIT_STEPS, OUTLINE_SHADE_STEPS = 2, 3
 
 STEEL, SKIN, LEATHER, RED, GOLD, DARK = range(6)
@@ -349,8 +359,9 @@ def block_sum(a, H, W, ss):
     return a.reshape(H, ss, W, ss, *a.shape[2:]).sum(axis=(1, 3))
 
 
-def aggregate(p, H, W, cls):
-    """Per-sprite-pixel facts from the 8x passes."""
+def aggregate(p, H, W, cls, mem=None):
+    """Per-sprite-pixel facts from the 8x passes. With memory (mem.active) the material class and the mesh part keep
+    last frame's choice while it still holds KEEP_RATIO of the winner's weight."""
     alpha = p["alpha"]
     ss = alpha.shape[0] // H
     cid = cls["cls_id"][p["tex"], p["cell"]]
@@ -366,13 +377,26 @@ def aggregate(p, H, W, cls):
     cc = np.stack([block_sum((alpha & (cid == k)).astype(np.float32), H, W, ss) for k in range(6)], -1)
     objs = np.unique(p["obj"][alpha])
     oc = np.stack([block_sum((alpha & (p["obj"] == o)).astype(np.float32), H, W, ss) for o in objs], -1)
+    on = mem is not None and mem.active
+    same_cls = None
+    if on:
+        prev_cls = mem.get("cls")
+        lab, _ = mem.hold("cls", np.arange(6), np.moveaxis(cc * CLASS_PRIO, -1, 0))
+        cls_pick = np.where(lab >= 0, lab, 0).astype(np.uint8)
+        same_cls = None if prev_cls is None else prev_cls == lab
+        lab, _ = mem.hold("obj", objs, np.moveaxis(oc, -1, 0))
+        obj_pick = np.where(lab >= 0, lab, objs[0]).astype(np.int16)
+    else:
+        cls_pick = np.argmax(cc * CLASS_PRIO, -1).astype(np.uint8)
+        obj_pick = objs[np.argmax(oc, -1)].astype(np.int16)
     weapon_ids = [int(k) for k, v in cls["obj_names"].items() if any(w in v.lower() for w in WEAPON_WORDS)]
     wcnt = block_sum((alpha & np.isin(p["obj"], weapon_ids)).astype(np.float32), H, W, ss)
     a = {
         "cnt": cnt,
         "cov": np.minimum(1.0, np.maximum(cnt, WEAPON_BOOST * wcnt) / n_sub),
-        "cls": np.argmax(cc * CLASS_PRIO, -1).astype(np.uint8),
-        "obj": objs[np.argmax(oc, -1)].astype(np.int16),
+        "cls": cls_pick,
+        "obj": obj_pick,
+        "same_cls": same_cls,
         "gy": block_sum(p["gy"].astype(np.float32) * a_f, H, W, ss) / safe / 255.0,
         "lum": block_sum(cell_lum * a_f, H, W, ss) / safe,
     }
@@ -388,10 +412,13 @@ def aggregate(p, H, W, cls):
     return a
 
 
-def silhouette(a):
+def silhouette(a, mem=None):
     cov = a["cov"]
     up, dn, lf, rt = nb4(cov)
-    base = cov >= T_COVER
+    if mem is not None and mem.active:
+        base = mem.level("base", cov, (T_COVER,), COVER_MARGIN) > 0
+    else:
+        base = cov >= T_COVER
     cand = (cov >= T_THIN) & ~base
     ridge = ((cov > lf) & (cov >= rt)) | ((cov > up) & (cov >= dn))
     thin = cand & ridge
@@ -441,11 +468,12 @@ def tidy_classes(cls_map, obj_map, solid, passes=2):
     return cls_map
 
 
-def process(p, H, W, palette, cls, facing="down"):
+def process(p, H, W, palette, cls, facing="down", mem=None):
     if not p["alpha"].any():
         return np.full((H, W), TRANSPARENT, np.uint8)
-    a = aggregate(p, H, W, cls)
-    solid, thin = silhouette(a)
+    on = mem is not None and mem.active
+    a = aggregate(p, H, W, cls, mem)
+    solid, thin = silhouette(a, mem)
     inherit(a, solid, ("cls", "obj", "lit", "gy", "lum"))
     pix_cls = tidy_classes(a["cls"], a["obj"], solid)
     pix_obj = a["obj"]
@@ -462,9 +490,13 @@ def process(p, H, W, palette, cls, facing="down"):
         acc += np.where(ok, v_n, 0)
         wsum += ok
     val = 0.5 * val + 0.5 * acc / wsum
-    level = np.full(val.shape, 3, np.int16)      # the deep step (4) is only for crease lines; fills use three tones
-    level[val >= LEVEL_T[1]] = 2
-    level[val >= LEVEL_T[0]] = 1
+    if on:
+        # lightness 0..2 is how many of the (mid, light) cuts the value has passed; the dead band keeps a pixel on its tone
+        level = 3 - mem.level("level", val, (LEVEL_T[1], LEVEL_T[0]), LEVEL_MARGIN, a["same_cls"])
+    else:
+        level = np.full(val.shape, 3, np.int16)      # the deep step (4) is only for crease lines; fills use three tones
+        level[val >= LEVEL_T[1]] = 2
+        level[val >= LEVEL_T[0]] = 1
 
     # median of self and same-object neighbours: removes facet noise, smooths level contours
     for _ in range(MEDIAN_PASSES):
@@ -494,7 +526,8 @@ def process(p, H, W, palette, cls, facing="down"):
     u4, d4, l4, r4 = nb4(solid, False)
     ou, od, ol, orr = nb4(pix_obj, -1)
     edge_tl = (~u4) | (~l4)
-    hi = solid & (pix_cls == STEEL) & (level <= 2) & (a["lit"] > HILITE_LIT) & edge_tl & ~crease
+    lit_hi = mem.level("hilite", a["lit"], (HILITE_LIT,), HILITE_MARGIN) > 0 if on else a["lit"] > HILITE_LIT
+    hi = solid & (pix_cls == STEEL) & (level <= 2) & lit_hi & edge_tl & ~crease
     hu, hd, hl, hr = nb4(hi, False)
     hi = hi & ~(hl & hu)
     hi = cap_runs(hi, HILITE_RUN)

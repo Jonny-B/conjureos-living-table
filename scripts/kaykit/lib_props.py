@@ -1,8 +1,8 @@
 """
 KayKit free packs -> the game's FANTASY prop library, as sprites (Blender 5.2, headless).
 
-Converts every target in group "prop" of .cache/kaykit/library/targets.json (37 ids: the two doors, tree and its left and right
-offsets, torch and its offsets, chest and chest_open, the 3 x 3 cottage, the archway, the stair, the pillar, the table, the bed,
+Converts every target in group "prop" of .cache/kaykit/library/targets.json (39 ids: the two doors and their two side-on leaves, tree and
+its left and right offsets, torch and its offsets, chest and chest_open, the 3 x 3 cottage, the archway, the stair, the pillar, the table, the bed,
 the fence and the well) into renders of Kay Lousberg's free CC0 KayKit packs, in the game's 52 colour palette (indices 0..47).
 
 The look is the owner-approved prop look of env_probe.py: a fixed orthographic camera 30 degrees down, the flat albedo pass from a
@@ -21,6 +21,10 @@ them in their shape:
   bed_*        one bed, 1 x 2
   fence_*      a post and rail run, 3 x 1, periodic every tile so the middle piece repeats
   well_*       one well, 2 x 2
+
+door_closed_ns / door_open_ns are the leaves of a door in a north-south wall (render/wallProfiles.ts: render-only, drawn over the ground makers' own
+jamb overlay): the doorway's door mesh alone, seen from straight above, reduced to its plank and drawn to the pixel boxes the game's hand-drawn leaves use,
+with two iron straps and the ring pull drawn on (see r_door_ns).
 
 tree_left / tree_right / torch_left / torch_right are the plain tree and torch shifted sideways, exactly as scripts/assets/fantasy.ts
 does it (the tree by 2 px at 16, the torch by 3 px; doubled at 32). Sizes: 16 is the game's native size; 32 is the same shot at
@@ -1010,6 +1014,71 @@ def r_door(S, P):
     return {"door_closed": closed, "door_open": opened}
 
 
+def door_plank(pack, limit=0.12):
+    """A copy of the doorway's door mesh with everything that stands proud of the plank taken off: every face with a vertex more than `limit`
+    from the leaf's mid plane (the crossbars, the hinge straps and the ring pull, which together are 0.5 to 0.78 thick against the plank's 0.2).
+    Seen from straight above those make a ladder of wide bars across the leaf; the plank alone is the leaf the game's side-on door needs.
+    Registered on the pack as the model "door_plank_ns" (one part, "door_plank") so Stage.place_part can place it."""
+    import bmesh
+    src = [q for q in pack.load("wall_doorway") if q.name == "wall_doorway_door"][0]
+    mesh = src.mesh.copy()
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bad = [f for f in bm.faces if any(abs((src.matrix @ v.co).y) > limit for v in f.verts)]
+    bmesh.ops.delete(bm, geom=bad, context="FACES")
+    bm.to_mesh(mesh)
+    bm.free()
+    pack.parts["door_plank_ns"] = [Part("door_plank", mesh, src.matrix.copy())]
+    pack.bounds["door_plank_ns"] = pack.bounds["wall_doorway"]
+
+
+@recipe("door_ns", ["door_closed_ns", "door_open_ns"])
+def r_door_ns(S, P):
+    """The side-on leaves of a door in a north-south wall (render/wallProfiles.ts: render-only, drawn over the wall set's own jamb overlay,
+    which the ground makers draw, because this part is shared by both ground styles). The leaf ALONE, seen from straight above: only the
+    doorway's door mesh (wall_doorway_door: no wall, no frame, no stubs, which is what the cutaway probe in the door investigation drew to
+    judge the shape), reduced to its plank (door_plank) and turned 90 degrees so its length runs north-south. The model is 2 units long and
+    its plank 0.2 thick, and one pixel is 1/8 unit at 16 px, so the placement is scaled in WORLD axes straight to the pixel shapes the game
+    draws: no fit.
+
+    Closed: the bar spans the gap from jamb to jamb, the sprite (outline included) filling rows 2..13 and columns 5..10, centred on the tile.
+    Open: the leaf swung 90 degrees on its hinge at the SOUTH end (the pivot is part_bounds' lmn.x, the door's own hinge edge) so it points
+    east and folds against the south jamb, the sprite filling rows 9..12 and columns 6..14 (one pixel short of the 16 the owner's brief allows,
+    so check-part's rule that the outer column bands stay clear holds). Both stay inside their own tile, which the probe's leaf did not: in a
+    one tile canvas that clips it into the neighbouring cell's edge. The jamb overlay under the leaf carries the outline row the open leaf
+    lies against (row 13), so the leaf stops at its own last row of wood.
+
+    Seen from above a plank is plain, so two iron straps and the ring pull are drawn over it (as the torch's flame is), the way the
+    hand-drawn leaf has them: straps across the bar, the pull on the east face."""
+    k, T = S.k, S.T
+    dp = P["dungeon"]
+    door_plank(dp)
+    lmn, lmx = part_bounds(dp, "wall_doorway", "wall_doorway_door")
+    plank = float(S.opts.get("door_ns_t", 0.2))             # the plank's thickness in model units
+    base = dict(name="door_plank_ns", part="door_plank", rotz=90.0)
+    ppu = S.ppu
+    iron, gold = 32, 13                                     # STEEL_SHADE and GOLD, the hand-drawn straps and pull
+    # closed: the silhouette is (12k - 2) rows long and (6k - 2) columns wide, so the sprite with its one pixel outline fills rows 2..13, columns 5..10
+    closed = S.render(dp, [dict(base, scale=((6 * k - 2) / ppu / plank, (12 * k - 2) / ppu / 2.0, 1.0))], T, T, (0, 0, 0), (T / 2.0, T / 2.0), pitch=90.0, refs=AXES)
+    for y in (4, 10):
+        sel = closed[y * k:(y + 1) * k, 6 * k:10 * k]
+        sel[sel != TRANSPARENT] = iron
+    closed[7 * k:8 * k, 11 * k:12 * k] = gold
+    # open: after the swing world x is the leaf's length. The hinge is at column 6k + 1, the wood runs to column 15k - 2 (7 px at 16) and is 4k - 1 rows
+    # thick, ending on row 13k - 1 where the jamb's outline row takes over
+    sx = (9 * k - 2) / ppu / 2.0
+    sy = (4 * k - 1) / ppu / plank
+    ang = float(S.opts.get("door_ns_ang", 90))
+    opened = S.render(dp, [dict(base, scale=(sx, sy, 1.0), pivot=(lmn.x, 0.0, 0.0), rot=(0, 0, -ang))], T, T, (0, -sy, 0), (6 * k + 1.0, 11 * k + 0.5),
+                      pitch=90.0, refs=AXES)
+    opened[13 * k:, :] = TRANSPARENT                        # the south jamb's outline row is the leaf's own bottom edge
+    for x in (8, 12):
+        sel = opened[10 * k:13 * k, x * k:(x + 1) * k]
+        sel[sel != TRANSPARENT] = iron
+    opened[12 * k:13 * k, 9 * k:10 * k] = gold
+    return {"door_closed_ns": closed, "door_open_ns": opened}
+
+
 @recipe("cottage", ["cottage_nw", "cottage_n", "cottage_ne", "cottage_w", "cottage_door", "cottage_e", "cottage_sw", "cottage_s", "cottage_se"])
 def r_cottage(S, P):
     """Medieval Hexagon building_home_B (timber frame on a stone plinth), one render over the 3 x 3 block, sliced. The house is 40 rows
@@ -1120,6 +1189,7 @@ SHAPES = [   # (label, cols, rows, [ids row-major])
     ("fence", 4, 1, ["fence_w", "fence_mid", "fence_mid", "fence_e"]),
     ("well", 2, 2, ["well_nw", "well_ne", "well_sw", "well_se"]),
     ("door", 2, 1, ["door_closed", "door_open"]),
+    ("door_ns", 2, 1, ["door_closed_ns", "door_open_ns"]),
     ("tree", 3, 1, ["tree_left", "tree", "tree_right"]),
     ("torch", 3, 1, ["torch_left", "torch", "torch_right"]),
     ("chest", 2, 1, ["chest", "chest_open"]),

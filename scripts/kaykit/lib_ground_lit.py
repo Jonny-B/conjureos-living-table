@@ -1,7 +1,7 @@
 """
 KayKit ground, "lit" style: the library maker for the ground, wall and edge tiles of The Living Table (Blender 5.2, headless).
 
-Scope: every `ground` (40 ids), `wall` (5) and `edge` (190) target in .cache/kaykit/library/targets.json, at 16 px and 32 px, as two
+Scope: every `ground` (40 ids), `wall` (5), `wall_join` (21: the wall profile joins and the north-south door jamb overlay, render-only) and `edge` (190) target in .cache/kaykit/library/targets.json, at 16 px and 32 px, as two
 parts: .cache/kaykit/library/parts/ground-lit-16.json and ground-lit-32.json (format and validator: scripts/kaykit/check-part.mjs).
 
 Derived from env_lit.py (the prototype the owner liked: depth from the 3D, not flat colour). The method is the same:
@@ -22,6 +22,11 @@ private DETAIL per variant that fades to nothing within a pixel or two of the ti
 directly: it lights random arrangements of the four heightfields as one piece and compares every cell with the tile this script
 writes (0 mismatching pixels for every material, at both sizes). Edge tiles are made from the base tiles, so they meet the field
 the same way.
+
+Wall profile joins (render-only: wall_stone_join_<join> for every shape of the 4 bit neighbour mask, four run variants and the north-south door's
+jamb overlay; src/games/livingtable/render/wallProfiles.ts) are the same walls seen from above. Each cap is lit in a 3 x 3 context so a join is the
+right shape for what is beside it, its face rows are pasted from this maker's own wall tiles, and the detail fades to nothing at the tile border so any
+join meets any join (see "wall profiles" below; Field.seam_check's claim, tested for the run and band joins in report.json `joins`).
 
 Edge tiles use exactly the game's masks (scripts/assets/fantasy.ts: EDGE_BITE, orthoMask, innerMask, ORTHO_VARIANTS, INNER_VARIANTS,
 EDGE_PAIRS): the OVER material is the tile, the UNDER material eats in from the named sides (or the named corner) along the same
@@ -1812,6 +1817,148 @@ def build_cap(st, T, ss, report):
     return idx[m:m + T, m:m + T]
 
 
+# -- wall profiles: stone walls seen from above, one tile per shape (render-only; src/games/livingtable/render/wallProfiles.ts) -------------
+# The renderer reads each wall cell's four neighbours as a 4 bit mask (N=1, E=2, S=4, W=8; targets.json `join.mask`) and draws
+# wall_stone_join_<join> instead of the wall the DM laid. A wall whose south neighbour is not wall shows a FACE under a thin cap band
+# (6k rows of the tile's 16k, k = T / 16); a wall whose south neighbour is wall shows CAP ONLY, so a north-south run is a stone strip seen
+# from above and a thick wall's inner rows are all cap.
+#
+# The cap is lit the way build_cap lights the coping, but as a 3 x 3 CONTEXT, so a join is the right shape for what is round it: every
+# joined side puts a neighbour's cap into a footprint (the centre and the north and south neighbours as full tiles when they are cap only,
+# the 6k row band of a faced east or west neighbour), diagonals empty. The footprint is one connected stone slab, so the chamfer, the groove
+# and the shadow fall only on its OPEN edges and a joined side is seamless; slab joints are gaps cut across it (rows across a run, a column
+# down a band) clear of the tile border, and the detail noise fades to nothing at the border (the Field rule), so any join meets any join:
+# the rows and columns where tiles touch are identical in every variant. The centre tile is cropped out. The face rows are pasted from this
+# maker's own wall tiles (variants a, b, c and the footing course of wall_stone_base), so a wall's face is the wall the set already has.
+# The jamb overlay of a north-south door is sliced from the joins (rows 0..1 the run's last two, a groove line, then the north end of a run).
+JOIN_NAMES = ["none", "n", "e", "ne", "s", "ns", "es", "nes", "w", "nw", "ew", "new", "sw", "nsw", "esw", "nesw"]     # indexed by mask (render/wallProfiles.ts)
+JOIN_VARIANT_SUFFIXES = {"ns": ["_b", "_c"], "ew": ["_b", "_c"]}
+JOIN_PREFIX = "wall_stone_join_"
+JAMBS_ID = "wall_stone_jambs_ns"
+JOIN_RUN_JOINTS = {"a": (7,), "b": (4, 10), "c": (11,)}       # slab joint rows of a cap strip, 16 px units, 3 px or more from the tile border
+JOIN_BAND_JOINTS = {"a": 5, "b": 10, "c": 7}                  # the slab joint column of a cap band
+JOIN_BAND_ROWS = 6                                            # a faced join's cap band, 16 px units
+JOIN_FOOTING_ROWS = 4                                         # the plinth course of wall_stone_base that closes a face
+
+
+def join_footprint(T, ss, mask, variant):
+    """The cap slab of one join in its 3 x 3 context, as boolean arrays of (3T*ss) samples square (centre tile at tile (1, 1)): the slab (the
+    footprint the heights are built on), the ring just outside it along every open side (the outline), and the gaps cut between its slabs
+    (the mortar joints). See the section header."""
+    k = T / 16.0
+    B = int(round(JOIN_BAND_ROWS * k))
+    n = 3 * T * ss
+    m = np.zeros((n, n), bool)
+
+    def block(tx, ty, r0=0, r1=None):
+        r1 = T if r1 is None else r1
+        m[(ty * T + r0) * ss:(ty * T + r1) * ss, tx * T * ss:(tx + 1) * T * ss] = True
+
+    north, east, south, west = bool(mask & 1), bool(mask & 2), bool(mask & 4), bool(mask & 8)
+    if south:
+        block(1, 1)
+        block(1, 2)                                   # joined south: another cap tile (what is under it does not matter to this tile)
+    else:
+        block(1, 1, 0, B)
+    if north:
+        block(1, 0)                                   # the wall to the north has this wall to its south: cap only
+    if east:
+        block(2, 1, 0, B)                             # east and west neighbours are taken as faced (their own south side is open)
+    if west:
+        block(0, 1, 0, B)
+    joint_px = 1.0 * k ** 0.6
+    pxs = float(ss)
+    fp = island_sd(m, pxs) >= joint_px                # every OPEN side is inset by a joint's width: the groove that outlines the slab
+    ring = m & ~fp                                    # ... and that inset ring is where the outline goes
+    whole = fp.copy()
+    cx0, cx1 = T * ss, 2 * T * ss
+    gap = int(round(joint_px * ss))
+    if south:                                         # slab joints across a strip, in the centre tile only
+        for j in JOIN_RUN_JOINTS[variant]:
+            y0 = int(round((T + j * k) * ss))
+            fp[y0:y0 + gap, cx0:cx1] = False
+    elif not north:                                   # a slab joint down the band (a band that continues a strip from the north has none: the strip's joints run across)
+        x0 = int(round((T + JOIN_BAND_JOINTS[variant] * k) * ss))
+        fp[T * ss:(T + B) * ss, x0:x0 + gap] = False
+    return fp, ring, whole & ~fp                      # the slab, its outline ring, the joint gaps between its slabs
+
+
+def join_cap_heights(S3, mask, variant, seed):
+    """Heights (world units, (3T*ss) samples square) of one join's cap slab: build_cap's block profile (a chamfer on the lit side, a groove
+    round an open edge) over join_footprint, mottled and chipped inside the centre tile only, and faded to nothing at that tile's border."""
+    ss, T, pxu = S3.ss, S3.T, S3.pxu
+    pxs = float(ss)
+    k = T / 16.0
+    n = 3 * T * ss
+    bevel_px, drop_px, joint_px, deep_px = 1.0 * k ** 0.6, 0.8 * k ** 0.6, 1.0 * k ** 0.6, 1.2
+    fp, ring, gaps = join_footprint(T, ss, mask, variant)
+    sd = island_sd(fp, pxs)
+    H = block_profile(sd, bevel_px, drop_px, joint_px, deep_px)
+    win = np.zeros((n, n), np.float32)
+    win[T * ss:2 * T * ss, T * ss:2 * T * ss] = fade(T, ss, 3.0 * k)           # nothing within 3k px of the tile border, so the lighting at the border (AO, shadow reach) is flat
+    H = H + np.where(fp, 0.20 * win * fft_noise((n, n), seed + 1, 3.0 * T / 7.5), 0.0)
+    rng = np.random.RandomState(seed)
+    yy, xx = (np.mgrid[0:n, 0:n].astype(np.float32) + 0.5) / pxs
+    for _ in range(1 + int(rng.rand() < 0.4)):       # a chipped corner or two, well inside the tile
+        cxp, cyp = T + rng.uniform(5.0 * k, T - 5.0 * k), T + rng.uniform(5.0 * k, T - 5.0 * k)
+        d = np.sqrt((xx - cxp) ** 2 + (yy - cyp) ** 2)
+        H = H - np.where(fp, 0.9 * win * np.clip(1.0 - d / (1.3 + rng.rand() * 0.9), 0, 1), 0.0)
+    return (H * pxu).astype(np.float32), ring, gaps
+
+
+def join_tile(T, ss, mask, variant, faces, base, S3):
+    """One wall join tile (T x T uint8): the cap rendered in context and lit, the face pasted under a faced join's band, the ends of the face closed."""
+    k = T // 16
+    B = JOIN_BAND_ROWS * k
+    seed = 7000 + mask * 31 + "abc".index(variant) * 101
+    H, ring, gaps = join_cap_heights(S3, mask, variant, seed)
+    Vp, m = S3.light(H, reach_px=2.0, ao_px=1.0, ao_k=0.3, wrap=False, low=-1.5 * S3.pxu)
+    idx, _ = tone_and_clean(Vp, CAP_TONES, 2.0, 3.0, passes=1)
+    px = idx[m + T:m + 2 * T, m + T:m + 2 * T].astype(np.uint8).copy()
+    cov = lambda a: to_pixels(a[T * ss:2 * T * ss, T * ss:2 * T * ss].astype(np.float32), T, T, ss) >= 0.5
+    px[cov(gaps)] = 24                                # the mortar between slabs, as the walls' joints are
+    px[cov(ring)] = 0                                 # the outline round an open side, which keeps a cap from dissolving into the floor beside it
+    if not mask & 4:                                  # faced: the lit masonry under the band, its last course the footing
+        face = faces[variant][B:T].copy()
+        foot = JOIN_FOOTING_ROWS * k
+        face[T - B - foot:] = base[T - foot:]
+        px[B:T] = face
+        if not mask & 8:                              # a face ends in a dark edge on an open side
+            px[B:, 0:k] = 24
+        if not mask & 2:
+            px[B:, T - k:] = 24
+    return px
+
+
+def build_joins(st, T, ss, tiles, report):
+    """The 16 base joins, the 4 run variants and the jamb overlay at tile size T, from the wall tiles already built. Returns {assetId: (T, T) uint8}."""
+    k = T // 16
+    t0 = time.time()
+    faces = {"a": tiles["wall_stone"], "b": tiles["wall_stone_b"], "c": tiles["wall_stone_c"]}
+    base = tiles["wall_stone_base"]
+    S3 = Surf(st, T, ss, 3, 3)
+    out = {}
+    for mask, join in enumerate(JOIN_NAMES):
+        out[JOIN_PREFIX + join] = join_tile(T, ss, mask, "a", faces, base, S3)
+        for i, suffix in enumerate(JOIN_VARIANT_SUFFIXES.get(join, [])):
+            out[JOIN_PREFIX + join + suffix] = join_tile(T, ss, mask, "bc"[i], faces, base, S3)
+    run, end = out[JOIN_PREFIX + "ns"], out[JOIN_PREFIX + "s"]
+    jambs = np.full((T, T), TRANSPARENT, np.uint8)
+    jambs[0:2 * k] = run[14 * k:]
+    jambs[2 * k:3 * k] = 0                            # the north jamb's end: the outline the slab ends in
+    jambs[13 * k:] = end[:3 * k]
+    out[JAMBS_ID] = jambs
+    # the claim that any join meets any join, tested directly: every run variant has the same rows where it meets the next tile (and every band
+    # variant the same columns), and a strip's last rows are its first rows
+    ns = [out[JOIN_PREFIX + "ns" + sfx] for sfx in ("", "_b", "_c")]
+    ew = [out[JOIN_PREFIX + "ew" + sfx] for sfx in ("", "_b", "_c")]
+    rows_ok = all((a[:2 * k] == ns[0][:2 * k]).all() and (a[14 * k:] == ns[0][14 * k:]).all() for a in ns)
+    cols_ok = all((a[:6 * k, :2 * k] == ew[0][:6 * k, :2 * k]).all() and (a[:6 * k, 14 * k:] == ew[0][:6 * k, 14 * k:]).all() for a in ew)
+    wrap_ok = bool((ns[0][:2 * k] == ns[0][14 * k:]).all())
+    report.setdefault("joins", {}).update({"seconds": round(time.time() - t0, 1), "runRowsIdentical": bool(rows_ok), "bandColsIdentical": bool(cols_ok), "stripWrapIdentical": wrap_ok})
+    return out
+
+
 # -- stone decals: a crack across a cobble, a drain ----------------------------------------------------------------------------------
 def build_stone_decals(st, T, ss, stone_field, report):
     """floor_stone_cracked and floor_stone_drain. Both are the plain cobble tile (variant a of the stone) with one event in the middle
@@ -2173,6 +2320,7 @@ def build_size(st, T, ss, only, edges, report):
         tiles["floor_grass_flowers"] = stamp_flowers(gt[1], heads, T)
     if not only or "wall" in only:
         tiles["wall_stone_top"] = build_cap(st, T, ss, report)
+        tiles.update(build_joins(st, T, ss, tiles, report))
     if edges:
         t1 = time.time()
         base = {"grass": tiles["floor_grass"], "pale": tiles["floor_grass_pale"], "stone": tiles["floor_stone"], "dirt": tiles["floor_dirt"],
@@ -2188,7 +2336,7 @@ def write_part(T, tiles, targets, path):
     """The part file: one sprite per in-scope target that has a tile, the rest listed as gaps."""
     sprites, gaps = [], []
     for t in targets:
-        if t["group"] not in ("ground", "wall", "edge"):
+        if t["group"] not in ("ground", "wall", "wall_join", "edge"):
             continue
         if t.get("outOfPlay"):
             continue
@@ -2196,8 +2344,9 @@ def write_part(T, tiles, targets, path):
         if aid in tiles:
             a = tiles[aid]
             assert a.shape == (t["h16"] * T // 16, t["w16"] * T // 16), (aid, a.shape)
-            assert int(a.max()) < USABLE, (aid, int(a.max()))
-            sprites.append({"assetId": aid, "kind": t["kind"], "name": t["name"], "walkable": t["walkable"], "pixels": [[int(v) for v in row] for row in a]})
+            assert int(a[a != TRANSPARENT].max()) < USABLE, (aid, int(a[a != TRANSPARENT].max()))
+            sprites.append({"assetId": aid, "kind": t["kind"], "name": t["name"], "walkable": t["walkable"],
+                            "pixels": [[-1 if v == TRANSPARENT else int(v) for v in row] for row in a]})      # the jamb overlay has clear pixels (255 here, -1 in the part)
         else:
             gaps.append({"assetId": aid, "reason": "not built in this run"})
     doc = {"maker": MAKER, "size": T, "style": STYLE, "sprites": sprites, "gaps": gaps}
@@ -2231,7 +2380,7 @@ def main():
         ss = 8 if T <= 16 else 6
         rep = {}
         tiles = build_size(st, T, ss, only, edges, rep)
-        rep["paletteOk"] = bool(all(int(a.max()) < USABLE for a in tiles.values()))
+        rep["paletteOk"] = bool(all(int(a[a != TRANSPARENT].max()) < USABLE for a in tiles.values()))
         report["sizes"][str(T)] = rep
         if not scratch_only:
             path = os.path.join(PARTS_DIR, "%s-%d.json" % (MAKER, T)) if not only else os.path.join(SCRATCH, "partial-%d.json" % T)
