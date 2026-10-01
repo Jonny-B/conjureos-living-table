@@ -262,8 +262,10 @@ import { InventoryScreen } from "./inventory/InventoryScreen";
 import { buildDmContextBlock } from "./memory/contextBuilder";
 import { addSceneNarration, condenseOldest, needsCondensation, normalizeSuppliedFacts, verbatimSceneSeqs } from "./memory/workingMemory";
 import type { WorkingMemoryState } from "./memory/types";
-import { renderCell, SPRITE_SIZE, type RollReadout } from "./render/canvasRenderer";
+import { renderCell, SPRITE_SIZE } from "./render/canvasRenderer";
 import { attackResultToReadout, checkResultToReadout, lootRollToReadout } from "./render/rollReadoutAdapter";
+import { runHostileTurns } from "./session/hostileTurns";
+import type { DiceLogEntry, ReadoutView } from "./session/combatEvents";
 
 interface Props {
   onExit: () => void;
@@ -971,25 +973,13 @@ function PlayScreen({
 
 // ── play: the running session ───────────────────────────────────────────
 
-export interface DiceLogEntry {
-  text: string;
-  hit: boolean;
-}
-
-/**
- * What the on-canvas readout overlay shows. Extends render/canvasRenderer's
- * RollReadout with the two facts the engine already computed and never told
- * the player: a natural 20 and a natural 1. `resolveAttack` returns both, and
- * dm/promptBuilder.ts even reports them to the model, but the readout printed
- * only "HIT" or "MISS" -- a natural 20 that killed a goblin read exactly like
- * an ordinary hit.
- */
-export interface ReadoutView extends RollReadout {
-  critical?: boolean;
-  fumble?: boolean;
-  /** Already through tokenLabel: who rolled, and what for. */
-  caption: string;
-}
+// The other side's turns, and the two view types they hand back, live in
+// session/ now: they are pure, and a bench or a test can run them without this
+// screen's React tree. Re-exported under the names this file has always had so
+// every import written against it still resolves.
+export { resolveMonsterTurn, runHostileTurns } from "./session/hostileTurns";
+export type { MonsterTurnOutcome } from "./session/hostileTurns";
+export type { DiceLogEntry, ReadoutView } from "./session/combatEvents";
 
 /**
  * The five-second popup over the board: the whole d20 formula, in words, on
@@ -1258,137 +1248,6 @@ export function fallbackRoomLayout(
     props: [],
     tokens: [],
     exits: [{ at: back, edge: oppositeEdge(dir), toCell: from }],
-  };
-}
-
-/**
- * One monster's whole turn, resolved locally and for free.
- *
- * DESIGN.md prices combat at nothing, forever, which means a fight must never
- * need a paid message to get a response out of the other side. Before this
- * function, monsters simply never acted: `rollInitiative` had no callers, and
- * the only way to make a goblin do anything was to spend a credit on Talk,
- * which quietly pushed the player toward the paid surface just to make a
- * fight feel like a fight.
- *
- * The monster closes if it has to and swings if it can, in that order, which
- * is the SRD's own move-then-act turn. Exported so its behaviour is testable
- * against a fixture world without a canvas or a React tree.
- */
-export interface MonsterTurnOutcome {
-  world: World;
-  sheet: CharacterSheet;
-  lines: DiceLogEntry[];
-  story: string[];
-  resolved: ResolvedRoll[];
-  readout: ReadoutView | null;
-  moved: boolean;
-}
-
-export function resolveMonsterTurn(args: {
-  world: World;
-  cell: CellCoord;
-  manifest: AssetManifest;
-  monsterId: string;
-  playerTokenId: string;
-  sheet: CharacterSheet;
-  namer: TokenNamer;
-  speedFt?: number;
-  rng?: () => number;
-}): MonsterTurnOutcome {
-  const rng = args.rng ?? Math.random;
-  const empty: MonsterTurnOutcome = {
-    world: args.world,
-    sheet: args.sheet,
-    lines: [],
-    story: [],
-    resolved: [],
-    readout: null,
-    moved: false,
-  };
-
-  const layout = getCell(args.world, args.cell);
-  if (!layout) return empty;
-  const monster = layout.tokens.find((t) => t.id === args.monsterId);
-  const player = layout.tokens.find((t) => t.id === args.playerTokenId);
-  if (!monster || !player) return empty;
-  if (args.sheet.dead) return empty;
-
-  let world = args.world;
-  let moved = false;
-  let at = { x: monster.x, y: monster.y };
-  let economy = resetTurnEconomy(args.speedFt ?? DEFAULT_SPEED_FT);
-  const lines: DiceLogEntry[] = [];
-  const story: string[] = [];
-
-  // Close the distance, one tile at a time, spending real movement. Stepping
-  // one tile per call keeps every intermediate square validated for
-  // walkability instead of teleporting through a wall to a legal landing tile.
-  while (tileDistanceFeet(at, player) > 5 && economy.movementRemaining >= 5) {
-    const step = { x: at.x + Math.sign(player.x - at.x), y: at.y + Math.sign(player.y - at.y) };
-    const result = moveToken(world, args.cell.cx, args.cell.cy, args.monsterId, step, args.manifest, economy);
-    if (!result.ok) break;
-    world = result.world;
-    economy = result.economy;
-    at = step;
-    moved = true;
-  }
-
-  const label = tokenLabel(args.monsterId, args.namer);
-  if (tileDistanceFeet(at, player) > 5) {
-    if (moved) story.push(`${label} closes in.`);
-    return { world, sheet: args.sheet, lines, story, resolved: [], readout: null, moved };
-  }
-
-  const block = statblockFor(monster.assetId);
-  // Through `effectiveArmorClass`, not `sheet.armorClass`: a shield that adds
-  // a point the player can read on their own sheet and that the monster's d20
-  // never has to beat is a decorative number, which is the exact defect class
-  // `defenderACForRollRequest` exists to end.
-  const playerAC = effectiveArmorClass(args.sheet);
-  const result = resolveAttack({ attackerBonus: block.attackBonus, targetAC: playerAC, rng });
-  const readout: ReadoutView = {
-    ...attackResultToReadout(result, block.attackBonus, playerAC),
-    critical: result.critical,
-    fumble: result.fumble,
-    caption: `${label} attacks ${args.namer.playerName}`,
-  };
-
-  let sheet = args.sheet;
-  let damage: number | undefined;
-  if (result.hit) {
-    const rolled = resolveDamage(monsterDamageNotationFor(monster.assetId), rng, result.critical);
-    damage = rolled.total;
-    const outcome = applyDamage(sheet, rolled.total, result.critical);
-    sheet = outcome.sheet;
-    story.push(outcome.note);
-  }
-
-  const line = attackLine({
-    attacker: label,
-    target: args.namer.playerName,
-    roll: result.roll,
-    modifier: block.attackBonus,
-    total: result.total,
-    targetAC: playerAC,
-    hit: result.hit,
-    critical: result.critical,
-    fumble: result.fumble,
-    damage,
-  });
-  // The dice log colours `hit` green, meaning "this went the player's way".
-  // A monster MISSING is the good outcome here, hence the inversion.
-  lines.push({ text: line, hit: !result.hit });
-  story.unshift(line);
-
-  return {
-    world,
-    sheet,
-    lines,
-    story,
-    resolved: [{ id: `local-${args.monsterId}-${Date.now()}`, kind: "attack", by: args.monsterId, against: args.playerTokenId, ...result }],
-    readout,
-    moved,
   };
 }
 
@@ -1714,72 +1573,6 @@ export function resolveDmRollRequests(args: {
   }
 
   return { world, sheet, round, resolved, dice, story, readout, refusals };
-}
-
-/**
- * Resolve every hostile turn between now and the player's next one.
- *
- * Winning initiative used to be strictly WORSE than losing it: with the rolls
- * forced so a skeleton went first, the round pill read "the skeleton is
- * acting", the skeleton never swung, and the only enabled control was End
- * turn, which then burned the monster's turn rather than the player's.
- * Nothing resolved a hostile turn on entry to combat, and the loop that does
- * resolve them lived inside the End turn handler where only a click could
- * reach it. Extracted here so combat start and every turn change can run the
- * same path, and so a test can drive it without a React tree.
- *
- * The guard is belt and braces: dropCombatant already keeps the order finite,
- * and a runaway loop would freeze the tab rather than mis-resolve a fight.
- */
-export function runHostileTurns(args: {
-  round: CombatRound;
-  world: World;
-  cell: CellCoord;
-  manifest: AssetManifest;
-  playerTokenId: string;
-  sheet: CharacterSheet;
-  namer: TokenNamer;
-  rng?: () => number;
-}): {
-  round: CombatRound;
-  world: World;
-  sheet: CharacterSheet;
-  dice: DiceLogEntry[];
-  story: string[];
-  resolved: ResolvedRoll[];
-  readout: ReadoutView | null;
-} {
-  let round = args.round;
-  let world = args.world;
-  let sheet = args.sheet;
-  const dice: DiceLogEntry[] = [];
-  const story: string[] = [];
-  const resolved: ResolvedRoll[] = [];
-  let readout: ReadoutView | null = null;
-
-  let guard = 0;
-  while (round.order.length > 0 && activeCombatant(round)?.side === "hostile" && guard++ < 24) {
-    const monster = activeCombatant(round)!;
-    const outcome = resolveMonsterTurn({
-      world,
-      cell: args.cell,
-      manifest: args.manifest,
-      monsterId: monster.id,
-      playerTokenId: args.playerTokenId,
-      sheet,
-      namer: args.namer,
-      rng: args.rng,
-    });
-    world = outcome.world;
-    sheet = outcome.sheet;
-    dice.push(...outcome.lines);
-    story.push(...outcome.story);
-    resolved.push(...outcome.resolved);
-    if (outcome.readout) readout = outcome.readout;
-    round = endCombatTurn(round);
-  }
-
-  return { round, world, sheet, dice, story, resolved, readout };
 }
 
 /** Exported so a test can render the whole play surface and assert over the strings it actually produces (see test/livingtable-integration.test.ts). */
