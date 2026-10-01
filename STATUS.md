@@ -23,6 +23,17 @@ Both stay in the code and still load; only `PLAYABLE_TEMPLATES` and
 start (0.2.0). The owner also wants the "not much use" free packs kept in mind:
 pieces of them can be pulled in and adapted.
 
+**The fantasy library is converted to KayKit (2026-09-30, 0.3.0):** all 320
+in-play fantasy pieces at 16 and 32 px, ground in two styles (Painted, Lit),
+characters in four (Cel bands, Pixel artist, Toon, Plain), on the bench (Art
+row, Converted tab). The renderer draws 32 px art (`RenderManifest.spriteSize`).
+The game itself still shows the hand-drawn 16 px art: switching it needs the
+owner's pick of styles and size, then LivingTable.tsx's board sizing
+(`SPRITE_SIZE * displayScale` must use the manifest's sprite size), games-db
+serving the new art and `spriteSize` (or the Supabase Storage hosting already
+agreed), and `STORAGE_PREFIX` in manifestCache.ts bumped to v4 in the same
+release.
+
 ## Next
 
 - Publishing: add the five Actions secrets (see the publish workflow's header), then the first publish per project.

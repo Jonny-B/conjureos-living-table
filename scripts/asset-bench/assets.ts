@@ -75,16 +75,19 @@ import {
 } from "../../src/games/livingtable/session/combat";
 import { renderDoll } from "../../src/games/livingtable/render/doll";
 import { renderGearIcon } from "../../src/games/livingtable/render/gearIcon";
-import { renderCell, type RenderManifest } from "../../src/games/livingtable/render/canvasRenderer";
+import { renderCell, spriteSizeOf, type RenderManifest } from "../../src/games/livingtable/render/canvasRenderer";
 import {
   K_CLIPS,
   K_DIRS,
   clipDurationMs,
+  decodeLibrary,
   dirToward,
   findClip,
   frameIndex,
   framesNow,
   kaykitData,
+  kaykitLibrary,
+  partFile,
   sizeIdsFor,
   type KClip,
   type KClipId,
@@ -214,6 +217,153 @@ function manifestFor(template: TemplateGenre): RenderManifest {
 }
 
 const MANIFEST: Record<TemplateGenre, RenderManifest> = { fantasy: manifestFor("fantasy"), scifi: manifestFor("scifi") };
+
+// ===========================================================================
+// Art source, shared by every panel: the game's current hand-drawn library,
+// or the KayKit conversion (scripts/kaykit/lib_*.py, one part per maker,
+// size and style). The conversion keeps every asset id, so the game's own
+// renderer draws it unchanged; at 32 px the manifest says spriteSize 32 and
+// the renderer scales to match. An id no part covers falls back to the
+// current art (2x upscaled at 32 px), and the Converted panel says which.
+// ===========================================================================
+
+type GroundStyle = "painted" | "lit";
+type CharStyle = "bands" | "pixelart" | "toon" | "plain";
+interface ArtChoice {
+  source: "current" | "kaykit";
+  ground: GroundStyle;
+  chars: CharStyle;
+  size: 16 | 32;
+}
+
+const art: ArtChoice = { source: "current", ground: "painted", chars: "bands", size: 32 };
+let artDecoded: Map<string, Map<string, number[][]>> | null = null;
+const artManifests = new Map<string, RenderManifest>();
+
+function upscalePixels(pixels: number[][], k: number): number[][] {
+  if (k === 1) return pixels;
+  const out: number[][] = [];
+  for (const row of pixels) {
+    const wide: number[] = [];
+    for (const v of row) for (let i = 0; i < k; i++) wide.push(v);
+    for (let i = 0; i < k; i++) out.push(wide.slice());
+  }
+  return out;
+}
+
+function artParts(): Map<string, number[][]>[] {
+  if (!artDecoded) return [];
+  return [partFile(`ground-${art.ground}`, art.size), partFile("props", art.size), partFile("tokens", art.size, art.chars)]
+    .map((f) => artDecoded!.get(f))
+    .filter((m): m is Map<string, number[][]> => m !== undefined);
+}
+
+/** The chosen KayKit parts (ground style, character style, size) hold this sprite, whichever art is on show. */
+function kaykitHas(assetId: string): boolean {
+  return artParts().some((p) => p.has(assetId));
+}
+
+/** The sprite the chosen KayKit parts draw for this id, or null. */
+function kaykitPixels(assetId: string): number[][] | null {
+  for (const p of artParts()) {
+    const px = p.get(assetId);
+    if (px) return px;
+  }
+  return null;
+}
+
+/** The RenderManifest a panel should draw `template` with: the KayKit library for fantasy when chosen (and decoded), else the current art. */
+function artManifest(template: TemplateGenre): RenderManifest {
+  if (template !== "fantasy" || art.source === "current" || !artDecoded) return MANIFEST[template];
+  const key = `${art.ground}|${art.chars}|${art.size}`;
+  const hit = artManifests.get(key);
+  if (hit) return hit;
+  const parts = artParts();
+  const k = art.size / 16;
+  const pick = (id: string, current: number[][]) => {
+    for (const p of parts) {
+      const px = p.get(id);
+      if (px) return px;
+    }
+    return upscalePixels(current, k);
+  };
+  const base = MANIFEST.fantasy;
+  const m: RenderManifest = { palette: base.palette, tiles: {}, props: {}, tokens: {}, spriteSize: art.size };
+  for (const [id, s] of Object.entries(base.tiles)) m.tiles[id] = { pixels: pick(id, s.pixels) };
+  for (const [id, s] of Object.entries(base.props)) m.props[id] = { pixels: pick(id, s.pixels) };
+  for (const [id, s] of Object.entries(base.tokens)) m.tokens[id] = { pixels: pick(id, s.pixels) };
+  artManifests.set(key, m);
+  return m;
+}
+
+/** Source pixels per tile edge for what `template` draws with right now. */
+function artSpriteSize(template: TemplateGenre): number {
+  return spriteSizeOf(artManifest(template));
+}
+
+/**
+ * The shared Art row: Current or KayKit, and for KayKit the ground style,
+ * the character style and the detail. One state for every panel, so a choice
+ * made on one tab holds on the next. The first switch to KayKit decodes the
+ * library (once) before redrawing.
+ */
+function buildArtControls(onChange: () => void): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "bn-controls lt-art-controls";
+  const lib = kaykitLibrary();
+  const status = document.createElement("span");
+  status.className = "lt-note lt-art-status";
+  const pick = (label: string, options: [string, string][], value: string, set: (v: string) => void): HTMLLabelElement => {
+    const field = document.createElement("label");
+    field.className = "bn-field";
+    field.textContent = `${label} `;
+    const select = document.createElement("select");
+    select.className = "bn-select";
+    for (const [v, text] of options) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = text;
+      select.appendChild(opt);
+    }
+    select.value = value;
+    select.onchange = () => {
+      set(select.value);
+      void apply();
+    };
+    field.appendChild(select);
+    return field;
+  };
+  const extras: HTMLLabelElement[] = [];
+  const sourceField = pick(
+    "Art",
+    lib ? [["current", "Current (hand-drawn)"], ["kaykit", "KayKit (converted)"]] : [["current", "Current (hand-drawn)"]],
+    art.source,
+    (v) => (art.source = v as ArtChoice["source"]),
+  );
+  extras.push(
+    pick("Ground", [["painted", "Painted"], ["lit", "Lit"]], art.ground, (v) => (art.ground = v as GroundStyle)),
+    pick("Characters", [["bands", "Cel bands"], ["pixelart", "Pixel artist"], ["toon", "Toon"], ["plain", "Plain"]], art.chars, (v) => (art.chars = v as CharStyle)),
+    pick("Detail", [["32", "32 px"], ["16", "16 px (the game's size)"]], String(art.size), (v) => (art.size = Number(v) as 16 | 32)),
+  );
+  row.append(sourceField, ...extras, status);
+  const sync = () => {
+    for (const e of extras) e.hidden = art.source !== "kaykit";
+    status.textContent =
+      art.source === "kaykit" ? "KayKit packs by Kay Lousberg (CC0), rendered in Blender. Fantasy only; sci-fi is paused." : lib ? "" : "No converted library in this build.";
+  };
+  async function apply(): Promise<void> {
+    sync();
+    if (art.source === "kaykit" && !artDecoded) {
+      status.textContent = "Loading the KayKit art...";
+      artDecoded = await decodeLibrary();
+      sync();
+    }
+    onChange();
+  }
+  sync();
+  if (art.source === "kaykit" && !artDecoded) void apply();
+  return row;
+}
 
 // A memoised base CharacterSheet per archetype (createCharacter is pure but
 // not free; the pulse timer redraws every ~600ms and has no reason to
@@ -990,7 +1140,7 @@ function iconCanvas(template: TemplateGenre, source: ReturnType<typeof gearIconS
   if (source) {
     const ctx = canvas.getContext("2d")!;
     ctx.imageSmoothingEnabled = false;
-    renderGearIcon(ctx, source, MANIFEST[template], px);
+    renderGearIcon(ctx, source, artManifest(template), px);
   }
   return canvas;
 }
@@ -1011,10 +1161,26 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   const st = (): PlayState => play!;
 
   // Per SOURCE pixel, integers only, the same convention the Library's own
-  // scale control uses; renderCell's own unit is canvas px PER TILE (16x).
-  let scale = typeof innerWidth === "number" && innerWidth >= 1100 ? 3 : 2;
+  // scale control uses; renderCell's own unit is canvas px PER TILE
+  // (scale x the art's sprite size), so 32 px art halves the default scale.
+  const wide = typeof innerWidth === "number" && innerWidth >= 1100;
+  const defaultScale = () => (artSpriteSize(st().template) >= 32 ? (wide ? 2 : 1) : wide ? 3 : 2);
+  let scale = defaultScale();
   let frame: GlowFrame = 0;
   let pulse = false;
+  let lastArtSize = artSpriteSize(st().template);
+
+  el.appendChild(
+    buildArtControls(() => {
+      const size = artSpriteSize(st().template);
+      if (size !== lastArtSize) {
+        lastArtSize = size;
+        scale = defaultScale();
+        scaleSelect.value = String(scale);
+      }
+      renderAll();
+    }),
+  );
 
   const el_ = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] => {
     const node = document.createElement(tag);
@@ -1052,7 +1218,8 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
   controls.appendChild(floorField);
 
   const scaleField = el_("label", "bn-field", "Scale ");
-  scaleField.appendChild(buildScaleSelect([1, 2, 3, 4], scale, (n) => { scale = n; drawScene(); }));
+  const scaleSelect = buildScaleSelect([1, 2, 3, 4], scale, (n) => { scale = n; drawScene(); });
+  scaleField.appendChild(scaleSelect);
   controls.appendChild(scaleField);
 
   const frameField = el_("label", "bn-field", "Glow frame ");
@@ -1227,14 +1394,15 @@ function mountCharacterPanel(el: HTMLElement, _api: unknown): () => void {
 
   function drawScene(): void {
     const p = st();
-    const tileScale = scale * 16;
+    const manifest = artManifest(p.template);
+    const tileScale = scale * spriteSizeOf(manifest);
     canvas.width = CELL_WIDTH * tileScale;
     canvas.height = CELL_HEIGHT * tileScale;
     const ctx = canvas.getContext("2d")!;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const plan = renderPlanFor(p.hero);
-    renderCell(ctx, sceneLayout(p), MANIFEST[p.template], tileScale, 0, plan ? { [HERO_ID]: plan } : undefined, frame);
+    renderCell(ctx, sceneLayout(p), manifest, tileScale, 0, plan ? { [HERO_ID]: plan } : undefined, frame);
     if (p.kaykit) drawKayKitHero(ctx, p, p.kaykit, tileScale);
     // Keep the hero in the middle of the viewport (it matters at phone width),
     // but only when it has moved: an animating KayKit hero redraws every frame
@@ -1824,6 +1992,121 @@ function mountKayKitPanel(el: HTMLElement, _api: unknown): () => void {
 }
 
 // ===========================================================================
+// Panel: Converted. Every in-play fantasy sprite the game uses, the current
+// hand-drawn one beside the KayKit conversion chosen in the Art row (ground
+// style, character style, detail), grouped the way the conversion was
+// split. An id the chosen parts do not cover says so. The Healer's pieces are
+// out of play and not listed; sci-fi is paused.
+// ===========================================================================
+
+const CONVERTED_GROUPS: { id: string; label: string; test: (s: LtSprite) => boolean; collapsed?: boolean }[] = [
+  { id: "token", label: "Characters and monsters", test: (s) => s.kind === "token" && !s.assetId.startsWith("gear_") },
+  { id: "gear", label: "Gear overlays", test: (s) => s.assetId.startsWith("gear_") && !/_(ring|amulet)_/.test(s.assetId) },
+  { id: "icon", label: "Ring and amulet icons", test: (s) => /^gear_.*_(ring|amulet)_/.test(s.assetId) },
+  { id: "prop", label: "Props", test: (s) => s.kind === "prop" },
+  { id: "ground", label: "Ground, water, forest and cliffs", test: (s) => s.kind === "tile" && !/_edge_|^water_edge|^cliff_edge/.test(s.assetId) && !s.assetId.startsWith("wall_") },
+  { id: "wall", label: "Walls", test: (s) => s.kind === "tile" && s.assetId.startsWith("wall_") },
+  { id: "edge", label: "Edges (shorelines and borders, 10 families x 19 shapes)", test: (s) => s.kind === "tile" && /_edge_|^water_edge|^cliff_edge/.test(s.assetId), collapsed: true },
+];
+
+/** One sprite into a canvas at its own resolution, sized on screen by CSS so 16 and 32 px versions show at the same size. */
+function spriteCanvas(pixels: number[][], palette: string[], cssPxPer16: number, w16: number, h16: number): HTMLCanvasElement {
+  const h = pixels.length;
+  const w = pixels[0]?.length ?? 0;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  canvas.className = "lt-icon-canvas lt-conv-canvas";
+  canvas.style.width = `${w16 * cssPxPer16}px`;
+  canvas.style.height = `${h16 * cssPxPer16}px`;
+  const ctx = canvas.getContext("2d")!;
+  const img = ctx.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = pixels[y]![x]!;
+      if (idx < 0) continue;
+      const hex = palette[idx] ?? "#ff00ff";
+      const o = (y * w + x) * 4;
+      img.data[o] = parseInt(hex.slice(1, 3), 16);
+      img.data[o + 1] = parseInt(hex.slice(3, 5), 16);
+      img.data[o + 2] = parseInt(hex.slice(5, 7), 16);
+      img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+function mountConvertedPanel(el: HTMLElement, _api: unknown): void {
+  injectPanelStyle();
+  el.innerHTML = "";
+  if (!kaykitLibrary()) {
+    el.innerHTML = '<p class="lt-note">No converted library in this build. Run the scripts/kaykit/lib_*.py makers, then <code>npm run bench</code>.</p>';
+    return;
+  }
+  el.appendChild(buildArtControls(() => mountConvertedPanel(el, _api)));
+  const body = document.createElement("div");
+  el.appendChild(body);
+  const render = () => {
+    body.innerHTML = "";
+    const palette = MANIFEST.fantasy.palette;
+    const inPlay = SPRITES_BY_TEMPLATE.fantasy.filter((s) => !/healer/.test(s.assetId));
+    const covered = inPlay.filter((s) => kaykitHas(s.assetId)).length;
+    const summary = document.createElement("p");
+    summary.className = "lt-note";
+    summary.textContent =
+      `${inPlay.length} in-play fantasy pieces: ${covered} converted from KayKit, ${inPlay.length - covered} still the hand-drawn art. ` +
+      `Showing ground "${art.ground}", characters "${art.chars}", ${art.size} px. Left of each pair is the game today, right is the conversion.`;
+    body.appendChild(summary);
+    for (const group of CONVERTED_GROUPS) {
+      const members = inPlay.filter(group.test);
+      if (members.length === 0) continue;
+      const section = document.createElement(group.collapsed ? "details" : "section");
+      section.className = "lt-conv-group";
+      const head = document.createElement(group.collapsed ? "summary" : "h3");
+      head.textContent = `${group.label} (${members.filter((s) => kaykitHas(s.assetId)).length} of ${members.length} converted)`;
+      section.appendChild(head);
+      const grid = document.createElement("div");
+      grid.className = "lt-conv-grid";
+      for (const s of members) {
+        const w16 = s.pixels[0]?.length ?? 16;
+        const h16 = s.pixels.length;
+        const card = document.createElement("div");
+        card.className = "lt-conv-card";
+        const label = document.createElement("div");
+        label.className = "lt-icon-label";
+        label.textContent = s.assetId;
+        label.title = s.name;
+        const pair = document.createElement("div");
+        pair.className = "lt-conv-pair";
+        const zoom = group.id === "edge" ? 2 : 3;
+        pair.appendChild(spriteCanvas(s.pixels, palette, zoom, w16, h16));
+        const conv = kaykitPixels(s.assetId);
+        if (conv) pair.appendChild(spriteCanvas(conv, palette, zoom, w16, h16));
+        else {
+          const gap = document.createElement("span");
+          gap.className = "lt-conv-gap";
+          gap.textContent = "not converted";
+          pair.appendChild(gap);
+        }
+        card.append(label, pair);
+        grid.appendChild(card);
+      }
+      section.appendChild(grid);
+      body.appendChild(section);
+    }
+  };
+  if (artDecoded) render();
+  else {
+    body.innerHTML = '<p class="lt-note">Loading the KayKit art...</p>';
+    void decodeLibrary().then((d) => {
+      artDecoded = d;
+      render();
+    });
+  }
+}
+
+// ===========================================================================
 // Panel: Doll. The inventory screen's paper-doll figure, via render/doll.ts's
 // renderDoll, at its real DOLL_MIN_SCALE..DOLL_MAX_SCALE range.
 // ===========================================================================
@@ -1831,6 +2114,7 @@ function mountKayKitPanel(el: HTMLElement, _api: unknown): () => void {
 function mountDollPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
+  el.appendChild(buildArtControls(() => draw()));
   const controls = document.createElement("div");
   controls.className = "bn-controls";
   el.appendChild(controls);
@@ -1905,7 +2189,7 @@ function mountDollPanel(el: HTMLElement, _api: unknown): () => void {
   }
 
   function draw() {
-    const manifest = MANIFEST[template];
+    const manifest = artManifest(template);
     canvas.width = DOLL_CANVAS_SIZE * scale;
     canvas.height = DOLL_CANVAS_SIZE * scale;
     const ctx = canvas.getContext("2d")!;
@@ -1970,12 +2254,13 @@ function collectIcons(): IconEntry[] {
 function mountIconsPanel(el: HTMLElement, _api: unknown): void {
   injectPanelStyle();
   el.innerHTML = '<p class="lt-note">Every gear item\'s inventory icon at every tier it exists at (render/gearIcon.ts), plus the four empty-slot silhouettes. Native size is InventoryScreen.tsx\'s 48px slot icon; the second canvas is 4x that box so the icon\'s own internal scale cap is reachable.</p>';
+  el.insertBefore(buildArtControls(() => mountIconsPanel(el, _api)), el.firstChild);
   const grid = document.createElement("div");
   grid.className = "lt-icon-grid";
   el.appendChild(grid);
 
   for (const entry of collectIcons()) {
-    const manifest = MANIFEST[entry.template];
+    const manifest = artManifest(entry.template);
     const card = document.createElement("div");
     card.className = "lt-icon-card";
     const label = document.createElement("div");
@@ -2024,6 +2309,7 @@ function presetTiles(template: TemplateGenre): TileId[][] {
 /** `pxScale` is canvas px PER SOURCE PIXEL, integer, same convention the Library uses. Tiles are 16 source px, so a tile occupies pxScale*16 canvas px. */
 function paintRawTiles(ctx: CanvasRenderingContext2D, tiles: TileId[][], manifest: RenderManifest, pxScale: number): void {
   ctx.imageSmoothingEnabled = false;
+  const pitch = spriteSizeOf(manifest); // source px per tile edge: 16 today, 32 for KayKit at 32 px
   for (let y = 0; y < tiles.length; y++) {
     const row = tiles[y];
     if (!row) continue;
@@ -2039,7 +2325,7 @@ function paintRawTiles(ctx: CanvasRenderingContext2D, tiles: TileId[][], manifes
           const color = manifest.palette[idx];
           if (!color) continue;
           ctx.fillStyle = color;
-          ctx.fillRect((x * 16 + sx) * pxScale, (y * 16 + sy) * pxScale, pxScale, pxScale);
+          ctx.fillRect((x * pitch + sx) * pxScale, (y * pitch + sy) * pxScale, pxScale, pxScale);
         }
       }
     }
@@ -2049,6 +2335,7 @@ function paintRawTiles(ctx: CanvasRenderingContext2D, tiles: TileId[][], manifes
 function mountTerrainPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
+  el.appendChild(buildArtControls(() => draw()));
   const controls = document.createElement("div");
   controls.className = "bn-controls";
   el.appendChild(controls);
@@ -2112,10 +2399,11 @@ function mountTerrainPanel(el: HTMLElement, _api: unknown): () => void {
   stage.appendChild(afterWrap);
 
   function draw() {
-    const manifest = MANIFEST[template];
+    const manifest = artManifest(template);
+    const pitch = spriteSizeOf(manifest);
     const tiles = presetTiles(template);
-    const w = CELL_WIDTH * 16 * scale;
-    const h = CELL_HEIGHT * 16 * scale;
+    const w = CELL_WIDTH * pitch * scale;
+    const h = CELL_HEIGHT * pitch * scale;
 
     beforeCanvas.width = w;
     beforeCanvas.height = h;
@@ -2201,6 +2489,17 @@ function injectPanelStyle(): void {
 #bench-root .lt-palette-table{max-width:420px}
 #bench-root .lt-swatch{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--bn-line);vertical-align:-2px}
 #bench-root tr.lt-reserved{opacity:.75;font-style:italic}
+#bench-root .lt-art-controls{padding:8px 10px;border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel);margin-bottom:10px}
+#bench-root .lt-art-controls [hidden]{display:none}
+#bench-root .lt-art-status{margin:0;flex-basis:100%}
+#bench-root .lt-conv-group{margin:12px 0}
+#bench-root .lt-conv-group>h3,#bench-root .lt-conv-group>summary{font-size:13px;margin:0 0 8px;cursor:default}
+#bench-root .lt-conv-group>summary{cursor:pointer}
+#bench-root .lt-conv-grid{display:flex;flex-wrap:wrap;gap:8px}
+#bench-root .lt-conv-card{background:var(--bn-panel);border:1px solid var(--bn-line);border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:4px;max-width:100%}
+#bench-root .lt-conv-pair{display:flex;gap:6px;align-items:flex-end}
+#bench-root .lt-conv-canvas{image-rendering:pixelated}
+#bench-root .lt-conv-gap{font-size:11px;color:var(--bn-danger);align-self:center}
 #bench-root .lt-kk-controls{margin-top:-4px}
 #bench-root .lt-kk-controls[hidden]{display:none}
 #bench-root .lt-kk-note{flex-basis:100%;margin:0}
@@ -2321,6 +2620,7 @@ export default {
   panels: [
     { id: "character", label: "Character", mount: mountCharacterPanel },
     { id: "kaykit", label: "KayKit", mount: mountKayKitPanel },
+    { id: "converted", label: "Converted", mount: mountConvertedPanel },
     { id: "doll", label: "Doll", mount: mountDollPanel },
     { id: "icons", label: "Icons", mount: mountIconsPanel },
     { id: "terrain", label: "Terrain", mount: mountTerrainPanel },

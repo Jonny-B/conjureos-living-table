@@ -2,8 +2,8 @@
 
 One self-contained HTML page showing every sprite in `scripts/assets/fantasy.ts`
 and `scripts/assets/scifi.ts` (476 sprites total: tiles, props, tokens, gear
-overlays, boots, ring/amulet icons, slot silhouettes), plus six panels
-(Character, KayKit, Doll, Icons, Terrain, Palette) that call the game's own
+overlays, boots, ring/amulet icons, slot silhouettes), plus seven panels
+(Character, KayKit, Converted, Doll, Icons, Terrain, Palette) that call the game's own
 render/character functions by symbol, so the bench shows what ships rather
 than a second drawing of it.
 
@@ -12,6 +12,11 @@ than a second drawing of it.
   game's own rules. Its Archetype list includes the **KayKit Knight (3D
   render)**, which plays the same scene with a Blender-rendered, animated
   sprite.
+- **Art row** (Character, Converted, Doll, Icons, Terrain): switches between the
+  game's current art and the KayKit conversion (ground style, character style,
+  16 or 32 px). One choice, shared by every panel.
+- **Converted** lists all 320 in-play fantasy pieces, the current one beside the
+  conversion, grouped as the conversion was split.
 - **KayKit** is the 3D-to-pixel trial's comparison surface: every conversion
   style from `scripts/kaykit/` side by side in four facings, next to the
   source render and the game's current hand-drawn Knight in the same
@@ -36,7 +41,8 @@ node scripts/asset-bench/build-bench.mjs \
   --assets scripts/asset-bench/assets.ts \
   --out .cache/asset-bench/living-table-bench.html \
   --artifact \
-  --data kaykit=.cache/kaykit/bench-data.json
+  --data kaykit=.cache/kaykit/bench-data.json \
+  --data kaylib=.cache/kaykit/bench-library.json
 ```
 
 `--data <id>=<file.json>` embeds a JSON block the registry reads at mount time

@@ -45,3 +45,39 @@ Everything reads and writes under `.cache/` (gitignored). From the repo root:
 - The figure fills `token_h - 1` pixels with its feet on the canvas bottom edge; the canvas is twice the token width and 1.5x its height so swung weapons are not clipped. The bench stands every size in the game's one-tile token footprint.
 - The axe, crossbow and staff come from the pack's `Assets/` folder and are attached by copying an existing weapon on the same hand slot, so the bone parenting and the importer's bone-axis correction carry over.
 - The Knight's idle holds a weapon forward, which suits swords better than a staff; the staff loadout borrows the two-handed idle.
+
+## The converted library (every fantasy sprite)
+
+The game's whole fantasy library, converted to KayKit renders and kept under
+the same asset ids, so the game's own renderer draws it unchanged. Built by
+four makers, each owning one script and its parts:
+
+| Script | Covers | Parts (under `.cache/kaykit/library/parts/`) |
+|---|---|---|
+| `lib_ground_lit.py` | 40 ground, 5 wall and 190 edge tiles, Lit style | `ground-lit-16.json`, `ground-lit-32.json` |
+| `lib_ground_painted.py` | the same 235 tiles, Painted style | `ground-painted-16.json`, `ground-painted-32.json` |
+| `lib_props.py` | 37 props (multi-tile props are one model, sliced) | `props-16.json`, `props-32.json` |
+| `lib_tokens.py` | 8 tokens, 33 gear overlays, 7 icons, per character style | `tokens-<plain/bands/toon/pixelart>-<16/32>.json` |
+
+The Healer's pieces are out of play and sci-fi is paused, so neither is
+converted. `token_goblin` has no free Kay source and is the hooded Rogue
+recoloured.
+
+Run order, from the repo root (each step is safe to repeat):
+
+1. `npm run kaykit:palette` and `npm run kaykit:targets` (the palette and the
+   list of ids to produce, with sizes and walkability).
+2. Fetch the free packs the makers use into `.cache/kaykit/` (each script's
+   docstring names its clones: Adventurers, Skeletons, Dungeon Remastered,
+   Medieval Hexagon, Furniture, Halloween, Prototype Bits).
+3. Run each maker with Blender, as above (`... --python scripts/kaykit/lib_props.py`).
+4. `node scripts/kaykit/check-part.mjs <part>` on every part: it must report
+   0 problems (ids, sizes, walkability, palette range, opaque tiles).
+5. `npm run bench`: packs the parts (`pack-library.mjs`) and embeds them. The
+   bench's **Art** row switches every panel between the current art and the
+   conversion (ground style, character style, 16 or 32 px), and the
+   **Converted** tab lists all 320 in-play pieces side by side.
+
+32 px art needs the renderer's `RenderManifest.spriteSize` (32), which the
+game supports from 0.3.0; the game itself still loads the 16 px art from
+games-db until it is switched over.
