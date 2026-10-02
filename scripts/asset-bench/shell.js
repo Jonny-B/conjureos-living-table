@@ -249,13 +249,15 @@ export function mountBench(bench, root) {
   const groups = [...new Set(bench.assets.map((a) => a.group))].sort();
   const panels = bench.panels || [];
   const tileCache = new Map();
+  // This project's addition: bench.library === false drops the sprite library tab (the panels are the bench).
+  const hasLibrary = bench.library !== false;
 
   document.title = bench.title;
 
   root.innerHTML = `
     <div class="bn-wrap">
       <h1>${escapeHtml(bench.title)}</h1>
-      <p class="bn-counts">${bench.assets.length} asset${bench.assets.length === 1 ? "" : "s"} across ${groups.length} group${groups.length === 1 ? "" : "s"}${panels.length ? ` &middot; ${panels.length} panel${panels.length === 1 ? "" : "s"}` : ""}</p>
+      <p class="bn-counts"${hasLibrary ? "" : " hidden"}>${bench.assets.length} asset${bench.assets.length === 1 ? "" : "s"} across ${groups.length} group${groups.length === 1 ? "" : "s"}${panels.length ? ` &middot; ${panels.length} panel${panels.length === 1 ? "" : "s"}` : ""}</p>
       <div class="bn-tabs" role="tablist"></div>
       <div class="bn-panels"></div>
       <footer class="bn-footer"></footer>
@@ -285,7 +287,7 @@ export function mountBench(bench, root) {
   // This project's addition: bench.libraryLast puts the Library tab after the
   // panels (appended below, once they exist) for a bench whose panels are the
   // main thing; by default it comes first, as in the template.
-  if (!bench.libraryLast) tabsEl.appendChild(libraryTab);
+  if (hasLibrary && !bench.libraryLast) tabsEl.appendChild(libraryTab);
 
   const libraryPanel = document.createElement("section");
   libraryPanel.className = "bn-panel";
@@ -303,7 +305,7 @@ export function mountBench(bench, root) {
     <div class="bn-detail" id="bn-detail" hidden></div>
     <div class="bn-grid" id="bn-grid"></div>
   `;
-  panelsEl.appendChild(libraryPanel);
+  if (hasLibrary) panelsEl.appendChild(libraryPanel);
 
   const groupChipsEl = libraryPanel.querySelector("#bn-groups");
   const searchEl = libraryPanel.querySelector(".bn-search");
@@ -616,10 +618,11 @@ export function mountBench(bench, root) {
     panelState.set(p.id, { el: section, cleanup: null, mounted: false });
   }
 
-  if (bench.libraryLast) tabsEl.appendChild(libraryTab);
-  renderGrid();
+  if (hasLibrary && bench.libraryLast) tabsEl.appendChild(libraryTab);
+  if (hasLibrary) renderGrid();
   // bench.defaultPanel (this project's addition) opens a panel first instead of the Library.
-  activate(bench.defaultPanel && panel(bench.defaultPanel) ? bench.defaultPanel : "__library");
+  const first = bench.defaultPanel && panel(bench.defaultPanel) ? bench.defaultPanel : hasLibrary || panels.length === 0 ? "__library" : panels[0].id;
+  activate(first);
 }
 
 function escapeHtml(s) {

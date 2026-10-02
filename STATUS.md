@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-01 (0.4.0), walls drawn from above, smooth bench motion, no idle shimmer; turn-based play is next.
+Last updated: 2026-10-02, the bench Play tab is turn based (click to move, initiative, on-board text) and the bench is down to five tabs.
 
 ## Where the move stands
 
@@ -27,7 +27,7 @@ pieces of them can be pulled in and adapted.
 320 in-play fantasy pieces at 16 and 32 px (token_goblin is kept hand-drawn,
 see below), ground in two styles (Painted, Lit),
 characters in four (Cel bands, Pixel artist, Toon, Plain), on the bench (Art
-row, Converted tab). The renderer draws 32 px art (`RenderManifest.spriteSize`).
+row, Pieces tab). The renderer draws 32 px art (`RenderManifest.spriteSize`).
 The game itself still shows the hand-drawn 16 px art: switching it needs the
 owner's pick of styles and size, then LivingTable.tsx's board sizing
 (`SPRITE_SIZE * displayScale` must use the manifest's sprite size), games-db
@@ -47,15 +47,15 @@ hand-drawn one (owner's call, 2026-10-01: "I liked the old goblin"): the
 KayKit library leaves it out on purpose (`HAND_DRAWN` in cast.py), so the
 bench shows the hand-drawn sprite and moves the one drawing alongside the
 cast. The bench was reorganised: Play (opens first; hero and goblin animate,
-gear shows on the moving hero), Characters, Pieces, Gear, Terrain, Palette,
-Library last. Known weak spots: the Pixel artist style turns non-Knight
+gear shows on the moving hero), Characters, Pieces, Gear, Terrain (the
+Palette and Library tabs are gone, 2026-10-02). Known weak spots: the Pixel artist style turns non-Knight
 clothing drab, and the skeleton is near white in Cel bands and Plain.
 
-**0.4.0 (2026-10-01):** walls from above with a side-on door in north-south walls (display-only pass, render/wallProfiles.ts; hand-drawn and both KayKit ground styles; players get it with the games-db paste and STORAGE_PREFIX v4), KayKit idle shimmer removed (whole-pixel idle snap plus per-pixel hysteresis; walk only about 20 percent calmer), the bench Play tab never blanks or jumps (cached room layer, pre-decoded clips, continuous walk, gliding camera), and the engine pieces for turn-based play (world/pathing.ts, session/hostileTurns.ts with monsters that route round walls, session/combatEvents.ts, render/anchors.ts). The on-screen text layer (scripts/asset-bench/overlay.ts, pixel and storybook styles) is built but not wired in yet.
+**0.4.0 (2026-10-01):** walls from above with a side-on door in north-south walls (display-only pass, render/wallProfiles.ts; hand-drawn and both KayKit ground styles; players get it with the games-db paste and STORAGE_PREFIX v4), KayKit idle shimmer removed (whole-pixel idle snap plus per-pixel hysteresis; walk only about 20 percent calmer), the bench Play tab never blanks or jumps (cached room layer, pre-decoded clips, continuous walk, gliding camera), and the engine pieces for turn-based play (world/pathing.ts, session/hostileTurns.ts with monsters that route round walls, session/combatEvents.ts, render/anchors.ts). The bench Play tab is turn based (2026-10-02): click to walk, click the goblin to attack, initiative and turns from combatRound.ts, the goblin's turn from resolveMonsterTurn, and every word on the board through overlay.ts in a pixel or storybook style.
 
 ## Next
 
-- Turn-based point-and-move Play tab on the bench (#5): click to move, initiative, attack targets, dialogue box, floating numbers, both text styles; then into the game. Also: camera eases slightly backward after a step, dropdowns keep arrow keys after a change, the Characters tab stalls on a Style change.
+- Bring the bench's turn-based play into the game (#5): the click layer, turn order, overlay text and floating numbers into LivingTable.tsx. The owner picks the text style first (Pixel or Storybook, on the Play tab).
 - Owner's call pending: a deliberate 1 px breathing bob for 16 px idles (they are now still).
 - Publishing: add the five Actions secrets (see the publish workflow's header), then the first publish per project.
 - Owner picks: ground style, character style and size for the game. Then the game needs an animation system to use the cast (the bench's Actor in `scripts/asset-bench/cast.ts` is the model).

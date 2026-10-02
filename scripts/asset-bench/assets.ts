@@ -1,10 +1,11 @@
 /**
  * The Living Table asset bench registry.
  *
- * Six panels (Play, Characters, Pieces, Gear, Terrain, Palette) and a
- * searchable Library of every sprite in scripts/assets/fantasy.ts and
- * scripts/assets/scifi.ts. The panels call the game's own render, rules and
- * character functions BY SYMBOL (renderPlanFor, renderCell, renderDoll,
+ * Five panels: Play (the game in miniature, turn based), Characters (the
+ * animated cast), Pieces (every in-play sprite beside its KayKit version),
+ * Gear (the paper doll and inventory icons) and Terrain (the autotiling).
+ * The panels call the game's own render, rules and character functions BY
+ * SYMBOL (renderPlanFor, renderCell, renderDoll,
  * renderGearIcon, applyDisplayTiles, the combat and inventory rules) so the
  * bench shows what ships, not a second drawing of it. The KayKit art rides in
  * as embedded data: the converted stills (kaykit.ts) and the animated cast
@@ -34,7 +35,6 @@ import {
   EQUIPMENT_TIERS,
   GEAR_ROLES,
   LOOT_CAP_LINE,
-  MAX_ATTUNED_ITEMS,
   SLOTS_BY_ARCHETYPE,
   TEMPLATE_OF_ARCHETYPE,
   bodySpriteId,
@@ -53,14 +53,24 @@ import {
   type SheetOnlyRole,
   type SlotRole,
 } from "../../src/games/livingtable/characters/equipmentTypes";
-import { PLAYABLE_ARCHETYPE_IDS, PLAYABLE_TEMPLATES, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
+import { PLAYABLE_ARCHETYPE_IDS, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
 import { createCharacter, type CharacterSheet } from "../../src/games/livingtable/characters/creation";
-import { applyDamage } from "../../src/games/livingtable/characters/health";
+import { applyHealing, potionHealing } from "../../src/games/livingtable/characters/health";
 import { renderPlanFor, slotLabelFor } from "../../src/games/livingtable/menu/equipment";
-import { attackLine, bonusSources, lootLine, sentenceCase } from "../../src/games/livingtable/menu/labels";
-import { attackBlockedReason } from "../../src/games/livingtable/menu/combatRound";
+import { attackLine, bonusSources, lootLine, sentenceCase, type TokenNamer } from "../../src/games/livingtable/menu/labels";
+import {
+  FEET_PER_TILE,
+  activeCombatant,
+  attackBlockedReason,
+  endTurn,
+  isPlayersTurn,
+  spendActiveAction,
+  spendActiveMovement,
+  startCombat,
+  withActiveEconomy,
+  type CombatRound,
+} from "../../src/games/livingtable/menu/combatRound";
 import { resolveAttack, resolveDamage } from "../../src/games/livingtable/rules/combat";
-import { attunedRoles } from "../../src/games/livingtable/rules/attunement";
 import { commitLoadout, draftFromSheet, stageEquip, stageUnequip } from "../../src/games/livingtable/rules/inventory";
 import { lootFor } from "../../src/games/livingtable/rules/loot";
 import {
@@ -68,8 +78,8 @@ import {
   attackerBonusFor,
   damageMonster,
   effectiveArmorClass,
+  effectiveSpeedFt,
   monsterArmorClassFor,
-  monsterDamageNotationFor,
   statblockFor,
   weaponDamageNotationFor,
   weaponFor,
@@ -77,6 +87,11 @@ import {
 import { renderDoll } from "../../src/games/livingtable/render/doll";
 import { renderGearIcon } from "../../src/games/livingtable/render/gearIcon";
 import { renderCell, spriteSizeOf, type RenderManifest } from "../../src/games/livingtable/render/canvasRenderer";
+import { headAnchor } from "../../src/games/livingtable/render/anchors";
+import { attackResultToReadout } from "../../src/games/livingtable/render/rollReadoutAdapter";
+import { resolveMonsterTurn } from "../../src/games/livingtable/session/hostileTurns";
+import { attackEvents, type CombatEvent } from "../../src/games/livingtable/session/combatEvents";
+import { createOverlay, type InitiativeSide, type Overlay, type OverlayPoint, type TextStyle } from "./overlay";
 import { decodeLibrary, kaykitLibrary, partFile } from "./kaykit";
 import {
   CAST_CLIPS,
@@ -85,16 +100,13 @@ import {
   actorAt,
   actorClip,
   actorFrame,
-  cameraTarget,
   castClipKey,
   castClipMs,
   castData,
   castDirToward,
   castFrameIndex,
-  castFrames,
   castFramesIfReady,
   castPrefetch,
-  easeToward,
   findCastClip,
   newActor,
   playClips,
@@ -116,7 +128,10 @@ import {
 import { applyDisplayTiles } from "../../src/games/livingtable/render/terrainEdges";
 import { CELL_WIDTH, CELL_HEIGHT } from "../../src/games/livingtable/world/coordinates";
 import type { CellLayout, PlacedProp, PlacedToken, TileId } from "../../src/games/livingtable/world/cell";
-import { visibleTilesFrom, type Playspace } from "../../src/games/livingtable/world/perception";
+import { emptyWorld, getCell, setCell, visibleTilesFrom, type Playspace } from "../../src/games/livingtable/world/perception";
+import { approachTile, fieldCostFt, movementField, pathTo, reachableTiles, type MovementField } from "../../src/games/livingtable/world/pathing";
+import type { AssetManifest } from "../../src/games/livingtable/world/cell";
+import type { CellCoord } from "../../src/games/livingtable/world/coordinates";
 import { DEFAULT_MELEE_REACH_TILES, DEFAULT_RANGED_REACH_TILES, tileDistance } from "../../src/games/livingtable/world/reach";
 
 // ===========================================================================
@@ -132,7 +147,6 @@ interface LtSprite {
   pixels: number[][];
 }
 
-const TEMPLATE_LABEL: Record<TemplateGenre, string> = { fantasy: "Fantasy", scifi: "Sci-fi" };
 const FLOOR_TILE: Record<TemplateGenre, string> = { fantasy: "floor_grass", scifi: "floor_deckplate" };
 const SPRITES_BY_TEMPLATE: Record<TemplateGenre, readonly LtSprite[]> = {
   fantasy: FANTASY_SPRITES as unknown as LtSprite[],
@@ -156,58 +170,6 @@ const ARCHETYPE_LABEL: Record<ArchetypeId, string> = {
   medic: "Medic",
   psion: "Psion",
 };
-
-// ===========================================================================
-// The library: every sprite from both templates, prefixed "<template>:" so
-// the two id spaces can never collide.
-// ===========================================================================
-
-function groupFor(template: TemplateGenre, s: LtSprite): string {
-  const t = TEMPLATE_LABEL[template];
-  if (s.kind === "tile") return `${t} tiles`;
-  if (s.kind === "prop") return `${t} props`;
-  // kind === "token": archetype bodies/NPCs, or one of the equipment overlay
-  // families. Sorted by the sprite id grammar in equipmentTypes.ts section 3.
-  if (s.assetId.startsWith("gear_")) {
-    if (/_(weapon|outer|crown)_(base|rare|legendary)$/.test(s.assetId)) return `${t} gear overlays`;
-    if (/_boots_(base|rare)$/.test(s.assetId)) return `${t} boots`;
-    if (/_(ring|amulet)_(base|rare|legendary)$/.test(s.assetId)) return `${t} ring & amulet icons`;
-    if (/_empty$/.test(s.assetId)) return `${t} slot silhouettes`;
-  }
-  return `${t} tokens`;
-}
-
-interface BenchPixelAsset {
-  id: string;
-  label: string;
-  group: string;
-  tags: string[];
-  w: number;
-  h: number;
-  meta: Record<string, unknown>;
-  palette: TemplateGenre;
-  pixels: number[][];
-}
-
-function benchAssetsFor(template: TemplateGenre): BenchPixelAsset[] {
-  return SPRITES_BY_TEMPLATE[template].map((s) => {
-    const w = s.pixels[0]?.length ?? s.size;
-    const h = s.pixels.length;
-    return {
-      id: `${template}:${s.assetId}`,
-      label: s.name,
-      group: groupFor(template, s),
-      tags: [template, s.kind, s.walkable ? "walkable" : "blocked"],
-      w,
-      h,
-      meta: { assetId: s.assetId, kind: s.kind, walkable: s.walkable, size: s.size, width: w, height: h },
-      palette: template,
-      pixels: s.pixels,
-    };
-  });
-}
-
-const assets: BenchPixelAsset[] = [...benchAssetsFor("fantasy"), ...benchAssetsFor("scifi")];
 
 // ===========================================================================
 // The raw RenderManifest per template: unprefixed ids, exactly the shape
@@ -242,7 +204,7 @@ const MANIFEST: Record<TemplateGenre, RenderManifest> = { fantasy: manifestFor("
 // size and style). The conversion keeps every asset id, so the game's own
 // renderer draws it unchanged; at 32 px the manifest says spriteSize 32 and
 // the renderer scales to match. An id no part covers falls back to the
-// current art (2x upscaled at 32 px), and the Converted panel says which.
+// current art (2x upscaled at 32 px), and the Pieces tab says which.
 // ===========================================================================
 
 type GroundStyle = "painted" | "lit";
@@ -404,7 +366,7 @@ function buildArtControls(onChange: () => void, opts: { chars?: boolean } = {}):
   const sync = () => {
     for (const e of extras) e.hidden = art.source !== "kaykit";
     status.textContent =
-      art.source === "kaykit" ? "KayKit packs by Kay Lousberg (CC0), rendered in Blender. Fantasy only; sci-fi is paused." : lib ? "" : "No converted library in this build.";
+      art.source === "kaykit" || lib ? "" : "No converted library in this build.";
     // One short line per choice in force, so the row never grows a wall of text.
     const lines = [ART_EXPLAIN[art.source]];
     if (art.source === "kaykit") {
@@ -555,8 +517,8 @@ function buildTierControls(
 
 /**
  * The heroes a player can start as. The panels offer only these: the Healer
- * is out of play and sci-fi is paused (characters/templates.ts), and their
- * sprites stay in the Library.
+ * is out of play and sci-fi is paused (characters/templates.ts); their art
+ * and rules stay in the game's files.
  */
 function buildHeroSelect(value: ArchetypeId, onChange: (id: ArchetypeId) => void): HTMLSelectElement {
   const select = document.createElement("select");
@@ -588,26 +550,32 @@ function buildScaleSelect(options: readonly number[], initial: number, onChange:
 }
 
 // ===========================================================================
-// Panel: Play. A two-room scene to walk around in, with the game's own rules
-// behind every button. With the KayKit art on, the hero and the monster are
-// the animated cast (cast.ts), the hero dressed in whatever it wears.
+// Panel: Play. The game in miniature, turn based: a two-room scene with a
+// door, a chest and a goblin. Click a square to walk there, the goblin to
+// attack it, the door or the chest to use it. When the goblin notices the
+// hero (it could reach the hero within MONSTER_WAKE_TILES steps) everyone
+// rolls initiative, and from then on each side takes its turn.
 //
 // The game's own code, called by symbol:
-//   drawing   renderCell + renderPlanFor (the hero composited with whatever
-//             is worn), renderGearIcon (slot and item icons)
-//   gear      stageEquip / stageUnequip / commitLoadout, the inventory
-//             screen's own staging rules, attunement cap included
-//   attack    attackBlockedReason (reach, and line of sight through
-//             visibleTilesFrom), resolveAttack, resolveDamage, damageMonster,
-//             applyDamage, every dice line printed by attackLine
-//   loot      lootFor + lootLine, on a kill and on opening the container
+//   turns     menu/combatRound.ts: startCombat, endTurn, the movement and
+//             action economy, attackBlockedReason
+//   moving    world/pathing.ts: movementField, pathTo, approachTile (the
+//             reachable squares, the path, where to stand to strike)
+//   monster   session/hostileTurns.ts resolveMonsterTurn on a World built from
+//             the scene: it paths round walls and swings, and its events are
+//             played back square by square
+//   attacks   resolveAttack, resolveDamage, damageMonster, applyDamage,
+//             attackLine, attackEvents (the floating numbers), headAnchor
+//   healing   potionHealing + applyHealing (the hero carries two potions)
+//   loot      lootFor + lootLine, on a kill and on opening the chest
+//   gear      stageEquip / stageUnequip / commitLoadout
+//   drawing   renderCell for the room; the animated cast (cast.ts) for the
+//             figures; overlay.ts for every word on the board (banners, the
+//             dialogue box, roll plates, floating numbers, the turn order)
 //
-// The bench's own, and deliberately simple: the room, one tile per press, and
-// the monster's turn (it wakes once it can reach you within
-// MONSTER_WAKE_TILES steps, then steps toward you and attacks from adjacent).
-// The game runs all of this inside an initiative round; here every press is
-// one turn. Opening the container always succeeds; in the game it is a search
-// check.
+// The bench's own: the room, the goblin's wake rule and its barks, door and
+// chest use (free actions; the chest always opens, in the game it is a
+// search check) and the potion stock.
 // ===========================================================================
 
 interface XY {
@@ -692,8 +660,10 @@ interface PlayState {
   log: LogLine[];
   /** Why the last press did nothing, in words. Cleared by the next press that does something. */
   note: string | null;
-  /** How many times the monster has swung, so the picture can play its attack (a miss changes nothing else). */
-  monsterSwings: number;
+  /** The fight, from the game's own combatRound.ts; null while exploring. */
+  round: CombatRound | null;
+  /** Healing potions left (the bench's own stock). */
+  potions: number;
   /** Where the monster fell; the animated picture leaves its body there. */
   fallenAt: XY | null;
   /** What the hero and the monster are doing in the animated picture (cast.ts). Picture only: the rules never read these. */
@@ -720,7 +690,8 @@ function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: Til
     searched: false,
     log: [],
     note: null,
-    monsterSwings: 0,
+    round: null,
+    potions: HERO_POTIONS,
     fallenAt: null,
     heroActor: newActor("down"),
     monsterActor: newActor("left"),
@@ -852,125 +823,151 @@ function rollLoot(p: PlayState, source: "fight" | "container"): void {
   p.log.push({ text: lootLine(roll, name), tone: roll.item ? "good" : "plain" });
 }
 
-/** The monster's whole turn: wake, close in, and attack from adjacent. */
-function monsterTurn(p: PlayState): void {
-  const m = p.monster;
-  if (!m || heroDown(p)) return;
-  const kit = SCENE_KIT[p.template];
-  const tiles = sceneTiles(p);
-  const label = monsterLabel(p);
-  const path = pathToward(p, tiles, m.at, p.heroAt);
-  if (!m.awake) {
-    if (!path || path.steps > MONSTER_WAKE_TILES) return;
-    m.awake = true;
-    p.log.push({ text: `${sentenceCase(label)} sees you.`, tone: "bad" });
+// ---------------------------------------------------------------------------
+// The turn rules. Everything with a number in it is the game's own: the round
+// (menu/combatRound.ts), movement and paths (world/pathing.ts), the monster's
+// whole turn (session/hostileTurns.ts resolveMonsterTurn, on a World built from
+// this scene), attacks, damage, healing and loot. Each rule changes the scene
+// at once and returns what happened as CombatEvents; the panel plays them back.
+// ---------------------------------------------------------------------------
+
+const SCENE_CELL: CellCoord = { cx: 0, cy: 0 };
+/** The hero walks in with this many healing potions (the bench's own stock, so a heal has a source). */
+const HERO_POTIONS = 2;
+/** The game's monsters all move 30 ft (MonsterStatblock has no speed of its own yet). */
+const MONSTER_SPEED_FT = 30;
+
+interface TurnResult {
+  events: CombatEvent[];
+  /** Why nothing happened, in the player's words; null when it happened. */
+  refused: string | null;
+}
+const refusedWith = (reason: string): TurnResult => ({ events: [], refused: reason });
+
+/** The engine's view of a template's assets: tile walkability and blocking props from each sprite's own walkable flag, as manifestCache.ts builds it for the game. */
+function worldManifestFor(template: TemplateGenre): AssetManifest {
+  const m: AssetManifest = { tiles: {}, props: {}, tokens: {} };
+  for (const s of SPRITES_BY_TEMPLATE[template]) {
+    if (s.kind === "tile") m.tiles[s.assetId] = { walkable: s.walkable };
+    else if (s.kind === "prop") m.props[s.assetId] = { blocks: !s.walkable };
+    else m.tokens[s.assetId] = {};
   }
-  if (tileDistance(m.at, p.heroAt) > DEFAULT_MELEE_REACH_TILES) {
-    if (!path) return; // no way through; it waits
-    m.at = path.next;
-    if (tileDistance(m.at, p.heroAt) > DEFAULT_MELEE_REACH_TILES) {
-      p.log.push({ text: `${sentenceCase(label)} closes in.`, tone: "plain" });
-      return;
-    }
-  }
-  const block = statblockFor(kit.monster);
-  const playerAC = effectiveArmorClass(p.hero);
-  p.monsterSwings++;
-  const result = resolveAttack({ attackerBonus: block.attackBonus, targetAC: playerAC });
-  let damage: number | undefined;
-  let vitalsNote: string | null = null;
-  if (result.hit) {
-    const rolled = resolveDamage(monsterDamageNotationFor(kit.monster), Math.random, result.critical);
-    damage = rolled.total;
-    const outcome = applyDamage(p.hero, rolled.total, result.critical);
-    p.hero = outcome.sheet;
-    vitalsNote = outcome.note;
-  }
-  p.log.push({
-    text: attackLine({
-      attacker: label,
-      target: p.hero.name,
-      roll: result.roll,
-      modifier: block.attackBonus,
-      total: result.total,
-      targetAC: playerAC,
-      hit: result.hit,
-      critical: result.critical,
-      fumble: result.fumble,
-      damage,
-    }),
-    tone: result.hit ? "bad" : "good",
-  });
-  if (vitalsNote) p.log.push({ text: vitalsNote, tone: "bad" });
+  return m;
+}
+const WORLD_MANIFEST: Record<TemplateGenre, AssetManifest> = { fantasy: worldManifestFor("fantasy"), scifi: worldManifestFor("scifi") };
+
+/** The scene as the engine sees it: the room plus both figures as tokens. */
+function engineLayout(p: PlayState): CellLayout {
+  return sceneLayout(p, false);
 }
 
-function heroMove(p: PlayState, dir: Dir): void {
-  if (heroDown(p)) {
-    p.note = DOWN_NOTE;
-    return;
-  }
+function namerFor(p: PlayState): TokenNamer {
+  return { playerTokenId: HERO_ID, playerName: p.hero.name, tokens: engineLayout(p).tokens };
+}
+
+function heroesTurn(p: PlayState): boolean {
+  return p.round !== null && isPlayersTurn(p.round);
+}
+
+/** Feet the hero may still walk: unlimited while exploring, the turn's movement in a fight, nothing on someone else's turn. */
+function heroBudgetFt(p: PlayState): number {
+  if (!p.round) return Infinity;
+  if (!isPlayersTurn(p.round)) return 0;
+  return activeCombatant(p.round)?.economy.movementRemaining ?? 0;
+}
+
+function heroActionReady(p: PlayState): boolean {
+  if (!p.round) return true;
+  return isPlayersTurn(p.round) && activeCombatant(p.round)?.economy.action === true;
+}
+
+/** Every square the hero can walk to now, with what it costs. */
+function heroField(p: PlayState): MovementField {
+  return movementField(engineLayout(p), WORLD_MANIFEST[p.template], HERO_ID, p.heroAt, heroBudgetFt(p));
+}
+
+function heroReachTiles(p: PlayState): number {
+  return weaponFor(p.hero).ranged ? DEFAULT_RANGED_REACH_TILES : DEFAULT_MELEE_REACH_TILES;
+}
+
+/** Why the hero cannot stand on `to`, in words. */
+function blockedWords(p: PlayState, to: XY): string {
   const kit = SCENE_KIT[p.template];
-  const to = { x: p.heroAt.x + DIR_STEP[dir].x, y: p.heroAt.y + DIR_STEP[dir].y };
   const blocked = terrainBlocks(p, sceneTiles(p), to);
-  if (blocked === "door") {
-    p.note = `${sentenceCase(kit.doorLabel)} is closed. Stand next to it and press Interact.`;
-    return;
-  }
-  if (blocked === "container") {
-    p.note = `${sentenceCase(kit.containerLabel)} is in the way. Stand next to it and press Interact to open it.`;
-    return;
-  }
-  if (blocked) {
-    p.note = "A wall. You cannot walk through it.";
-    return;
-  }
-  if (p.monster && same(p.monster.at, to)) {
-    p.note = `${sentenceCase(monsterLabel(p))} is in the way. Press Attack.`;
-    return;
-  }
-  p.heroAt = to;
-  p.note = null;
-  monsterTurn(p);
+  if (blocked === "door") return `${sentenceCase(kit.doorLabel)} is closed. Click it when you are next to it to open it.`;
+  if (blocked === "container") return `${sentenceCase(kit.containerLabel)} is in the way.`;
+  if (blocked) return "A wall. You cannot walk through it.";
+  if (p.monster && same(p.monster.at, to)) return `${sentenceCase(monsterLabel(p))} is in the way.`;
+  if (p.round && heroBudgetFt(p) < FEET_PER_TILE) return "No movement left this turn. Attack, or end your turn.";
+  return p.round ? "Too far to walk this turn." : "You cannot get there from here.";
 }
 
-function heroAttack(p: PlayState): void {
-  if (heroDown(p)) {
-    p.note = DOWN_NOTE;
-    return;
-  }
+/** Whether the monster notices the hero: it could reach the hero within MONSTER_WAKE_TILES steps. That is when the fight starts. */
+function monsterNotices(p: PlayState): boolean {
   const m = p.monster;
-  if (!m) {
-    p.note = "Nothing left to fight. Press Reset scene to bring it back.";
-    return;
+  if (!m || m.awake || heroDown(p)) return false;
+  const path = pathToward(p, sceneTiles(p), m.at, p.heroAt);
+  return path !== null && path.steps <= MONSTER_WAKE_TILES;
+}
+
+/** Roll initiative with the game's own startCombat: d20 plus Dexterity for the hero, the engine's fixed bonus for the monster. */
+function startFight(p: PlayState): void {
+  if (!p.monster) return;
+  p.monster.awake = true;
+  p.round = startCombat({
+    player: { id: HERO_ID, label: p.hero.name, dexModifier: p.hero.modifiers.dex, speedFt: effectiveSpeedFt(p.hero) },
+    hostiles: [{ id: MONSTER_ID, label: monsterLabel(p), speedFt: MONSTER_SPEED_FT }],
+  });
+  const order = p.round.order.map((c) => `${c.id === HERO_ID ? p.hero.name : sentenceCase(monsterLabel(p))} ${c.initiative}`).join(", ");
+  p.log.push({ text: `Roll initiative! ${order}.`, tone: "plain" });
+}
+
+/** One square, as the engine allows it: next to the hero, open, within the turn's movement, and paid for in a fight. */
+function heroStepTo(p: PlayState, to: XY): TurnResult {
+  if (heroDown(p)) return refusedWith(DOWN_NOTE);
+  if (p.round && !isPlayersTurn(p.round)) return refusedWith("Wait for your turn.");
+  if (tileDistance(p.heroAt, to) !== 1) return refusedWith("One square at a time.");
+  if (fieldCostFt(heroField(p), to) === undefined) return refusedWith(blockedWords(p, to));
+  if (p.round) {
+    const next = spendActiveMovement(p.round, FEET_PER_TILE);
+    if (!next) return refusedWith(blockedWords(p, to));
+    p.round = next;
   }
+  const from = { ...p.heroAt };
+  p.heroAt = { ...to };
+  return { events: [{ kind: "move", tokenId: HERO_ID, from, path: [{ ...to }] }], refused: null };
+}
+
+/** The hero swings at the monster: the game's reach, sight and turn rules, then its dice. */
+function heroAttackRules(p: PlayState): TurnResult {
+  if (heroDown(p)) return refusedWith(DOWN_NOTE);
+  const m = p.monster;
+  if (!m) return refusedWith("Nothing left to fight. Press Reset scene to bring it back.");
   const kit = SCENE_KIT[p.template];
-  const tiles = sceneTiles(p);
-  const reachTiles = weaponFor(p.hero).ranged ? DEFAULT_RANGED_REACH_TILES : DEFAULT_MELEE_REACH_TILES;
   const blocked = attackBlockedReason({
-    round: null,
+    round: p.round,
     attackerAt: p.heroAt,
     targetAt: m.at,
     downed: false,
-    reachTiles,
-    hasLineOfSight: canSee(p, tiles, p.heroAt, m.at),
+    reachTiles: heroReachTiles(p),
+    hasLineOfSight: canSee(p, sceneTiles(p), p.heroAt, m.at),
   });
-  if (blocked) {
-    p.note = blocked;
-    return;
-  }
-  p.note = null;
+  if (blocked) return refusedWith(sentence(blocked));
   const label = monsterLabel(p);
   const bonus = attackerBonusFor(p.hero);
   const targetAC = monsterArmorClassFor(kit.monster);
+  const sources = bonusSources(attackBonusSourcesFor(p.hero), bonus);
   const result = resolveAttack({ attackerBonus: bonus, targetAC });
   let damage: number | undefined;
   let down = false;
+  const hpBefore = m.hp;
   if (result.hit) {
     damage = resolveDamage(weaponDamageNotationFor(p.hero), Math.random, result.critical).total;
     const hurt = damageMonster({ assetId: kit.monster, currentHp: m.hp }, damage);
     m.hp = hurt.currentHp;
     down = hurt.down;
   }
+  if (p.round) p.round = spendActiveAction(p.round) ?? p.round;
   p.log.push({
     text: attackLine({
       attacker: p.hero.name,
@@ -985,25 +982,25 @@ function heroAttack(p: PlayState): void {
       damage,
       targetDown: down,
       targetHpLeft: result.hit && !down ? m.hp : undefined,
-      sources: bonusSources(attackBonusSourcesFor(p.hero), bonus),
+      sources,
     }),
     tone: result.hit ? "good" : "bad",
   });
+  const readout = { ...attackResultToReadout(result, bonus, targetAC, sources), caption: `${p.hero.name} attacks ${label}`, critical: result.critical, fumble: result.fumble };
+  const events = attackEvents({ by: HERO_ID, against: MONSTER_ID, result, readout, damage, hpLost: hpBefore - m.hp, down });
   if (down) {
     p.fallenAt = { ...m.at };
     p.monster = null;
+    p.round = null;
     rollLoot(p, "fight");
-    return;
   }
-  m.awake = true;
-  monsterTurn(p);
+  return { events, refused: null };
 }
 
-function heroInteract(p: PlayState): void {
-  if (heroDown(p)) {
-    p.note = DOWN_NOTE;
-    return;
-  }
+/** The door or the chest next to the hero. Free in a fight, like any small object interaction. */
+function heroInteractRules(p: PlayState): TurnResult {
+  if (heroDown(p)) return refusedWith(DOWN_NOTE);
+  if (p.round && !isPlayersTurn(p.round)) return refusedWith("Wait for your turn.");
   const kit = SCENE_KIT[p.template];
   const near = (at: XY) => tileDistance(p.heroAt, at) <= 1;
   if (near(DOOR_AT)) {
@@ -1011,29 +1008,70 @@ function heroInteract(p: PlayState): void {
       p.doorOpen = true;
       p.log.push({ text: `You open ${kit.doorLabel}.`, tone: "plain" });
     } else if (same(p.heroAt, DOOR_AT)) {
-      p.note = "You are standing in the doorway. Step out of it first.";
-      return;
+      return refusedWith("You are standing in the doorway. Step out of it first.");
     } else if (p.monster && same(p.monster.at, DOOR_AT)) {
-      p.note = `${sentenceCase(monsterLabel(p))} is standing in the doorway.`;
-      return;
+      return refusedWith(`${sentenceCase(monsterLabel(p))} is standing in the doorway.`);
     } else {
       p.doorOpen = false;
       p.log.push({ text: `You close ${kit.doorLabel}.`, tone: "plain" });
     }
   } else if (near(CONTAINER_AT)) {
-    if (p.searched) {
-      p.note = `You already emptied ${kit.containerLabel}.`;
-      return;
-    }
+    if (p.searched) return refusedWith(`You already emptied ${kit.containerLabel}.`);
     p.searched = true;
     p.log.push({ text: `You open ${kit.containerLabel}.`, tone: "plain" });
     rollLoot(p, "container");
   } else {
-    p.note = `Nothing to use here. Stand next to ${kit.doorLabel} or ${kit.containerLabel} and press Interact.`;
-    return;
+    return refusedWith(`Nothing to use here. Stand next to ${kit.doorLabel} or ${kit.containerLabel}.`);
   }
-  p.note = null;
-  monsterTurn(p);
+  return { events: [], refused: null };
+}
+
+/** A healing potion, with the game's own potionHealing and applyHealing. It takes the action in a fight. */
+function drinkPotionRules(p: PlayState): TurnResult {
+  if (p.hero.dead) return refusedWith(DOWN_NOTE);
+  if (p.potions <= 0) return refusedWith("No potions left.");
+  if (p.round && !heroActionReady(p)) return refusedWith(p.round && !isPlayersTurn(p.round) ? "Wait for your turn." : "You have already taken your action this turn.");
+  if (!heroDown(p) && p.hero.currentHp >= p.hero.maxHp) return refusedWith("You are already at full health.");
+  const before = p.hero.currentHp;
+  const outcome = applyHealing(p.hero, potionHealing());
+  p.hero = outcome.sheet;
+  p.potions--;
+  if (p.round) p.round = spendActiveAction(p.round) ?? p.round;
+  p.log.push({ text: `${p.hero.name} drinks a potion of healing. ${outcome.note}`, tone: "good" });
+  return { events: [{ kind: "heal", tokenId: HERO_ID, amount: p.hero.currentHp - before }], refused: null };
+}
+
+/**
+ * The monster's whole turn, by the game's own resolveMonsterTurn on a World
+ * built from this scene: it paths round walls, walks what its movement pays
+ * for and swings if it can. Returns the events and the scene it ends in,
+ * WITHOUT applying them, so the panel can walk the monster square by square
+ * and land the blow when the swing plays.
+ */
+function monsterTurnRules(p: PlayState): { events: CombatEvent[]; endAt: XY | null; sheet: CharacterSheet; lines: LogLine[] } {
+  const m = p.monster;
+  if (!m || !p.round) return { events: [], endAt: null, sheet: p.hero, lines: [] };
+  const world = setCell(emptyWorld(), SCENE_CELL, engineLayout(p));
+  const out = resolveMonsterTurn({
+    world,
+    cell: SCENE_CELL,
+    manifest: WORLD_MANIFEST[p.template],
+    monsterId: MONSTER_ID,
+    playerTokenId: HERO_ID,
+    sheet: p.hero,
+    namer: namerFor(p),
+    economy: activeCombatant(p.round)?.economy,
+  });
+  p.round = withActiveEconomy(p.round, out.economy);
+  const after = getCell(out.world, SCENE_CELL)?.tokens.find((t) => t.id === MONSTER_ID);
+  const lines: LogLine[] = [];
+  const seen = new Set<string>();
+  for (const l of out.lines) {
+    seen.add(l.text);
+    lines.push({ text: l.text, tone: l.hit ? "good" : "bad" });
+  }
+  for (const s of out.story) if (!seen.has(s)) lines.push({ text: sentence(s), tone: "plain" });
+  return { events: out.events, endAt: after ? { x: after.x, y: after.y } : null, sheet: out.sheet, lines };
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,11 +1215,6 @@ function tierWord(tier: EquipmentTier): string {
   return tier === "common" ? "your own" : tier;
 }
 
-// Font Awesome 6 solid caret-up (320x512), rotated per direction.
-const CARET_PATH =
-  "M182.6 137.4c-12.5-12.5-32.8-12.5-45.3 0l-128 128c-9.2 9.2-11.9 22.9-6.9 34.9s16.6 19.8 29.6 19.8H288c12.9 0 24.6-7.8 29.6-19.8s2.2-25.7-6.9-34.9l-128-128z";
-const CARET_TURN: Record<Dir, number> = { up: 0, right: 90, down: 180, left: 270 };
-
 // ---------------------------------------------------------------------------
 // The animated cast (cast.ts): which style is on show, and one figure drawn
 // as its body plus whatever it wears, every piece the same clip, facing and
@@ -1225,46 +1258,6 @@ function starterLayers(style: CastStyle, entry: CastCharacter): WornLayer[] {
   return style.gear
     .filter((g) => (g.character ? g.character === entry.id : g.id.startsWith(prefix)) && g.tier === "base")
     .map((gear) => ({ gear, remap: null }));
-}
-
-/**
- * One frame of a figure: the body, then each worn layer in the cast's order
- * for that facing. Draws nothing and returns false until every piece is
- * decoded (onReady fires as each one lands), so a half-dressed frame never
- * shows.
- */
-function drawCastFrame(
-  ctx: CanvasRenderingContext2D,
-  style: CastStyle,
-  entry: CastCharacter,
-  clip: CastClip,
-  frame: number,
-  layers: WornLayer[],
-  dest: { x: number; y: number; w: number; h: number },
-  onReady: () => void,
-): boolean {
-  const cast = castData();
-  const meta = entry.sizes[clip.size];
-  if (!cast || !meta) return false;
-  const body = castFrames(cast.palette, `${style.style}|${entry.id}`, clip, meta, null, onReady);
-  const order = (entry.archetype ? style.layerOrderByArchetype?.[entry.archetype]?.[clip.dir] : undefined) ?? style.layerOrder[clip.dir] ?? [];
-  const rank = (role: string) => {
-    const i = order.indexOf(role);
-    return i < 0 ? order.length : i;
-  };
-  const pieces = [...layers]
-    .sort((a, b) => rank(a.gear.role) - rank(b.gear.role))
-    .map((l) => {
-      const lc = findCastClip(l.gear, clip.size, clip.clip, clip.dir);
-      return lc ? castFrames(cast.palette, `${style.style}|${l.gear.id}`, lc, meta, l.remap, onReady) : [];
-    });
-  if (!body || pieces.some((p) => p === null)) return false;
-  ctx.imageSmoothingEnabled = false;
-  for (const frames of [body, ...pieces]) {
-    if (!frames || frames.length === 0) continue;
-    ctx.drawImage(frames[Math.min(frame, frames.length - 1)]!, dest.x, dest.y, dest.w, dest.h);
-  }
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1552,9 +1545,6 @@ function monsterTimingFor(p: PlayState, style: CastStyle | null): { clips: CastC
   return (style ? castEntry(style, SCENE_KIT[p.template].monster) : null) ?? SPRITE_ENTRY;
 }
 
-/** The camera glides to the hero with this time constant: about a third of a second to settle, no overshoot. */
-const CAMERA_TAU_MS = 110;
-
 interface PlayStageHost {
   viewport: HTMLElement;
   canvas: HTMLCanvasElement;
@@ -1587,12 +1577,9 @@ function createPlayStage(host: PlayStageHost): PlayStage {
   let lookKey = "";
   let heroSet: FigureSet | null = null;
   let monsterSet: FigureSet | null = null;
-  // The camera: where it is (floats), what was last written to the viewport (integers), whether it is still gliding.
-  const cam = { x: 0, y: 0 };
-  const wrote = { x: 0, y: 0 };
-  const lastTarget = { x: null as number | null, y: null as number | null };
+  // The camera: where the hero was last kept in view, and whether the next frame jumps straight to it.
+  const lastFocus = { x: Number.NaN, y: Number.NaN };
   let snap = true;
-  let settling = false;
   let lastT = performance.now();
   let raf = 0;
   let alive = true;
@@ -1733,40 +1720,33 @@ function createPlayStage(host: PlayStageHost): PlayStage {
     }
   }
 
-  /** Glide the viewport toward the hero's drawn position, one frame. Leaves the scroll alone on an axis where the room fits, and while the hero's place has not changed, so a player's own scrolling sticks. */
-  function follow(hero: XY, tileScale: number, w: number, h: number, dt: number): void {
-    const vw = viewport.clientWidth;
-    const vh = viewport.clientHeight;
-    const tx = cameraTarget((hero.x + 0.5) * tileScale, vw, w);
-    const ty = cameraTarget((hero.y + 0.5) * tileScale, vh, h);
-    const ax = viewport.scrollLeft;
-    const ay = viewport.scrollTop;
-    // Scrolled by someone else (the player, a layout change): that is where the camera is now.
-    if (Math.abs(ax - wrote.x) > 1) cam.x = ax;
-    if (Math.abs(ay - wrote.y) > 1) cam.y = ay;
-    // The target moves when the hero does (every frame of a step, or at once for a static token) or the viewport is resized.
-    const moved = tx !== lastTarget.x || ty !== lastTarget.y;
-    lastTarget.x = tx;
-    lastTarget.y = ty;
-    if (moved) settling = true;
-    const step = (c: number, target: number | null, actual: number): number => {
-      if (target === null) return actual; // the whole room fits on this axis: nothing to follow
-      if (snap) return target;
-      return settling ? easeToward(c, target, dt, CAMERA_TAU_MS) : c;
+  /**
+   * Keep the hero's DRAWN position inside the middle of the view: the view
+   * moves only when the hero walks out of the middle 40 percent, and then by
+   * exactly as far as the hero went, so it never lags, glides on after the
+   * hero stops, or moves backward. An axis where the room fits never scrolls,
+   * and while the hero stands still the player's own scrolling is left alone.
+   */
+  function follow(hero: XY, tileScale: number, w: number, h: number): void {
+    const fx = (hero.x + 0.5) * tileScale;
+    const fy = (hero.y + 0.5) * tileScale;
+    if (!snap && fx === lastFocus.x && fy === lastFocus.y) return;
+    lastFocus.x = fx;
+    lastFocus.y = fy;
+    const axis = (focus: number, view: number, world: number, current: number): number => {
+      if (world <= view) return 0;
+      const clamp = (v: number) => Math.max(0, Math.min(world - view, v));
+      if (snap) return clamp(focus - view / 2);
+      const margin = view * 0.3;
+      if (focus - current < margin) return clamp(focus - margin);
+      if (focus - current > view - margin) return clamp(focus - (view - margin));
+      return current;
     };
-    cam.x = step(cam.x, tx, ax);
-    cam.y = step(cam.y, ty, ay);
-    if (settling && !moved) {
-      const near = (c: number, t: number | null) => t === null || Math.abs(c - t) < 0.75;
-      if (near(cam.x, tx) && near(cam.y, ty)) settling = false;
-    }
+    const nx = Math.round(axis(fx, viewport.clientWidth, w, viewport.scrollLeft));
+    const ny = Math.round(axis(fy, viewport.clientHeight, h, viewport.scrollTop));
     snap = false;
-    const nx = tx === null ? ax : Math.round(cam.x);
-    const ny = ty === null ? ay : Math.round(cam.y);
-    if (nx !== ax) viewport.scrollLeft = nx;
-    if (ny !== ay) viewport.scrollTop = ny;
-    wrote.x = nx;
-    wrote.y = ny;
+    if (nx !== viewport.scrollLeft) viewport.scrollLeft = nx;
+    if (ny !== viewport.scrollTop) viewport.scrollTop = ny;
   }
 
   function frame(): void {
@@ -1815,7 +1795,7 @@ function createPlayStage(host: PlayStageHost): PlayStage {
       full = false;
       dirty = false;
     }
-    follow(placed.hero, tileScale, w, h, dt);
+    follow(placed.hero, tileScale, w, h);
   }
   raf = requestAnimationFrame(frame);
 
@@ -1831,19 +1811,30 @@ function createPlayStage(host: PlayStageHost): PlayStage {
   };
 }
 
+/** The on-screen text treatment, shared across visits to the tab: the owner is comparing the two. */
+let textStyle: TextStyle = "pixel";
+
+/** Things the goblin says, bench-only flavour (the game's DM has narration only). */
+const GOBLIN_BARKS = {
+  wake: ["Shinies! Give us the shinies!", "Intruder! Mine, mine, all mine!", "Hee hee. Fresh meat."],
+  hurt: ["Ow! Nasty!", "Yaaagh!", "Not the face!"],
+  dodge: ["Hah! Too slow!", "Missed me!"],
+} as const;
+const bark = (list: readonly string[]): string => list[Math.floor(Math.random() * list.length)]!;
+
 function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
   if (!play || !PLAYABLE_HEROES.includes(play.archetypeId)) play = newPlay("fantasy", PLAYABLE_HEROES[0]!, ROOM_FLOOR.fantasy);
   const st = (): PlayState => play!;
 
-  // Per SOURCE pixel, integers only, the same convention the Library's own
-  // scale control uses; renderCell's own unit is canvas px PER TILE
-  // (scale x the art's sprite size), so 32 px art halves the default scale.
+  // Per SOURCE pixel, integers only; renderCell's own unit is canvas px PER
+  // TILE (scale x the art's sprite size), so 32 px art halves the default.
   const wide = typeof innerWidth === "number" && innerWidth >= 1100;
   const defaultScale = () => (artSpriteSize("fantasy") >= 32 ? (wide ? 2 : 1) : wide ? 3 : 2);
   let scale = defaultScale();
   let lastArtSize = artSpriteSize("fantasy");
+  const tileScale = (): number => scale * artSpriteSize("fantasy");
 
   el.appendChild(
     buildArtControls(() => {
@@ -1868,82 +1859,90 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   const controls = el_("div", "bn-controls");
   el.appendChild(controls);
-
-  const heroField = el_("label", "bn-field", "Hero ");
+  const field = (label: string, control: HTMLElement): void => {
+    const f = el_("label", "bn-field", `${label} `);
+    f.appendChild(control);
+    controls.appendChild(f);
+  };
   const heroSelect = buildHeroSelect(st().archetypeId, (id) => {
     play = newPlay("fantasy", id, ROOM_FLOOR.fantasy);
     newScene();
   });
-  heroField.appendChild(heroSelect);
-  controls.appendChild(heroField);
-
-  const scaleField = el_("label", "bn-field", "Zoom ");
+  field("Hero", heroSelect);
   const scaleSelect = buildScaleSelect([1, 2, 3, 4], scale, (n) => {
     scale = n;
     stage.invalidate();
+    marksKey = "";
   });
-  scaleField.appendChild(scaleSelect);
-  controls.appendChild(scaleField);
-
-  const pictureNote = el_("p", "lt-note lt-picture-note");
-  el.appendChild(pictureNote);
-
-  // ---- the scene, the pad, the readout ---------------------------------------
-
-  const playArea = el_("div", "lt-play");
-  el.appendChild(playArea);
-
-  const viewport = el_("div", "lt-viewport");
-  const canvas = el_("canvas", "lt-canvas");
-  viewport.appendChild(canvas);
-  playArea.appendChild(viewport);
-
-  const padArea = el_("div", "lt-pad-area");
-  playArea.appendChild(padArea);
-  const dpad = el_("div", "lt-dpad");
-  dpad.setAttribute("role", "group");
-  dpad.setAttribute("aria-label", "Move");
-  const DPAD_CELL: Record<Dir, string> = { up: "2 / 1", left: "1 / 2", right: "3 / 2", down: "2 / 3" };
-  for (const dir of ["up", "left", "right", "down"] as Dir[]) {
-    const b = el_("button", "lt-dpad-btn");
-    b.type = "button";
-    b.setAttribute("aria-label", `Move ${dir}`);
-    const [col, row] = DPAD_CELL[dir].split(" / ");
-    b.style.gridColumn = col!;
-    b.style.gridRow = row!;
-    b.innerHTML = `<svg viewBox="0 0 320 512" aria-hidden="true" style="transform:rotate(${CARET_TURN[dir]}deg)"><path d="${CARET_PATH}"/></svg>`;
-    b.onclick = () => press(moveAction(dir));
-    dpad.appendChild(b);
+  field("Zoom", scaleSelect);
+  const textSelect = el_("select", "bn-select");
+  for (const [v, label] of [["pixel", "Pixel"], ["storybook", "Storybook"]] as const) {
+    const o = el_("option", undefined, label);
+    o.value = v;
+    textSelect.appendChild(o);
   }
-  padArea.appendChild(dpad);
+  textSelect.value = textStyle;
+  textSelect.onchange = () => {
+    textStyle = textSelect.value as TextStyle;
+    overlay.setStyle(textStyle);
+  };
+  field("Text", textSelect);
+  // A chosen option must not keep the arrow keys: they walk the hero.
+  el.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement | null;
+    if (t && t.tagName === "SELECT") (t as HTMLSelectElement).blur();
+  });
 
-  const actions = el_("div", "lt-actions");
-  const actionButton = (label: string, key: string, primary: boolean, run: () => void) => {
+  el.appendChild(
+    el_(
+      "p",
+      "lt-note lt-howto",
+      "Click a square to walk there, the goblin to attack it, the door or the chest to use it. On a phone, tap once to see the path and again to go. Keys: arrows or WASD step, F attack, E use, Q potion, T end turn, Space skips the goblin's turn.",
+    ),
+  );
+
+  // ---- the stage: the board, the marks over it, and the text overlay ---------
+
+  const stageWrap = el_("div", "lt-stage-wrap");
+  const viewport = el_("div", "lt-viewport");
+  const board = el_("div", "lt-board");
+  const canvas = el_("canvas", "lt-canvas");
+  const marks = el_("canvas", "lt-marks");
+  marks.setAttribute("aria-hidden", "true");
+  board.append(canvas, marks);
+  viewport.appendChild(board);
+  stageWrap.appendChild(viewport);
+  el.appendChild(stageWrap);
+  const overlay: Overlay = createOverlay(stageWrap, textStyle);
+
+  // ---- the action bar and the readout ----------------------------------------
+
+  const bar = el_("div", "lt-bar");
+  const turnChip = el_("p", "lt-turn");
+  turnChip.setAttribute("role", "status");
+  const buttons = el_("div", "lt-bar-buttons");
+  bar.append(turnChip, buttons);
+  el.appendChild(bar);
+  const button = (label: string, key: string, primary: boolean, run: () => void): HTMLButtonElement => {
     const b = el_("button", primary ? "lt-act lt-act-primary" : "lt-act");
     b.type = "button";
     b.appendChild(el_("span", undefined, label));
     if (key) b.appendChild(el_("kbd", undefined, key));
     b.onclick = run;
-    actions.appendChild(b);
+    buttons.appendChild(b);
+    return b;
   };
-  actionButton("Attack", "F", true, () => press(attackAction));
-  actionButton("Interact", "E", false, () => press(interactAction));
-  actionButton("Reset scene", "", false, () => {
+  const attackBtn = button("Attack", "F", true, () => void attackGoblin());
+  const useBtn = button("Use", "E", false, () => void useNearby());
+  const potionBtn = button("Potion", "Q", false, () => void drinkPotion());
+  const endBtn = button("End turn", "T", false, () => void endTurnFlow());
+  button("Reset scene", "", false, () => {
     const p = st();
     play = newPlay(p.template, p.archetypeId, p.floorId, p.hero);
     newScene();
   });
-  padArea.appendChild(actions);
-  padArea.appendChild(el_("p", "lt-note lt-keys", "Arrow keys or WASD move. E interacts, F attacks."));
-
-  const info = el_("div", "lt-info");
-  playArea.appendChild(info);
   const stats = el_("div", "lt-stats");
-  const say = el_("p", "lt-say");
-  say.setAttribute("role", "status");
-  const logEl = el_("div", "lt-log");
-  logEl.setAttribute("aria-label", "Dice log");
-  info.append(stats, say, logEl);
+  el.appendChild(stats);
 
   // ---- gear ----------------------------------------------------------------
 
@@ -1962,211 +1961,465 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   const armouryEl = el_("div", "lt-armoury");
   gear.appendChild(armouryEl);
 
-  // ---- behaviour -----------------------------------------------------------
+  // ---- where things are on screen --------------------------------------------
 
-  /**
-   * The cast style the scene animates with, or null for the static tokens
-   * (the current art, or no cast for this hero). The monster need not be in
-   * the cast: one kept hand-drawn is its own drawing, posed.
-   */
-  const animated = (): CastStyle | null => animatedStyle(st());
-
-  /** The monster's clip timings: its cast entry, or the hand-drawn figures' shared ones. */
-  const monsterTiming = (style: CastStyle | null): { clips: CastClip[] } => monsterTimingFor(st(), style);
-
-  interface Before {
-    at: XY;
-    hp: number;
-    monsterAt: XY | null;
-    monsterHp: number;
-    swings: number;
-    bag: number;
+  /** The square under a pointer, or null off the board. */
+  function tileAt(clientX: number, clientY: number): XY | null {
+    const r = canvas.getBoundingClientRect();
+    if (r.width === 0) return null;
+    const ts = tileScale();
+    const x = Math.floor(((clientX - r.left) * (canvas.width / r.width)) / ts);
+    const y = Math.floor(((clientY - r.top) * (canvas.height / r.height)) / ts);
+    return x >= 0 && y >= 0 && x < CELL_WIDTH && y < CELL_HEIGHT ? { x, y } : null;
   }
 
-  /**
-   * One turn: the rules run now, and the picture's clips follow from what
-   * changed. It never paints (the stage does, once, on the next animation
-   * frame). `at` is when the hero's action begins in the picture: now for a
-   * fresh press, or the instant the last step landed for one that waited on
-   * it. Returns whether the hero changed tile.
-   */
-  function act(run: () => void, kind?: "move" | "attack" | "interact", at: number = performance.now()): boolean {
-    const p0 = st();
-    const before: Before = {
-      at: { ...p0.heroAt },
-      hp: p0.hero.currentHp,
-      monsterAt: p0.monster ? { ...p0.monster.at } : null,
-      monsterHp: p0.monster?.hp ?? 0,
-      swings: p0.monsterSwings,
-      bag: p0.hero.bag?.length ?? 0,
-    };
-    run();
+  /** A point on the canvas, in the overlay host's CSS pixels (the board scrolls under the host). */
+  function toHost(px: number, py: number): OverlayPoint {
+    const r = canvas.getBoundingClientRect();
+    const h = stageWrap.getBoundingClientRect();
+    const k = r.width > 0 ? r.width / canvas.width : 1;
+    return { x: r.left - h.left + px * k, y: r.top - h.top + py * k };
+  }
+
+  /** Over a figure's head, from the game's own headAnchor (the token's sprite height at the art's resolution). */
+  function headOf(who: "hero" | "monster", tile?: XY): OverlayPoint {
     const p = st();
-    if (p.log.length > LOG_KEEP) p.log.splice(0, p.log.length - LOG_KEEP);
-    if (kind) animate(p, kind, before, at);
-    refreshPanels();
-    stage.invalidate();
-    return !same(before.at, p.heroAt);
+    const at = tile ?? (who === "hero" ? p.heroAt : (p.monster?.at ?? p.fallenAt ?? p.heroAt));
+    const assetId = who === "hero" ? bodySpriteId(p.archetypeId) : SCENE_KIT[p.template].monster;
+    const layout: CellLayout = { tiles: [], props: [], tokens: [{ id: who, assetId, x: at.x, y: at.y, kind: who === "hero" ? "pc" : "monster" }], exits: [], sealed: true };
+    const a = headAnchor(layout, who, artManifest(p.template), tileScale());
+    const ts = tileScale();
+    return a ? toHost(a.x, a.y) : toHost((at.x + 0.5) * ts, at.y * ts);
   }
 
-  /**
-   * Pick the clips a press produced, from what changed. The hero: a step
-   * walks, a landed press swings or uses, a hit flinches, a fall dies, a find
-   * cheers. The monster: a wound flinches, a step walks, a swing attacks, a
-   * kill dies and stays down. A step starts from where the figure is DRAWN, so
-   * one begun mid-step carries on from there rather than from its old tile.
-   */
-  function animate(p: PlayState, kind: "move" | "attack" | "interact", before: Before, now: number): void {
-    const h = p.heroActor;
-    const m = p.monsterActor;
-    const heroQ: CastClipId[] = [];
-    if (kind === "move" && !same(before.at, p.heroAt)) {
-      h.dir = castDirToward(p.heroAt.x - before.at.x, p.heroAt.y - before.at.y);
-      if (!REDUCED_MOTION) startStep(h, actorAt(h, before.at, now), now);
-      heroQ.push("walk");
-    } else if (kind === "attack" && before.monsterAt && p.note === null) {
-      h.dir = castDirToward(before.monsterAt.x - p.heroAt.x, before.monsterAt.y - p.heroAt.y);
-      heroQ.push("attack");
-    } else if (kind === "interact" && p.note === null) {
-      const target = tileDistance(p.heroAt, DOOR_AT) <= 1 ? DOOR_AT : CONTAINER_AT;
-      if (!same(target, p.heroAt)) h.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
-      heroQ.push("interact");
+  // ---- plans: what a click on a square means -----------------------------------
+
+  type Plan =
+    | { kind: "walk"; path: XY[]; costFt: number; tile: XY }
+    | { kind: "attack"; path: XY[]; costFt: number; tile: XY }
+    | { kind: "use"; path: XY[]; costFt: number; tile: XY }
+    | { kind: "none"; tile: XY; reason: string };
+
+  function planFor(tile: XY): Plan {
+    const p = st();
+    if (heroDown(p)) return { kind: "none", tile, reason: DOWN_NOTE };
+    if (p.round && !isPlayersTurn(p.round)) return { kind: "none", tile, reason: "Wait for your turn." };
+    const field = heroField(p);
+    const cost = (path: XY[]) => path.length * FEET_PER_TILE;
+    if (p.monster && same(tile, p.monster.at)) {
+      if (!heroActionReady(p)) return { kind: "none", tile, reason: "You have already taken your action this turn. End your turn." };
+      const sight = (from: XY, to: XY) => canSee(p, sceneTiles(p), from, to);
+      const spot = approachTile(field, p.monster.at, heroReachTiles(p), sight);
+      const path = spot ? pathTo(field, spot) : null;
+      if (!path) return { kind: "none", tile, reason: p.round ? "You cannot reach it this turn." : "You cannot reach it from here." };
+      return { kind: "attack", path, costFt: cost(path), tile };
     }
-    if (p.hero.currentHp < before.hp) heroQ.push(heroDown(p) ? "death" : "hit");
-    else if ((p.hero.bag?.length ?? 0) > before.bag || (before.monsterAt && !p.monster)) heroQ.push("cheer");
+    const isDoor = same(tile, DOOR_AT);
+    const isChest = same(tile, CONTAINER_AT);
+    if (isChest || (isDoor && !p.doorOpen)) {
+      const spot = approachTile(field, tile, 1);
+      const path = spot ? pathTo(field, spot) : null;
+      if (!path) return { kind: "none", tile, reason: p.round ? "Too far to reach this turn." : "You cannot get next to it from here." };
+      return { kind: "use", path, costFt: cost(path), tile };
+    }
+    if (same(tile, p.heroAt)) return { kind: "none", tile, reason: "" };
+    const path = pathTo(field, tile);
+    if (!path) return { kind: "none", tile, reason: blockedWords(p, tile) };
+    return { kind: "walk", path, costFt: cost(path), tile };
+  }
 
-    const monQ: CastClipId[] = [];
-    if (before.monsterAt && !p.monster) {
-      m.dir = castDirToward(p.heroAt.x - before.monsterAt.x, p.heroAt.y - before.monsterAt.y);
-      monQ.push("death");
-    } else if (p.monster) {
-      let delay = 0;
-      if (p.monster.hp < before.monsterHp) {
-        monQ.push("hit");
-        const hit = findCastClip(monsterTiming(animated()), String(artSpriteSize(p.template)), "hit", m.dir);
-        delay += hit ? castClipMs(hit) : 0;
-      }
-      if (before.monsterAt && !same(before.monsterAt, p.monster.at)) {
-        m.dir = castDirToward(p.monster.at.x - before.monsterAt.x, p.monster.at.y - before.monsterAt.y);
-        if (!REDUCED_MOTION) startStep(m, actorAt(m, before.monsterAt, now), now + delay);
-        monQ.push("walk");
-      }
-      if (p.monsterSwings > before.swings) {
-        m.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
-        monQ.push("attack");
+  // ---- the marks: reachable squares, the path, the target ---------------------
+
+  let hover: XY | null = null;
+  /** On a touch screen the first tap only previews; this is the square it previewed. */
+  let previewed: XY | null = null;
+  let marksKey = "";
+
+  function drawMarks(): void {
+    const p = st();
+    const ts = tileScale();
+    const plan = !busy && hover ? planFor(hover) : null;
+    const key = [canvas.width, canvas.height, ts, busy, walkQueue.length, p.heroAt.x, p.heroAt.y, p.monster ? `${p.monster.at.x},${p.monster.at.y}` : "-", p.doorOpen, p.searched, p.round ? `${p.round.activeIndex},${p.round.roundNumber},${activeCombatant(p.round)?.economy.movementRemaining},${activeCombatant(p.round)?.economy.action}` : "x", hover ? `${hover.x},${hover.y}` : "-", heroDown(p)].join("|");
+    if (key === marksKey) return;
+    marksKey = key;
+    if (marks.width !== canvas.width || marks.height !== canvas.height) {
+      marks.width = canvas.width;
+      marks.height = canvas.height;
+    }
+    const ctx = marks.getContext("2d")!;
+    ctx.clearRect(0, 0, marks.width, marks.height);
+    if (busy || walkQueue.length > 0 || heroDown(p)) return;
+    // The squares this turn's movement reaches, in a fight.
+    if (heroesTurn(p)) {
+      ctx.fillStyle = "rgba(110, 170, 255, 0.16)";
+      ctx.strokeStyle = "rgba(150, 200, 255, 0.35)";
+      ctx.lineWidth = 1;
+      for (const t of reachableTiles(heroField(p))) {
+        ctx.fillRect(t.x * ts + 1, t.y * ts + 1, ts - 2, ts - 2);
       }
     }
-    // Reduced motion: turn to face, but play nothing.
-    if (REDUCED_MOTION) return;
-    playClips(h, heroQ, now);
-    playClips(m, monQ, now);
+    // The goblin, outlined when the hero could hit it this turn.
+    if (p.monster && heroActionReady(p)) {
+      const reach = tileDistance(p.heroAt, p.monster.at) <= heroReachTiles(p);
+      ctx.strokeStyle = reach ? "rgba(235, 70, 60, 0.95)" : "rgba(235, 70, 60, 0.45)";
+      ctx.lineWidth = Math.max(2, ts / 16);
+      ctx.setLineDash(reach ? [] : [ts / 6, ts / 8]);
+      ctx.strokeRect(p.monster.at.x * ts + 2, p.monster.at.y * ts + 2, ts - 4, ts - 4);
+      ctx.setLineDash([]);
+    }
+    if (!plan || plan.kind === "none") {
+      if (plan && plan.reason && hover) {
+        ctx.strokeStyle = "rgba(235, 70, 60, 0.7)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(hover.x * ts + 3, hover.y * ts + 3, ts - 6, ts - 6);
+      }
+      return;
+    }
+    // The path as dots, its end as a ring, and its length in feet.
+    const colour = plan.kind === "attack" ? "rgba(255, 120, 90, 0.95)" : plan.kind === "use" ? "rgba(255, 205, 90, 0.95)" : "rgba(255, 245, 210, 0.95)";
+    ctx.fillStyle = colour;
+    for (const t of plan.path) {
+      ctx.beginPath();
+      ctx.arc((t.x + 0.5) * ts, (t.y + 0.5) * ts, Math.max(2, ts / 10), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = Math.max(2, ts / 14);
+    ctx.strokeRect(plan.tile.x * ts + 3, plan.tile.y * ts + 3, ts - 6, ts - 6);
+    const words = plan.kind === "attack" ? (plan.costFt ? `${plan.costFt} ft, attack` : "Attack") : plan.kind === "use" ? (plan.costFt ? `${plan.costFt} ft, use` : "Use") : `${plan.costFt} ft`;
+    const end = plan.path[plan.path.length - 1] ?? plan.tile;
+    const fontPx = Math.max(11, Math.round(ts / 4));
+    ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    const tx = (end.x + 0.5) * ts;
+    const ty = end.y * ts + 2;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(20, 16, 24, 0.9)";
+    ctx.strokeText(words, tx, ty);
+    ctx.fillStyle = "#fff6dc";
+    ctx.fillText(words, tx, ty);
   }
 
-  // ---- input: one step at a time, one waiting ---------------------------------
+  // ---- doing things --------------------------------------------------------
 
-  /** One thing the player asked for. `run` does the turn and says whether the hero changed tile. */
-  interface Action {
-    run: (at: number) => boolean;
+  /** Squares still to walk, and what to do on arrival. */
+  const walkQueue: XY[] = [];
+  let onArrive: (() => Promise<void>) | null = null;
+  /** True while the game is playing something back (a monster's turn, a banner): input waits. */
+  let busy = false;
+  let skipping = false;
+
+  const wait = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      if (skipping || REDUCED_MOTION) return resolve();
+      const t0 = performance.now();
+      const tick = () => (skipping || performance.now() - t0 >= ms ? resolve() : requestAnimationFrame(tick));
+      requestAnimationFrame(tick);
+    });
+
+  /** Show every new line of the story in the dialogue box. */
+  let said = 0;
+  function flushLog(): void {
+    const p = st();
+    if (said > p.log.length) said = 0;
+    for (const line of p.log.slice(said)) overlay.say({ text: line.text, tone: line.tone });
+    said = p.log.length;
+    if (p.log.length > LOG_KEEP) {
+      p.log.splice(0, p.log.length - LOG_KEEP);
+      said = p.log.length;
+    }
   }
-  const moveAction = (dir: Dir): Action => ({ run: (at) => act(() => heroMove(st(), dir), "move", at) });
-  const attackAction: Action = { run: (at) => act(() => heroAttack(st()), "attack", at) };
-  const interactAction: Action = { run: (at) => act(() => heroInteract(st()), "interact", at) };
 
-  /** At most ONE action waits for the step in progress to land; a newer one replaces it. */
-  let waiting: Action | null = null;
-  /** Direction keys down right now, oldest first. A held key keeps the hero walking from step to step; its OS repeat only vouches that it is still down. */
-  const keysDown: Dir[] = [];
-  let downUntil = 0;
-  /** How long a key press is trusted to be still down: until the OS's first repeat is due, then between repeats. A lost keyup cannot strand the hero. */
-  const HOLD_FIRST_MS = 1100;
-  const HOLD_REPEAT_MS = 450;
+  function refuse(reason: string): void {
+    if (reason) overlay.toast(reason);
+  }
 
-  /** The player asked for something: do it now, or (while a step is playing) have it wait for the step to land. */
-  function press(action: Action): void {
+  function stepAnim(actor: Actor, from: XY, to: XY): void {
     const now = performance.now();
-    const h = st().heroActor;
-    if (waiting && !stepBusy(h, now)) {
-      const stale = waiting;
-      waiting = null;
-      stale.run(now);
-    }
-    if (stepBusy(h, now)) waiting = action;
-    else action.run(now);
+    actor.dir = castDirToward(to.x - from.x, to.y - from.y);
+    if (REDUCED_MOTION) return;
+    startStep(actor, actorAt(actor, from, now), now);
+    playClips(actor, ["walk"], now);
   }
 
-  /** Every frame, before drawing: once the step has landed, start what was waiting for it, or the next step of a held key. */
+  /** Float an attack's outcome over the target's head, and the plate over the attacker's. */
+  function showAttack(events: readonly CombatEvent[], attacker: "hero" | "monster", target: "hero" | "monster", targetTile?: XY): void {
+    for (const ev of events) {
+      if (ev.kind === "attack") overlay.rollPlate(headOf(attacker), ev.readout);
+      else if (ev.kind === "damage") {
+        if (ev.hpLost > 0) overlay.float(headOf(target, targetTile), ev.critical ? `-${ev.hpLost} CRIT!` : `-${ev.hpLost}`, ev.critical ? "crit" : "damage");
+        else overlay.float(headOf(target, targetTile), "DEATH SAVE", "info");
+      } else if (ev.kind === "miss") overlay.float(headOf(target, targetTile), "MISS", "miss");
+      else if (ev.kind === "down") overlay.float(headOf(target, targetTile), "DOWN", "down");
+      else if (ev.kind === "heal") overlay.float(headOf(target), `+${ev.amount}`, "heal");
+    }
+  }
+
+  async function beginFight(): Promise<void> {
+    const p = st();
+    if (p.round || !p.monster) return;
+    busy = true;
+    walkQueue.length = 0;
+    onArrive = null;
+    startFight(p);
+    p.monsterActor.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
+    overlay.say({ speaker: "Goblin", text: bark(GOBLIN_BARKS.wake), tone: "bad" });
+    flushLog();
+    refreshAll();
+    await overlay.banner("ROLL INITIATIVE", "initiative");
+    busy = false;
+    await runHostiles();
+  }
+
+  /** Every turn that is not the hero's, played back, until it is the hero's turn again or the fight is over. */
+  async function runHostiles(): Promise<void> {
+    let p = st();
+    if (!p.round) return;
+    if (isPlayersTurn(p.round)) {
+      refreshAll();
+      await overlay.banner("YOUR TURN", "turn");
+      return;
+    }
+    busy = true;
+    skipping = false;
+    refreshAll();
+    while (p.round && !isPlayersTurn(p.round) && p.monster) {
+      await overlay.banner(`${statblockFor(SCENE_KIT[p.template].monster).name.toUpperCase()}'S TURN`, "enemy");
+      const start = { ...p.monster.at };
+      const turn = monsterTurnRules(p);
+      // Walk it square by square along the engine's own path.
+      const move = turn.events.find((e): e is Extract<CombatEvent, { kind: "move" }> => e.kind === "move");
+      let from = start;
+      for (const sq of move?.path ?? []) {
+        if (!p.monster) break;
+        stepAnim(p.monsterActor, from, sq);
+        p.monster.at = { ...sq };
+        refreshAll();
+        await wait(STEP_MS);
+        from = sq;
+      }
+      if (p.monster && turn.endAt) p.monster.at = turn.endAt;
+      // Then the swing, and the blow lands when it plays.
+      const swing = turn.events.filter((e) => e.kind !== "move" && e.kind !== "turnStart");
+      if (swing.length > 0 && p.monster) {
+        p.monsterActor.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
+        if (!REDUCED_MOTION) playClips(p.monsterActor, ["attack"], performance.now());
+        await wait(320);
+        const hpBefore = p.hero.currentHp;
+        p.hero = turn.sheet;
+        showAttack(swing, "monster", "hero");
+        const now = performance.now();
+        if (!REDUCED_MOTION && p.hero.currentHp < hpBefore) playClips(p.heroActor, [heroDown(p) ? "death" : "hit"], now);
+        if (swing.some((e) => e.kind === "miss")) overlay.say({ speaker: "Goblin", text: "Grr! Hold still!", tone: "plain" });
+      } else {
+        p.hero = turn.sheet;
+      }
+      p.log.push(...turn.lines);
+      flushLog();
+      refreshAll();
+      await wait(650);
+      if (heroDown(p)) {
+        p.round = null;
+        refreshAll();
+        await overlay.banner("DEFEAT", "defeat");
+        overlay.say({ text: DOWN_NOTE, tone: "bad" });
+        break;
+      }
+      p.round = endTurn(p.round!);
+      p = st();
+    }
+    busy = false;
+    skipping = false;
+    refreshAll();
+    if (p.round && isPlayersTurn(p.round)) await overlay.banner("YOUR TURN", "turn");
+  }
+
+  /** After anything the hero does: a kill ends the fight, a step may wake the goblin. */
+  async function afterHeroAction(): Promise<void> {
+    const p = st();
+    flushLog();
+    refreshAll();
+    if (!p.monster && p.fallenAt && !p.round && fightWasOn) {
+      fightWasOn = false;
+      await overlay.banner("VICTORY", "victory");
+    }
+    if (!p.round && monsterNotices(p)) await beginFight();
+  }
+  let fightWasOn = false;
+
+  /** One square of a walk (a click's path, or a key). False when it was refused, which ends the walk. */
+  function takeStep(to: XY): boolean {
+    const p = st();
+    const from = { ...p.heroAt };
+    const r = heroStepTo(p, to);
+    if (r.refused) {
+      refuse(r.refused);
+      return false;
+    }
+    stepAnim(p.heroActor, from, to);
+    stage.invalidate();
+    return true;
+  }
+
+  /** Every frame, before drawing: the next square of a walk once the last has landed, then whatever waited for arrival. */
   function pump(now: number): void {
+    drawMarks();
+    if (busy) return;
     const h = st().heroActor;
     if (stepBusy(h, now)) return;
-    // The next step begins the instant the last one landed (a frame ago at most), so back-to-back steps have no seam.
-    const landed = h.tween ? h.tween.start + STEP_MS : h.gait ? h.gait.lastEnd : now;
-    const at = Math.min(now, Math.max(landed, now - 34));
-    if (waiting) {
-      const next = waiting;
-      waiting = null;
-      next.run(at);
-      return;
-    }
-    const dir = keysDown.length > 0 && now < downUntil ? keysDown[keysDown.length - 1]! : null;
-    // A held key that goes nowhere (a wall, a closed door) stops asking.
-    if (dir && !act(() => heroMove(st(), dir), "move", at)) keysDown.length = 0;
-  }
-
-  function cancelInput(): void {
-    waiting = null;
-    keysDown.length = 0;
-  }
-
-  /** A new hero, a reset: the old scene's pending input and camera do not carry over. */
-  function newScene(): void {
-    cancelInput();
-    stage.snapCamera();
-    renderAll();
-  }
-
-  function gearResult(outcome: GearOutcome): void {
-    st().note = outcome.ok ? null : outcome.reason;
-    renderAll();
-  }
-
-  function onDrop(payload: DragPayload, target: HTMLElement | null): void {
-    if (!target) return;
-    const p = st();
-    if (target.dataset.drop === "pack") {
-      if (payload.from === "slot") gearResult(takeOff(p, payload.role));
-      return;
-    }
-    if (payload.from === "slot") return;
-    const role = target.dataset.role as GearRole;
-    if (role !== payload.role) {
-      const tier = payload.from === "armoury" ? payload.tier : p.hero.bag![payload.index]!.tier;
-      p.note = `The ${itemName(p.archetypeId, payload.role, tier)} goes in the ${slotNaming(p.archetypeId, payload.role).slot} slot, not ${slotNaming(p.archetypeId, role).slot}.`;
-      renderAll();
-      return;
-    }
-    gearResult(payload.from === "armoury" ? equipFromArmoury(p, payload.role, payload.tier) : equipFromPack(p, payload.index));
-  }
-
-  function pictureNoteText(): string {
-    const style = animated();
-    if (style) {
-      const p = st();
-      const hero = castEntry(style, bodySpriteId(p.archetypeId));
-      const monster = castEntry(style, SCENE_KIT[p.template].monster);
-      const extra = [hero, monster].filter((c): c is CastCharacter => !!c && c.standIn).map((c) => `The ${c.label.toLowerCase()} is a stand-in (see Characters).`);
-      if (!monster) {
-        extra.push(
-          keptHandDrawn().has(SCENE_KIT[p.template].monster)
-            ? `${sentenceCase(monsterLabel(p))} is the game's own hand-drawn one, kept by your call: one drawing, moved by the bench.`
-            : `${sentenceCase(monsterLabel(p))} has no animated figure in this build: it is the still, moved by the bench.`,
-        );
+    if (walkQueue.length > 0) {
+      const next = walkQueue.shift()!;
+      if (!takeStep(next)) {
+        walkQueue.length = 0;
+        onArrive = null;
       }
-      return `Animated: KayKit ${style.label}, gear included. ${extra.join(" ")}`.trim();
+      // A step that brings the goblin's notice ends the walk where it stands.
+      const p = st();
+      if (!p.round && monsterNotices(p)) {
+        walkQueue.length = 0;
+        onArrive = null;
+        void afterHeroAction();
+      } else if (walkQueue.length === 0) {
+        refreshAll();
+      }
+      return;
     }
-    if (art.source === "kaykit") {
-      return castData() ? "No animated figure for this hero in this build: the tokens are the static conversion." : "No animated cast in this build: the tokens are the static conversion.";
+    if (onArrive) {
+      const run = onArrive;
+      onArrive = null;
+      void run();
     }
-    return "The game's current hand-drawn tokens: one facing, no animation.";
+  }
+
+  async function heroAttackFlow(): Promise<void> {
+    const p = st();
+    if (!p.monster) return refuse("Nothing left to fight.");
+    if (!p.round) {
+      // Attacking a goblin that has not noticed you still starts the fight; you swing on your turn.
+      await beginFight();
+      if (!heroesTurn(st())) return;
+    }
+    const target = { ...p.monster.at };
+    const r = heroAttackRules(p);
+    if (r.refused) return refuse(r.refused);
+    fightWasOn = true;
+    p.heroActor.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
+    busy = true;
+    if (!REDUCED_MOTION) playClips(p.heroActor, ["attack"], performance.now());
+    await wait(300);
+    showAttack(r.events, "hero", "monster", target);
+    const hit = r.events.some((e) => e.kind === "damage");
+    const now = performance.now();
+    if (!REDUCED_MOTION) {
+      if (!p.monster) playClips(p.monsterActor, ["death"], now);
+      else if (hit) playClips(p.monsterActor, ["hit"], now);
+    }
+    if (p.monster && hit && Math.random() < 0.6) overlay.say({ speaker: "Goblin", text: bark(GOBLIN_BARKS.hurt), tone: "good" });
+    if (p.monster && !hit && Math.random() < 0.6) overlay.say({ speaker: "Goblin", text: bark(GOBLIN_BARKS.dodge), tone: "bad" });
+    if (!p.monster && !REDUCED_MOTION) playClips(p.heroActor, ["cheer"], now + 400);
+    busy = false;
+    await afterHeroAction();
+  }
+
+  /** Walk a plan's path, then do what it was for. */
+  function runPlan(plan: Plan): void {
+    if (plan.kind === "none") return refuse(plan.reason);
+    walkQueue.length = 0;
+    walkQueue.push(...plan.path);
+    onArrive =
+      plan.kind === "attack"
+        ? heroAttackFlow
+        : plan.kind === "use"
+          ? async () => {
+              const r = heroInteractRules(st());
+              if (r.refused) return refuse(r.refused);
+              if (!REDUCED_MOTION) playClips(st().heroActor, ["interact"], performance.now());
+              stage.invalidate();
+              await afterHeroAction();
+            }
+          : async () => {
+              await afterHeroAction();
+            };
+  }
+
+  async function attackGoblin(): Promise<void> {
+    if (busy) return;
+    const p = st();
+    if (!p.monster) return refuse("Nothing left to fight. Press Reset scene to bring it back.");
+    runPlan(planFor(p.monster.at));
+  }
+
+  async function useNearby(): Promise<void> {
+    if (busy) return;
+    const p = st();
+    const r = heroInteractRules(p);
+    if (r.refused) return refuse(r.refused);
+    if (!REDUCED_MOTION) playClips(p.heroActor, ["interact"], performance.now());
+    stage.invalidate();
+    await afterHeroAction();
+  }
+
+  async function drinkPotion(): Promise<void> {
+    if (busy) return;
+    const p = st();
+    const r = drinkPotionRules(p);
+    if (r.refused) return refuse(r.refused);
+    if (!REDUCED_MOTION) playClips(p.heroActor, ["cheer"], performance.now());
+    showAttack(r.events, "hero", "hero");
+    await afterHeroAction();
+  }
+
+  async function endTurnFlow(): Promise<void> {
+    const p = st();
+    if (busy || !p.round || !isPlayersTurn(p.round)) return refuse(p.round ? "Wait for your turn." : "There is no fight on. Your turn ends when the goblin notices you.");
+    walkQueue.length = 0;
+    onArrive = null;
+    p.round = endTurn(p.round);
+    await runHostiles();
+  }
+
+  // ---- pointer ---------------------------------------------------------------
+
+  viewport.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "touch") return;
+    const t = tileAt(e.clientX, e.clientY);
+    if ((t?.x ?? -1) !== (hover?.x ?? -1) || (t?.y ?? -1) !== (hover?.y ?? -1)) hover = t;
+    const plan = t && !busy ? planFor(t) : null;
+    viewport.style.cursor = !plan ? "default" : plan.kind === "attack" ? "crosshair" : plan.kind === "none" ? "not-allowed" : "pointer";
+  });
+  viewport.addEventListener("pointerleave", () => {
+    hover = null;
+  });
+  viewport.addEventListener("click", (e) => {
+    if (busy) {
+      skipping = true;
+      return;
+    }
+    const t = tileAt(e.clientX, e.clientY);
+    if (!t) return;
+    const touch = (e as PointerEvent).pointerType === "touch";
+    if (touch && !(previewed && same(previewed, t))) {
+      // First tap on a phone: show the path; the second tap on the same square goes.
+      previewed = t;
+      hover = t;
+      return;
+    }
+    previewed = null;
+    hover = touch ? null : t;
+    runPlan(planFor(t));
+  });
+
+  // ---- the readout -------------------------------------------------------------
+
+  function turnWords(): string {
+    const p = st();
+    if (heroDown(p)) return "You are down. Press Reset scene.";
+    if (!p.round) return p.monster ? "Exploring. Click a square to walk there." : "The goblin is down. Open the chest, or Reset scene to fight again.";
+    const c = activeCombatant(p.round);
+    if (!isPlayersTurn(p.round)) return `Round ${p.round.roundNumber}: ${sentenceCase(monsterLabel(p))}'s turn. Space or a click skips.`;
+    const e = c?.economy;
+    return `Round ${p.round.roundNumber}, your turn: ${e?.movementRemaining ?? 0} ft to move, action ${e?.action ? "ready" : "used"}.`;
   }
 
   function stat(label: string, value: string, bad = false): HTMLElement {
@@ -2180,7 +2433,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const p = st();
     const h = p.hero;
     const weapon = weaponFor(h);
-    const reachFt = (weapon.ranged ? DEFAULT_RANGED_REACH_TILES : DEFAULT_MELEE_REACH_TILES) * 5;
+    const reachFt = heroReachTiles(p) * FEET_PER_TILE;
     const bonus = attackerBonusFor(h);
     stats.innerHTML = "";
     stats.append(
@@ -2189,31 +2442,28 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       stat("Attack", `${bonus >= 0 ? "+" : ""}${bonus}`),
       stat("Damage", weaponDamageNotationFor(h)),
       stat(weapon.name, `${weapon.ranged ? "range" : "reach"} ${reachFt} ft`),
-      stat("Attuned", `${attunedRoles(p.archetypeId, h.equipment ?? {}).length}/${MAX_ATTUNED_ITEMS}`),
+      stat("Speed", `${effectiveSpeedFt(h)} ft`),
+      stat("Potions", String(p.potions)),
     );
     const block = statblockFor(SCENE_KIT[p.template].monster);
-    if (p.monster) {
-      stats.append(stat(block.name, `${p.monster.hp}/${block.maxHp} HP, AC ${block.armorClass}, ${p.monster.awake ? "awake" : "asleep"}`, p.monster.awake));
-    } else {
-      stats.append(stat(block.name, "down"));
-    }
+    stats.append(p.monster ? stat(block.name, `${p.monster.hp}/${block.maxHp} HP, AC ${block.armorClass}`, p.monster.awake) : stat(block.name, "down"));
   }
 
-  function renderSay(): void {
+  function renderBar(): void {
     const p = st();
-    say.textContent = p.note ?? "";
-    say.hidden = !p.note;
-  }
-
-  function renderLog(): void {
-    const p = st();
-    logEl.innerHTML = "";
-    if (p.log.length === 0) {
-      logEl.appendChild(el_("p", "lt-log-empty", `Walk to ${SCENE_KIT[p.template].doorLabel} and press Interact. Every roll lands here.`));
-      return;
-    }
-    for (const line of p.log) logEl.appendChild(el_("p", `lt-log-line ${line.tone}`, line.text));
-    logEl.scrollTop = logEl.scrollHeight;
+    turnChip.textContent = turnWords();
+    const myTurn = !p.round || isPlayersTurn(p.round);
+    const near = tileDistance(p.heroAt, DOOR_AT) <= 1 || (tileDistance(p.heroAt, CONTAINER_AT) <= 1 && !p.searched);
+    attackBtn.disabled = busy || heroDown(p) || !p.monster || !heroActionReady(p);
+    useBtn.disabled = busy || heroDown(p) || !myTurn || !near;
+    potionBtn.disabled = busy || p.potions <= 0 || !heroActionReady(p) || (!heroDown(p) && p.hero.currentHp >= p.hero.maxHp);
+    (potionBtn.firstChild as HTMLElement).textContent = `Potion (${p.potions})`;
+    endBtn.disabled = busy || !heroesTurn(p);
+    const entries =
+      p.round && p.monster
+        ? p.round.order.map((c) => ({ id: c.id, label: c.id === HERO_ID ? p.hero.name : statblockFor(SCENE_KIT[p.template].monster).name, total: c.initiative, side: (c.side === "player" ? "hero" : "enemy") as InitiativeSide }))
+        : [];
+    overlay.initiative(entries, p.round ? (activeCombatant(p.round)?.id ?? null) : null, p.round?.roundNumber ?? 0);
   }
 
   function renderSlots(): void {
@@ -2261,7 +2511,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     packEl.innerHTML = "";
     const bag = p.hero.bag ?? [];
     if (bag.length === 0) {
-      packEl.appendChild(el_("p", "lt-note lt-tray-empty", "Empty. Kill the monster or open the chest to win something. Drag a worn magic piece here to take it off."));
+      packEl.appendChild(el_("p", "lt-note lt-tray-empty", "Empty. Kill the goblin or open the chest to win something. Drag a worn magic piece here to take it off."));
       return;
     }
     bag.forEach((item, index) => {
@@ -2286,8 +2536,29 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
   }
 
-  // Each part of the readout is rebuilt only when what it shows has changed, so
-  // a move leaves the gear panels alone and a gear change leaves the log alone.
+  function gearResult(outcome: GearOutcome): void {
+    if (!outcome.ok) refuse(outcome.reason);
+    flushLog();
+    renderAll();
+  }
+
+  function onDrop(payload: DragPayload, target: HTMLElement | null): void {
+    if (!target) return;
+    const p = st();
+    if (target.dataset.drop === "pack") {
+      if (payload.from === "slot") gearResult(takeOff(p, payload.role));
+      return;
+    }
+    if (payload.from === "slot") return;
+    const role = target.dataset.role as GearRole;
+    if (role !== payload.role) {
+      const tier = payload.from === "armoury" ? payload.tier : p.hero.bag![payload.index]!.tier;
+      return refuse(`The ${itemName(p.archetypeId, payload.role, tier)} goes in the ${slotNaming(p.archetypeId, payload.role).slot} slot, not ${slotNaming(p.archetypeId, role).slot}.`);
+    }
+    gearResult(payload.from === "armoury" ? equipFromArmoury(p, payload.role, payload.tier) : equipFromPack(p, payload.index));
+  }
+
+  // Each part of the readout is rebuilt only when what it shows has changed.
   const shownSig = new Map<string, string>();
   const refresh = (part: string, sig: string, build: () => void): void => {
     if (shownSig.get(part) === sig) return;
@@ -2295,82 +2566,105 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     build();
   };
 
-  function refreshPanels(): void {
+  function refreshAll(): void {
     const p = st();
     const h = p.hero;
-    // The icons are drawn from the chosen art, so a change of art redoes them too.
     const look = `${art.source}|${art.ground}|${art.chars}|${art.size}|${artDecoded ? 1 : 0}`;
     const worn = GEAR_ROLES.map((r) => wornTier(p, r) ?? "-").join(",");
     const bag = (h.bag ?? []).map((b) => `${b.slot}:${b.tier}`).join(",");
     const weapon = weaponFor(h);
-    refresh("note", pictureNoteText(), () => (pictureNote.textContent = pictureNoteText()));
-    refresh(
-      "stats",
-      [h.currentHp, h.maxHp, heroDown(p), effectiveArmorClass(h), attackerBonusFor(h), weaponDamageNotationFor(h), weapon.name, weapon.ranged, attunedRoles(p.archetypeId, h.equipment ?? {}).length, p.monster ? `${p.monster.hp},${p.monster.awake}` : "down"].join("|"),
-      renderStats,
-    );
-    refresh("say", p.note ?? "", renderSay);
-    refresh("log", `${p.log.length}|${p.log[0]?.text}|${p.log[p.log.length - 2]?.text}|${p.log[p.log.length - 1]?.text}`, renderLog);
+    refresh("stats", [h.currentHp, h.maxHp, heroDown(p), effectiveArmorClass(h), attackerBonusFor(h), weaponDamageNotationFor(h), weapon.name, weapon.ranged, effectiveSpeedFt(h), p.potions, p.monster ? `${p.monster.hp},${p.monster.awake}` : "down"].join("|"), renderStats);
+    renderBar();
     refresh("slots", `${p.archetypeId}|${worn}|${look}`, renderSlots);
     refresh("pack", `${p.archetypeId}|${bag}|${look}`, renderPack);
     refresh("armoury", `${p.archetypeId}|${worn}|${bag}|${look}`, renderArmoury);
-  }
-
-  /** Everything the scene shows may have changed (a new hero, new gear, a new art choice): refresh the readout, and the stage redraws (and re-decodes what the figures need) on its next frame. */
-  function renderAll(): void {
-    heroSelect.value = st().archetypeId;
-    refreshPanels();
     stage.invalidate();
   }
 
-  // ---- keyboard, animation, first paint ------------------------------------
+  function renderAll(): void {
+    heroSelect.value = st().archetypeId;
+    refreshAll();
+  }
+
+  /** A new hero, a reset: nothing pending carries over, and the camera jumps to the hero. */
+  function newScene(): void {
+    walkQueue.length = 0;
+    onArrive = null;
+    busy = false;
+    skipping = false;
+    fightWasOn = false;
+    hover = null;
+    said = 0;
+    overlay.clear();
+    stage.snapCamera();
+    renderAll();
+  }
+
+  // ---- keyboard ----------------------------------------------------------------
 
   const KEY_DIR: Record<string, Dir> = { arrowup: "up", w: "up", arrowdown: "down", s: "down", arrowleft: "left", a: "left", arrowright: "right", d: "right" };
   const onKey = (e: KeyboardEvent) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
-    // Keys belong to the Play tab only while it is the one showing.
     if (!el.isConnected || el.offsetParent === null) return;
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.("input, select, textarea, [contenteditable]")) return;
+    if (target?.closest?.("input, textarea, [contenteditable]")) return;
     const key = e.key.toLowerCase();
     if (target?.closest?.("button") && (key === " " || key === "enter")) return;
+    if (target?.tagName === "SELECT" && !KEY_DIR[key]) return;
+    if (key === " " || key === "escape") {
+      if (busy) skipping = true;
+      else {
+        walkQueue.length = 0;
+        onArrive = null;
+      }
+      e.preventDefault();
+      return;
+    }
+    if (busy) return;
     const dir = KEY_DIR[key];
     if (dir) {
-      // A key being held is a held key: the hero walks on step after step, and OS repeats only keep it alive.
-      const at = keysDown.indexOf(dir);
-      if (at >= 0) keysDown.splice(at, 1);
-      keysDown.push(dir);
-      downUntil = performance.now() + (e.repeat ? HOLD_REPEAT_MS : HOLD_FIRST_MS);
-      if (!e.repeat) press(moveAction(dir));
+      (target as HTMLElement | null)?.blur?.();
+      // One square per press; a held key's repeats keep exactly one square waiting, so letting go stops within a square.
+      if (walkQueue.length === 0 && !onArrive) {
+        const p = st();
+        walkQueue.push({ x: p.heroAt.x + DIR_STEP[dir].x, y: p.heroAt.y + DIR_STEP[dir].y });
+        onArrive = async () => {
+          await afterHeroAction();
+        };
+      }
+    } else if (key === "f") {
+      if (!e.repeat) void attackGoblin();
     } else if (key === "e") {
-      if (!e.repeat) press(interactAction);
-    } else if (key === "f" || key === " ") {
-      if (!e.repeat) press(attackAction);
+      if (!e.repeat) void useNearby();
+    } else if (key === "q") {
+      if (!e.repeat) void drinkPotion();
+    } else if (key === "t") {
+      if (!e.repeat) void endTurnFlow();
     } else {
       return;
     }
     e.preventDefault();
   };
-  const onKeyUp = (e: KeyboardEvent) => {
-    const dir = KEY_DIR[e.key.toLowerCase()];
-    const at = dir ? keysDown.indexOf(dir) : -1;
-    if (at >= 0) keysDown.splice(at, 1);
-  };
   document.addEventListener("keydown", onKey);
-  document.addEventListener("keyup", onKeyUp);
-  window.addEventListener("blur", cancelInput);
+  const onBlur = () => {
+    walkQueue.length = 0;
+  };
+  window.addEventListener("blur", onBlur);
 
-  // One animation-frame loop paints the scene, and runs the input clock first.
+  // One animation-frame loop paints the scene, and runs the walk first.
   const stage = createPlayStage({ viewport, canvas, state: st, zoom: () => scale, beforeFrame: (now) => pump(now) });
 
   renderAll();
+  said = st().log.length;
+  if (st().round) void runHostiles();
+  // A read-only handle for the bench's own headless checks: the scene state, never written through.
+  (globalThis as { __ltBenchPlay?: () => PlayState }).__ltBenchPlay = st;
 
   return () => {
     stage.dispose();
-    cancelInput();
+    overlay.destroy();
     document.removeEventListener("keydown", onKey);
-    document.removeEventListener("keyup", onKeyUp);
-    window.removeEventListener("blur", cancelInput);
+    window.removeEventListener("blur", onBlur);
   };
 }
 
@@ -2519,6 +2813,8 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
     style: CastStyle;
     /** A cast member, or null for a figure kept hand-drawn (spriteId). */
     entry: CastCharacter | null;
+    /** The cast member's look (body plus starting kit when worn), or null. */
+    set: FigureSet | null;
     spriteId: string | null;
     dir: CastDir;
     shown: number;
@@ -2586,10 +2882,13 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
           canvas.height = meta.canvasH * zoom;
           canvas.title = `${entry.label}, ${DIR_LABEL[dir]}, ${CLIP_LABEL[clip]}`;
           grid.appendChild(canvas);
-          cells.push({ canvas, style, entry, spriteId: null, dir, shown: -1 });
+          cells.push({ canvas, style, entry, set: buildFigureSet(style, entry, size, withGear ? starterLayers(style, entry) : []), spriteId: null, dir, shown: -1 });
         }
       }
     }
+    // Decode in the background, two clips at a time, in the order the rows appear; nothing blocks the page.
+    const requests = cells.flatMap((cell) => (cell.set ? clipRequests(cell.set, [clip, "idle"], [cell.dir]) : []));
+    castPrefetch(cast!.palette, requests, redrawAll);
     draw(true);
   }
 
@@ -2614,7 +2913,7 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
       canvas.height = 1.5 * pixels.length * k * zoom;
       canvas.title = `${name}, ${DIR_LABEL[dir]}, ${CLIP_LABEL[clip]}`;
       grid.appendChild(canvas);
-      cells.push({ canvas, style, entry: null, spriteId, dir, shown: -1 });
+      cells.push({ canvas, style, entry: null, set: null, spriteId, dir, shown: -1 });
     }
   }
 
@@ -2639,11 +2938,15 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
         continue;
       }
       const meta = cell.entry.sizes[size];
-      if (!meta) continue;
+      const canvases = cell.set ? setFrames(cell.set, c.clip, cell.dir, i) : null;
+      // Not decoded yet: leave the cell as it is and try again next frame.
+      if (!meta || !canvases) {
+        cell.shown = -1;
+        continue;
+      }
       paintFloor(ctx, floorId, meta.tokenW * zoom, cell.canvas.width, cell.canvas.height);
-      const layers = withGear ? starterLayers(cell.style, cell.entry) : [];
-      const drew = drawCastFrame(ctx, cell.style, cell.entry, c, i, layers, { x: 0, y: 0, w: cell.canvas.width, h: cell.canvas.height }, redrawAll);
-      cell.shown = drew ? i : -1;
+      for (const frame of canvases) ctx.drawImage(frame, 0, 0, cell.canvas.width, cell.canvas.height);
+      cell.shown = i;
     }
   }
 
@@ -2673,6 +2976,11 @@ function mountCharactersPanel(el: HTMLElement, _api: unknown): () => void {
 // split. An id the chosen parts do not cover says so. The Healer's pieces are
 // out of play and not listed; sci-fi is paused.
 // ===========================================================================
+
+/** A sprite the Pieces tab shows: every fantasy sprite but the Healer's, who is out of play. */
+function inPlayPiece(s: LtSprite): boolean {
+  return !/healer/.test(s.assetId);
+}
 
 const CONVERTED_GROUPS: { id: string; label: string; test: (s: LtSprite) => boolean; collapsed?: boolean }[] = [
   { id: "token", label: "Characters and monsters", test: (s) => s.kind === "token" && !s.assetId.startsWith("gear_") },
@@ -2725,7 +3033,7 @@ function mountPiecesPanel(el: HTMLElement, _api: unknown): void {
   const render = () => {
     body.innerHTML = "";
     const palette = MANIFEST.fantasy.palette;
-    const inPlay = SPRITES_BY_TEMPLATE.fantasy.filter((s) => !/healer/.test(s.assetId));
+    const inPlay = SPRITES_BY_TEMPLATE.fantasy.filter(inPlayPiece);
     const covered = inPlay.filter((s) => kaykitHas(s.assetId)).length;
     const kept = keptHandDrawn();
     const keptCount = inPlay.filter((s) => kept.has(s.assetId) && !kaykitHas(s.assetId)).length;
@@ -2944,7 +3252,7 @@ function presetTiles(template: TemplateGenre): TileId[][] {
   return tiles;
 }
 
-/** `pxScale` is canvas px PER SOURCE PIXEL, integer, same convention the Library uses. Tiles are 16 source px, so a tile occupies pxScale*16 canvas px. */
+/** `pxScale` is canvas px PER SOURCE PIXEL, integer, like every zoom on the bench. Tiles are 16 source px, so a tile occupies pxScale*16 canvas px. */
 function paintRawTiles(ctx: CanvasRenderingContext2D, tiles: TileId[][], manifest: RenderManifest, pxScale: number): void {
   ctx.imageSmoothingEnabled = false;
   const pitch = spriteSizeOf(manifest); // source px per tile edge: 16 today, 32 for KayKit at 32 px
@@ -3060,40 +3368,6 @@ function mountTerrainPanel(el: HTMLElement, _api: unknown): () => void {
 }
 
 // ===========================================================================
-// Panel: Palette. Every entry, index/hex/luminance, glow band marked
-// reserved.
-// ===========================================================================
-
-function luminance(r: number, g: number, b: number): number {
-  return Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
-}
-
-function mountPalettePanel(el: HTMLElement, _api: unknown): void {
-  injectPanelStyle();
-  el.innerHTML = "";
-  for (const template of PLAYABLE_TEMPLATES) {
-    const section = document.createElement("section");
-    section.className = "lt-palette-section";
-    const h = document.createElement("h3");
-    h.textContent = `${TEMPLATE_LABEL[template]} palette (${PALETTE_BY_TEMPLATE[template].length} entries)`;
-    section.appendChild(h);
-    const table = document.createElement("table");
-    table.className = "bn-meta-table lt-palette-table";
-    const rows = PALETTE_BY_TEMPLATE[template]
-      .map(([r, g, b], i) => {
-        const hex = `#${hex2(r)}${hex2(g)}${hex2(b)}`;
-        const lum = luminance(r, g, b);
-        const reserved = i >= 48 && i <= 51;
-        return `<tr${reserved ? ' class="lt-reserved"' : ""}><td>${i}</td><td><span class="lt-swatch" style="background:${hex}"></span> ${hex}</td><td>${lum}</td><td>${reserved ? "reserved (enchantment glow)" : ""}</td></tr>`;
-      })
-      .join("");
-    table.innerHTML = `<thead><tr><td>index</td><td>hex</td><td>luminance</td><td></td></tr></thead><tbody>${rows}</tbody>`;
-    section.appendChild(table);
-    el.appendChild(section);
-  }
-}
-
-// ===========================================================================
 // Panel CSS. Injected once by the shell's own style tag convention isn't
 // available to a registry module, so this panel-local stylesheet is added
 // the same way the template's own EXAMPLE_ panel would: inline, scoped under
@@ -3116,11 +3390,6 @@ function injectPanelStyle(): void {
 #bench-root .lt-icon-canvas{image-rendering:pixelated;background-color:var(--bn-checker-a);background-image:linear-gradient(45deg,var(--bn-checker-b) 25%,transparent 25%,transparent 75%,var(--bn-checker-b) 75%),linear-gradient(45deg,var(--bn-checker-b) 25%,transparent 25%,transparent 75%,var(--bn-checker-b) 75%);background-size:10px 10px;background-position:0 0,5px 5px;border:1px solid var(--bn-line);border-radius:4px}
 #bench-root .lt-terrain-stage{display:flex;gap:14px;flex-wrap:wrap}
 #bench-root .lt-terrain-stage>div{max-width:100%;overflow:auto}
-#bench-root .lt-palette-section{margin-bottom:20px}
-#bench-root .lt-palette-section h3{font-size:13px;margin:0 0 8px}
-#bench-root .lt-palette-table{max-width:420px}
-#bench-root .lt-swatch{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--bn-line);vertical-align:-2px}
-#bench-root tr.lt-reserved{opacity:.75;font-style:italic}
 #bench-root .lt-art-controls{padding:8px 10px;border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel);margin-bottom:10px}
 #bench-root .lt-art-controls [hidden]{display:none}
 #bench-root .lt-art-status{margin:0;flex-basis:100%}
@@ -3135,7 +3404,6 @@ function injectPanelStyle(): void {
 #bench-root .lt-conv-canvas{image-rendering:pixelated}
 #bench-root .lt-conv-gap{font-size:11px;color:var(--bn-danger);align-self:center}
 #bench-root .lt-conv-kept{font-size:11px;color:var(--bn-muted);align-self:center;max-width:9em}
-#bench-root .lt-picture-note{margin:0 0 8px}
 #bench-root .lt-section-head{font-size:13px;margin:18px 0 4px}
 #bench-root .lt-kk-grid{display:grid;grid-template-columns:minmax(120px,220px) repeat(var(--kk-cols),auto);gap:10px 12px;align-items:end;overflow-x:auto;max-width:100%;padding-bottom:6px}
 #bench-root .lt-kk-colhead{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--bn-muted)}
@@ -3143,33 +3411,25 @@ function injectPanelStyle(): void {
 #bench-root .lt-kk-rowhead span{color:var(--bn-muted);font-size:11.5px}
 #bench-root .lt-kk-cell{border:1px solid var(--bn-line);border-radius:6px;background:var(--bn-panel-alt)}
 @media (max-width:720px){#bench-root .lt-kk-grid{grid-template-columns:repeat(var(--kk-cols),auto)}#bench-root .lt-kk-grid>div:first-child{display:none}#bench-root .lt-kk-rowhead{grid-column:1 / -1}}
-#bench-root .lt-play{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"view pad" "info pad";gap:12px 16px;align-items:start;margin:4px 0 8px}
-#bench-root .lt-viewport{grid-area:view;overflow:auto;max-width:100%;max-height:min(64vh,560px);border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel-alt)}
-#bench-root .lt-pad-area{grid-area:pad;display:flex;flex-direction:column;align-items:center;gap:12px;width:176px}
-#bench-root .lt-info{grid-area:info;display:flex;flex-direction:column;gap:8px;min-width:0}
-#bench-root .lt-dpad{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,52px);gap:4px}
-#bench-root .lt-dpad-btn{display:grid;place-items:center;border:1px solid var(--bn-line);border-radius:10px;background:var(--bn-panel);color:var(--bn-text);cursor:pointer;touch-action:manipulation}
-#bench-root .lt-dpad-btn:hover{border-color:var(--bn-accent)}
-#bench-root .lt-dpad-btn:active{background:var(--bn-panel-alt)}
-#bench-root .lt-dpad-btn svg{width:16px;height:22px;fill:currentColor}
-#bench-root .lt-actions{display:flex;flex-direction:column;gap:6px;width:100%}
+#bench-root .lt-stage-wrap{position:relative;margin:4px 0 8px;width:fit-content;max-width:100%}
+#bench-root .lt-viewport{overflow:auto;max-width:100%;max-height:min(66vh,620px);border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel-alt);touch-action:manipulation}
+#bench-root .lt-board{position:relative;width:max-content}
+#bench-root .lt-marks{position:absolute;left:0;top:0;pointer-events:none;image-rendering:pixelated}
+#bench-root .lt-howto{margin:0 0 6px}
+#bench-root .lt-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 14px;margin:0 0 8px}
+#bench-root .lt-turn{margin:0;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+#bench-root .lt-bar-buttons{display:flex;flex-wrap:wrap;gap:6px}
+#bench-root .lt-act:disabled{opacity:.45;cursor:default;border-color:var(--bn-line)}
 #bench-root .lt-act{font:inherit;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel);color:var(--bn-text);cursor:pointer;touch-action:manipulation}
 #bench-root .lt-act:hover{border-color:var(--bn-accent)}
 #bench-root .lt-act-primary{background:var(--bn-accent);border-color:var(--bn-accent);color:var(--bn-accent-ink)}
 #bench-root .lt-act kbd{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:1px 6px;border:1px solid currentColor;border-radius:4px;opacity:.7}
-#bench-root .lt-keys{margin:0;text-align:center}
 #bench-root .lt-stats{display:flex;flex-wrap:wrap;gap:6px}
 #bench-root .lt-stat{font-size:12px;padding:3px 9px;border:1px solid var(--bn-line);border-radius:999px;background:var(--bn-panel);font-variant-numeric:tabular-nums}
 #bench-root .lt-stat-label{color:var(--bn-muted)}
 #bench-root .lt-stat b{font-weight:600}
 #bench-root .lt-stat-bad{border-color:var(--bn-danger)}
 #bench-root .lt-stat-bad b{color:var(--bn-danger)}
-#bench-root .lt-say{margin:0;font-size:13px;font-weight:600}
-#bench-root .lt-log{max-height:210px;overflow:auto;padding:8px 10px;border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel);display:flex;flex-direction:column;gap:4px;font-size:12.5px;line-height:1.45}
-#bench-root .lt-log p{margin:0}
-#bench-root .lt-log-empty{color:var(--bn-muted)}
-#bench-root .lt-log-line.good{color:var(--bn-accent)}
-#bench-root .lt-log-line.bad{color:var(--bn-danger)}
 #bench-root .lt-gear{border-top:1px solid var(--bn-line);margin-top:14px;padding-top:4px}
 #bench-root .lt-gear h3{font-size:13px;margin:14px 0 4px}
 #bench-root .lt-gear .lt-note{margin:0 0 8px}
@@ -3193,13 +3453,9 @@ function injectPanelStyle(): void {
 #bench-root .lt-drop-ok{border-color:var(--bn-accent);box-shadow:0 0 0 2px var(--bn-accent)}
 #bench-root .lt-drop-over{background:var(--bn-panel-alt)}
 #bench-root .lt-drop-dim{opacity:.4}
-#bench-root .lt-play button:focus-visible,#bench-root .lt-gear button:focus-visible{outline:2px solid var(--bn-focus);outline-offset:2px}
+#bench-root .lt-bar button:focus-visible,#bench-root .lt-gear button:focus-visible{outline:2px solid var(--bn-focus);outline-offset:2px}
 @media (max-width:720px){
-#bench-root .lt-play{grid-template-columns:minmax(0,1fr);grid-template-areas:"view" "pad" "info"}
-#bench-root .lt-viewport{max-height:38vh}
-#bench-root .lt-pad-area{width:auto;flex-direction:row;flex-wrap:wrap;justify-content:center;align-items:flex-start}
-#bench-root .lt-actions{width:150px}
-#bench-root .lt-keys{display:none}
+#bench-root .lt-viewport{max-height:52vh}
 #bench-root .lt-armoury-row{grid-template-columns:minmax(0,1fr)}
 #bench-root .lt-armoury-row>.lt-slot-word{padding-top:0}
 }
@@ -3213,33 +3469,26 @@ function injectPanelStyle(): void {
 
 export default {
   title: "Living Table Bench",
-  source: "scripts/assets/fantasy.ts + scripts/assets/scifi.ts, KayKit renders from scripts/kaykit/, built by scripts/asset-bench/build-bench.mjs",
+  source: "scripts/asset-bench/assets.ts, the game's code under src/games/livingtable, KayKit renders from scripts/kaykit/",
   notes: [
-    "Play is the game in miniature: walk, fight, loot and dress the hero, with the game's own rules behind every button. " +
-      "The Art row on each tab switches between the game's current hand-drawn art and the KayKit art (Kay Lousberg, CC0); " +
-      "the choice holds across tabs. Characters shows the whole animated cast, Pieces every still sprite, Gear the paper " +
-      "doll and inventory icons. The Library tab lists every sprite in both templates, sci-fi included.",
-    "Fantasy only: sci-fi is paused and the Healer is out of play, so neither is offered outside the Library.",
+    "Play is the game in miniature, turn based: click to walk, click the goblin to attack, the door or the chest to use it; " +
+      "initiative, movement and the dice are the game's own. Characters shows the whole animated cast, Pieces every still " +
+      "sprite beside its KayKit version, Gear the paper doll and inventory icons, Terrain the autotiling.",
+    "The Art row switches between the game's current hand-drawn art and the KayKit art (Kay Lousberg, CC0); the choice " +
+      "holds across tabs. Fantasy only: sci-fi is paused and the Healer is out of play.",
   ],
-  palettes: {
-    fantasy: FANTASY_PALETTE,
-    scifi: SCIFI_PALETTE,
-  },
-  backgrounds: [
-    { id: "fantasy-grass", label: "Fantasy: grass floor", tile: "fantasy:floor_grass" },
-    { id: "scifi-deckplate", label: "Sci-fi: deck plate floor", tile: "scifi:floor_deckplate" },
-  ],
-  assets,
+  // This project's additions to the shell (shell.js): no sprite library, and the bench opens on Play.
+  library: false,
+  assets: [],
   panels: [
     { id: "play", label: "Play", mount: mountPlayPanel },
     { id: "characters", label: "Characters", mount: mountCharactersPanel },
     { id: "pieces", label: "Pieces", mount: mountPiecesPanel },
     { id: "gear", label: "Gear", mount: mountGearPanel },
     { id: "terrain", label: "Terrain", mount: mountTerrainPanel },
-    { id: "palette", label: "Palette", mount: mountPalettePanel },
   ],
-  // This project's additions to the shell (shell.js): open on Play, Library last.
   defaultPanel: "play",
-  libraryLast: true,
-  libraryLabel: "Library",
 };
+
+/** Every sprite id the Pieces tab shows (every in-play fantasy sprite), for the guard test. Pure: no DOM. */
+export const PIECES_ASSET_IDS: readonly string[] = SPRITES_BY_TEMPLATE.fantasy.filter(inPlayPiece).map((s) => s.assetId);

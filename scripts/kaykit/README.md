@@ -80,7 +80,7 @@ Run order, from the repo root (each step is safe to repeat):
 5. `npm run bench`: packs the parts (`pack-library.mjs`) and embeds them. The
    bench's **Art** row switches every panel between the current art and the
    conversion (ground style, character style, 16 or 32 px), and the
-   **Converted** tab lists all 320 in-play pieces side by side.
+   **Pieces** tab lists every in-play piece side by side.
 
 32 px art needs the renderer's `RenderManifest.spriteSize` (32), which the
 game supports from 0.3.0; the game itself still loads the 16 px art from
