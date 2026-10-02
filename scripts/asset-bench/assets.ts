@@ -92,7 +92,7 @@ import { headAnchor } from "../../src/games/livingtable/render/anchors";
 import { attackResultToReadout } from "../../src/games/livingtable/render/rollReadoutAdapter";
 import { resolveMonsterTurn } from "../../src/games/livingtable/session/hostileTurns";
 import { attackEvents, type CombatEvent } from "../../src/games/livingtable/session/combatEvents";
-import { createOverlay, verdictWords, type InitiativeSide, type Overlay, type OverlayPoint, type TextStyle } from "./overlay";
+import { createHud, createOverlay, verdictWords, type Hud, type HudAction, type HudBar, type InitiativeSide, type Overlay, type OverlayPoint, type TextStyle } from "./overlay";
 import { createDiceTray, createSkinPicker, DICE_SKINS, type DiceTray, type DieKind } from "./dice";
 import { decodeLibrary, kaykitLibrary, partFile } from "./kaykit";
 import {
@@ -1940,6 +1940,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   textSelect.onchange = () => {
     textStyle = textSelect.value as TextStyle;
     overlay.setStyle(textStyle);
+    hud.setStyle(textStyle);
   };
   field("Text", textSelect);
   const rollBox = el_("input");
@@ -1951,6 +1952,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   const rollField = el_("label", "bn-field");
   rollField.append(rollBox, document.createTextNode(" I roll my own dice"));
   controls.appendChild(rollField);
+  const resetBtn = el_("button", "bn-btn lt-reset", "Reset scene");
+  resetBtn.type = "button";
+  resetBtn.onclick = () => {
+    const p = st();
+    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero);
+    newScene();
+  };
+  controls.appendChild(resetBtn);
   // A chosen option must not keep the arrow keys: they walk the hero.
   el.addEventListener("change", (e) => {
     const t = e.target as HTMLElement | null;
@@ -1976,18 +1985,20 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   board.append(canvas, marks);
   viewport.appendChild(board);
   stageWrap.appendChild(viewport);
-  const arena = el_("div", "lt-arena");
+  const arena = el_("div", "lt-arena lt-game");
+  arena.setAttribute("aria-label", "The game");
   const trayCol = el_("div", "lt-tray-col");
   const trayHost = el_("div", "lt-dice-host");
-  const shop = el_("details", "lt-dice-shop");
-  shop.appendChild(el_("summary", undefined, "Dice skins"));
-  const shopHost = el_("div");
-  shop.appendChild(shopHost);
-  trayCol.append(trayHost, shop);
   arena.append(stageWrap, trayCol);
   el.appendChild(arena);
+  const shop = el_("details", "lt-dice-shop");
+  shop.appendChild(el_("summary", undefined, "Dice skins (shop preview)"));
+  const shopHost = el_("div");
+  shop.appendChild(shopHost);
+  el.appendChild(shop);
   const overlay: Overlay = createOverlay(stageWrap, textStyle);
   const tray: DiceTray = createDiceTray(trayHost, diceSkin);
+  const hud: Hud = createHud(trayCol, textStyle, (id) => void onHudAction(id), { slot: trayHost });
   const picker = createSkinPicker(shopHost, tray, { owned: OWNED_SKINS, onTry: (id) => (diceSkin = id) });
 
   /** Wait for the player's tap on the tray (unless the tray rolls for them), then throw. */
@@ -1995,35 +2006,6 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (rollMyself) await tray.awaitRoll(prompt, dice.map((d) => d.kind));
     await tray.roll({ dice, label, detail, tone });
   }
-
-  // ---- the action bar and the readout ----------------------------------------
-
-  const bar = el_("div", "lt-bar");
-  const turnChip = el_("p", "lt-turn");
-  turnChip.setAttribute("role", "status");
-  const buttons = el_("div", "lt-bar-buttons");
-  bar.append(turnChip, buttons);
-  el.appendChild(bar);
-  const button = (label: string, key: string, primary: boolean, run: () => void): HTMLButtonElement => {
-    const b = el_("button", primary ? "lt-act lt-act-primary" : "lt-act");
-    b.type = "button";
-    b.appendChild(el_("span", undefined, label));
-    if (key) b.appendChild(el_("kbd", undefined, key));
-    b.onclick = run;
-    buttons.appendChild(b);
-    return b;
-  };
-  const attackBtn = button("Attack", "F", true, () => void attackGoblin());
-  const useBtn = button("Use", "E", false, () => void useNearby());
-  const potionBtn = button("Potion", "Q", false, () => void drinkPotion());
-  const endBtn = button("End turn", "T", false, () => void endTurnFlow());
-  button("Reset scene", "", false, () => {
-    const p = st();
-    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero);
-    newScene();
-  });
-  const stats = el_("div", "lt-stats");
-  el.appendChild(stats);
 
   // ---- gear ----------------------------------------------------------------
 
@@ -2088,7 +2070,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const field = heroField(p);
     const cost = (path: XY[]) => path.length * FEET_PER_TILE;
     if (p.monster && same(tile, p.monster.at)) {
-      if (!heroActionReady(p)) return { kind: "none", tile, reason: "You have already taken your action this turn. End your turn." };
+      if (!heroActionReady(p)) return { kind: "none", tile, reason: "Your action is used. Press End turn (T)." };
       const sight = (from: XY, to: XY) => canSee(p, sceneTiles(p), from, to);
       const spot = approachTile(field, p.monster.at, heroReachTiles(p), sight);
       const path = spot ? pathTo(field, spot) : null;
@@ -2363,6 +2345,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   /** Every frame, before drawing: the next square of a walk once the last has landed, then whatever waited for arrival. */
   function pump(now: number): void {
     drawMarks();
+    // The HUD follows every change of turn state (it redraws only when what it shows changed).
+    renderHud();
     if (busy) return;
     const h = st().heroActor;
     if (stepBusy(h, now)) return;
@@ -2530,56 +2514,53 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   // ---- the readout -------------------------------------------------------------
 
-  function turnWords(): string {
-    const p = st();
-    if (heroDown(p)) return "You are down. Press Reset scene.";
-    if (!p.round) return p.monster ? "Exploring. Click a square to walk there." : "The goblin is down. Open the chest, or Reset scene to fight again.";
-    const c = activeCombatant(p.round);
-    if (!isPlayersTurn(p.round)) return `Round ${p.round.roundNumber}: ${sentenceCase(monsterLabel(p))}'s turn. Space or a click skips.`;
-    const e = c?.economy;
-    return `Round ${p.round.roundNumber}, your turn: ${e?.movementRemaining ?? 0} ft to move, action ${e?.action ? "ready" : "used"}.`;
+  async function onHudAction(id: string): Promise<void> {
+    if (id === "attack") return attackGoblin();
+    if (id === "use") return useNearby();
+    if (id === "potion") return drinkPotion();
+    if (id === "end") return endTurnFlow();
   }
 
-  function stat(label: string, value: string, bad = false): HTMLElement {
-    const chip = el_("span", bad ? "lt-stat lt-stat-bad" : "lt-stat");
-    chip.appendChild(el_("span", "lt-stat-label", `${label} `));
-    chip.appendChild(el_("b", undefined, value));
-    return chip;
-  }
-
-  function renderStats(): void {
+  /** Whose turn it is, what is left of it, everyone's hit points and the buttons: the game window's own readout. */
+  function renderHud(): void {
     const p = st();
     const h = p.hero;
-    const weapon = weaponFor(h);
-    const reachFt = heroReachTiles(p) * FEET_PER_TILE;
-    const bonus = attackerBonusFor(h);
-    stats.innerHTML = "";
-    stats.append(
-      stat("HP", `${h.currentHp}/${h.maxHp}`, heroDown(p) || h.currentHp * 2 <= h.maxHp),
-      stat("AC", String(effectiveArmorClass(h))),
-      stat("Attack", `${bonus >= 0 ? "+" : ""}${bonus}`),
-      stat("Damage", weaponDamageNotationFor(h)),
-      stat(weapon.name, `${weapon.ranged ? "range" : "reach"} ${reachFt} ft`),
-      stat("Speed", `${effectiveSpeedFt(h)} ft`),
-      stat("Potions", String(p.potions)),
-    );
     const block = statblockFor(SCENE_KIT[p.template].monster);
-    stats.append(p.monster ? stat(block.name, `${p.monster.hp}/${block.maxHp} HP, AC ${block.armorClass}`, p.monster.awake) : stat(block.name, "down"));
-  }
-
-  function renderBar(): void {
-    const p = st();
-    turnChip.textContent = turnWords();
-    const myTurn = !p.round || isPlayersTurn(p.round);
+    const c = p.round ? activeCombatant(p.round) : undefined;
+    const mine = heroesTurn(p);
+    let title: string;
+    const lines: string[] = [];
+    if (heroDown(p)) title = "You are down";
+    else if (!p.round) title = p.monster ? "Exploring" : `The ${block.name.toLowerCase()} is down`;
+    else if (mine) title = `Round ${p.round.roundNumber}: your turn`;
+    else title = `Round ${p.round.roundNumber}: ${block.name.toLowerCase()}'s turn`;
+    if (mine && c) {
+      lines.push(`Move: ${c.economy.movementRemaining} ft left`, `Action: ${c.economy.action ? "ready" : "used"}`);
+    } else if (!p.round && !heroDown(p)) {
+      lines.push(p.monster ? "Click a square to walk" : "Open the chest, or Reset scene");
+    } else if (p.round && !mine) {
+      lines.push("Space or a click skips");
+    }
+    const bonus = attackerBonusFor(h);
+    lines.push(`AC ${effectiveArmorClass(h)}, hit ${bonus >= 0 ? "+" : ""}${bonus}, ${weaponDamageNotationFor(h)}`);
+    const bars: HudBar[] = [{ id: HERO_ID, label: h.name, hp: h.currentHp, max: h.maxHp, side: "hero", down: heroDown(p) }];
+    if (p.monster) bars.push({ id: MONSTER_ID, label: block.name, hp: p.monster.hp, max: block.maxHp, side: "enemy" });
+    else if (p.fallenAt) bars.push({ id: MONSTER_ID, label: block.name, hp: 0, max: block.maxHp, side: "enemy", down: true });
     const near = tileDistance(p.heroAt, DOOR_AT) <= 1 || (tileDistance(p.heroAt, CONTAINER_AT) <= 1 && !p.searched);
-    attackBtn.disabled = busy || heroDown(p) || !p.monster || !heroActionReady(p);
-    useBtn.disabled = busy || heroDown(p) || !myTurn || !near;
-    potionBtn.disabled = busy || p.potions <= 0 || !heroActionReady(p) || (!heroDown(p) && p.hero.currentHp >= p.hero.maxHp);
-    (potionBtn.firstChild as HTMLElement).textContent = `Potion (${p.potions})`;
-    endBtn.disabled = busy || !heroesTurn(p);
+    const myMove = !p.round || mine;
+    const actionLeft = heroActionReady(p);
+    const moveLeft = (c?.economy.movementRemaining ?? 0) >= FEET_PER_TILE;
+    const actions: HudAction[] = [
+      { id: "attack", label: "Attack", key: "F", enabled: !busy && !heroDown(p) && !!p.monster && actionLeft },
+      { id: "use", label: "Use", key: "E", enabled: !busy && !heroDown(p) && myMove && near },
+      { id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: !busy && p.potions > 0 && actionLeft && (heroDown(p) || h.currentHp < h.maxHp) },
+      // The thing to press once the action is spent, or nothing is left to do.
+      { id: "end", label: "End turn", key: "T", enabled: !busy && mine, emphasis: !busy && mine && (!actionLeft || (!moveLeft && !near)) },
+    ];
+    hud.render({ title, lines, bars, actions });
     const entries =
       p.round && p.monster
-        ? p.round.order.map((c) => ({ id: c.id, label: c.id === HERO_ID ? p.hero.name : statblockFor(SCENE_KIT[p.template].monster).name, total: c.initiative, side: (c.side === "player" ? "hero" : "enemy") as InitiativeSide }))
+        ? p.round.order.map((cb) => ({ id: cb.id, label: cb.id === HERO_ID ? p.hero.name : block.name, total: cb.initiative, side: (cb.side === "player" ? "hero" : "enemy") as InitiativeSide }))
         : [];
     overlay.initiative(entries, p.round ? (activeCombatant(p.round)?.id ?? null) : null, p.round?.roundNumber ?? 0);
   }
@@ -2690,9 +2671,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const look = `${art.source}|${art.ground}|${art.chars}|${art.size}|${artDecoded ? 1 : 0}`;
     const worn = GEAR_ROLES.map((r) => wornTier(p, r) ?? "-").join(",");
     const bag = (h.bag ?? []).map((b) => `${b.slot}:${b.tier}`).join(",");
-    const weapon = weaponFor(h);
-    refresh("stats", [h.currentHp, h.maxHp, heroDown(p), effectiveArmorClass(h), attackerBonusFor(h), weaponDamageNotationFor(h), weapon.name, weapon.ranged, effectiveSpeedFt(h), p.potions, p.monster ? `${p.monster.hp},${p.monster.awake}` : "down"].join("|"), renderStats);
-    renderBar();
+    renderHud();
     refresh("slots", `${p.archetypeId}|${worn}|${look}`, renderSlots);
     refresh("pack", `${p.archetypeId}|${bag}|${look}`, renderPack);
     refresh("armoury", `${p.archetypeId}|${worn}|${bag}|${look}`, renderArmoury);
@@ -2783,6 +2762,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   return () => {
     diceSkin = tray.skin().id;
+    hud.destroy();
     stage.dispose();
     overlay.destroy();
     picker.destroy();
@@ -3536,18 +3516,19 @@ function injectPanelStyle(): void {
 #bench-root .lt-kk-cell{border:1px solid var(--bn-line);border-radius:6px;background:var(--bn-panel-alt)}
 @media (max-width:720px){#bench-root .lt-kk-grid{grid-template-columns:repeat(var(--kk-cols),auto)}#bench-root .lt-kk-grid>div:first-child{display:none}#bench-root .lt-kk-rowhead{grid-column:1 / -1}}
 #bench-root .lt-arena{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margin:4px 0 8px}
+#bench-root .lt-game{padding:10px;border-radius:12px;background:#0c0e1d;box-shadow:inset 0 0 0 1px rgb(255 255 255/.06),0 6px 18px rgb(0 0 0/.25)}
+#bench-root .lt-game .lt-viewport{border-color:#262a47}
+#bench-root .lt-reset{font:inherit;font-size:12.5px;padding:6px 10px;border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel);color:var(--bn-text);cursor:pointer}
 #bench-root .lt-stage-wrap{position:relative;width:fit-content;max-width:100%}
-#bench-root .lt-tray-col{flex:0 0 320px;max-width:100%;display:flex;flex-direction:column;gap:8px}
+#bench-root .lt-tray-col{flex:0 0 320px;width:320px;min-width:0;max-width:100%;display:flex;flex-direction:column;gap:8px}
+#bench-root .lt-tray-col>*{max-width:100%}
 #bench-root .lt-dice-shop>summary{cursor:pointer;font-size:12.5px;color:var(--bn-muted)}
-@media (min-width:721px){#bench-root .lt-stage-wrap{max-width:calc(100% - 332px)}}
-@media (max-width:720px){#bench-root .lt-tray-col{flex:1 1 100%}}
+@media (min-width:721px){#bench-root .lt-stage-wrap{max-width:calc(100% - 344px)}}
+@media (max-width:720px){#bench-root .lt-tray-col{flex:1 1 100%;width:auto}}
 #bench-root .lt-viewport{overflow:auto;max-width:100%;max-height:min(66vh,620px);border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel-alt);touch-action:manipulation}
 #bench-root .lt-board{position:relative;width:max-content}
 #bench-root .lt-marks{position:absolute;left:0;top:0;pointer-events:none;image-rendering:pixelated}
 #bench-root .lt-howto{margin:0 0 6px}
-#bench-root .lt-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 14px;margin:0 0 8px}
-#bench-root .lt-turn{margin:0;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
-#bench-root .lt-bar-buttons{display:flex;flex-wrap:wrap;gap:6px}
 #bench-root .lt-act:disabled{opacity:.45;cursor:default;border-color:var(--bn-line)}
 #bench-root .lt-act{font:inherit;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel);color:var(--bn-text);cursor:pointer;touch-action:manipulation}
 #bench-root .lt-act:hover{border-color:var(--bn-accent)}
@@ -3582,7 +3563,7 @@ function injectPanelStyle(): void {
 #bench-root .lt-drop-ok{border-color:var(--bn-accent);box-shadow:0 0 0 2px var(--bn-accent)}
 #bench-root .lt-drop-over{background:var(--bn-panel-alt)}
 #bench-root .lt-drop-dim{opacity:.4}
-#bench-root .lt-bar button:focus-visible,#bench-root .lt-gear button:focus-visible{outline:2px solid var(--bn-focus);outline-offset:2px}
+#bench-root .lt-reset:focus-visible,#bench-root .lt-gear button:focus-visible{outline:2px solid var(--bn-focus);outline-offset:2px}
 @media (max-width:720px){
 #bench-root .lt-viewport{max-height:52vh}
 #bench-root .lt-armoury-row{grid-template-columns:minmax(0,1fr)}

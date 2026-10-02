@@ -1337,6 +1337,205 @@ function numeral(uid: string, key: FloatKind | BannerKind, text: string, px: num
 
 // ---- the demo ---------------------------------------------------------------
 
+// ---- the in-game HUD: the dock beside the board ------------------------------
+//
+// Everything the player plays with that is not on the board itself: whose turn
+// it is and what is left of it, everyone's hit points, and the action buttons,
+// drawn in the same two treatments as the board's text. A slot between the
+// status and the buttons takes the dice tray. It sits in the page flow (not
+// over the board), so it never covers the fight.
+
+export interface HudAction {
+  id: string;
+  label: string;
+  /** The keyboard shortcut, shown on the button. */
+  key?: string;
+  enabled: boolean;
+  /** Draw attention: the thing to press now (End turn once nothing else is left). */
+  emphasis?: boolean;
+}
+export interface HudBar {
+  id: string;
+  label: string;
+  hp: number;
+  max: number;
+  side: InitiativeSide;
+  /** Out of the fight (dead, or the hero at 0 and making death saves). */
+  down?: boolean;
+}
+export interface HudState {
+  /** One line on top: "Round 2, your turn", "Exploring". */
+  title: string;
+  /** Short lines under it: what is left of the turn, the hero's numbers. */
+  lines: readonly string[];
+  bars: readonly HudBar[];
+  actions: readonly HudAction[];
+}
+export interface Hud {
+  setStyle(style: TextStyle): void;
+  render(state: HudState): void;
+  destroy(): void;
+}
+
+const HUD_STYLE_ID = "lto-hud-style";
+const HUD_CSS = `
+.lto-root.lto-hud{position:relative;inset:auto;overflow:visible;pointer-events:auto;z-index:auto;display:flex;flex-direction:column;gap:8px;width:100%}
+.lto-hud-panel{display:flex;flex-direction:column;gap:6px;padding:8px 10px}
+.lto-hud-lines{display:flex;flex-direction:column;gap:3px}
+.lto-hud-bars{display:flex;flex-direction:column;gap:5px;margin-top:2px}
+.lto-hud-bar{display:grid;grid-template-columns:minmax(0,auto) minmax(40px,1fr) auto;align-items:center;gap:8px}
+.lto-hud-meter{position:relative;height:10px;overflow:hidden}
+.lto-hud-meter>i{position:absolute;left:0;top:0;bottom:0;background:var(--hp)}
+.lto-hud-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.lto-hud-btn{appearance:none;font:inherit;color:inherit;margin:0;min-width:0;overflow:hidden;display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:42px;padding:6px 10px;cursor:pointer;text-align:left;touch-action:manipulation}
+.lto-hud-btn:disabled{cursor:default;opacity:.42}
+.lto-hud-btn:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
+.lto-hud-key{opacity:.75}
+@keyframes lto-hud-pulse{0%,100%{filter:none}50%{filter:brightness(1.35) drop-shadow(0 0 6px rgb(255 205 70/.9))}}
+.lto-hud-btn.is-now:not(:disabled){animation:lto-hud-pulse 1.1s ease-in-out infinite}
+.lto-px .lto-hud-meter{background:#0b0d22;box-shadow:0 0 0 2px #05061a}
+.lto-px .lto-hud-btn.lto-fr{background:#141a3c}
+.lto-px .lto-hud-btn:not(:disabled):hover{--frame:var(--fr-blue)}
+.lto-sb .lto-hud-title{font:700 16px/1.2 var(--lto-serif);color:var(--sb-ink);letter-spacing:.02em}
+.lto-sb .lto-hud-line{font:14px/1.35 var(--lto-serif);color:var(--sb-muted)}
+.lto-sb .lto-hud-name{font:600 14px/1.2 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-hud-num{font:700 14px/1 var(--lto-num);color:var(--sb-ink);font-variant-numeric:tabular-nums}
+.lto-sb .lto-hud-meter{height:9px;border-radius:999px;background:var(--sb-paper2);box-shadow:inset 0 0 0 1px var(--sb-rule)}
+.lto-sb .lto-hud-btn{border-radius:9px;background:linear-gradient(180deg,var(--sb-paper),var(--sb-paper2));border:1px solid var(--sb-rule);box-shadow:inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold);font:700 15px/1 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-hud-btn.is-now:not(:disabled){box-shadow:0 0 0 3px var(--sb-gold),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold)}
+.lto-sb .lto-hud-key{font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:2px 5px;border:1px solid currentColor;border-radius:4px}
+`;
+
+/** Hit point colours: hero blue, enemy red, both amber when low, grey when down. */
+function hpColour(bar: HudBar): string {
+  if (bar.down || bar.hp <= 0) return "#6b6f86";
+  if (bar.hp * 3 <= bar.max) return "#ffb02a";
+  return bar.side === "hero" ? "#59a8ff" : "#ff5a4a";
+}
+
+export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: (id: string) => void, opts: { slot?: HTMLElement } = {}): Hud {
+  injectStyle();
+  if (typeof document !== "undefined" && !document.getElementById(HUD_STYLE_ID)) {
+    const s = document.createElement("style");
+    s.id = HUD_STYLE_ID;
+    s.textContent = HUD_CSS;
+    document.head.appendChild(s);
+  }
+  let style: TextStyle = initialStyle;
+  let last: HudState | null = null;
+  let lastKey = "";
+  const root = el("div", "lto-root lto-hud");
+  root.dataset.ltoHud = "";
+  for (const key of Object.keys(FRAMES) as FrameKey[]) {
+    const url = frameUrl(key);
+    if (url) root.style.setProperty(`--fr-${key}`, `url("${url}")`);
+  }
+  const panel = el("div", "lto-hud-panel");
+  panel.setAttribute("role", "status");
+  const actions = el("div", "lto-hud-actions");
+  actions.setAttribute("role", "toolbar");
+  actions.setAttribute("aria-label", "Actions");
+  root.append(panel);
+  if (opts.slot) root.append(opts.slot);
+  root.append(actions);
+  host.appendChild(root);
+
+  const isPixel = (): boolean => style === "pixel";
+  const px = (text: string, o: PixelTextOptions): HTMLCanvasElement => {
+    const c = pixelText(text, { dpr: deviceRatio(), ...o });
+    c.setAttribute("aria-hidden", "true");
+    return c;
+  };
+  /** A line of HUD text in the current treatment, with the words kept for screen readers. */
+  const text = (words: string, kind: "title" | "line" | "name" | "num"): HTMLElement => {
+    const node = el("span", `lto-hud-${kind}`);
+    if (isPixel()) {
+      const colour = kind === "title" ? PX.gold : kind === "line" ? PX.muted : PX.ink;
+      // Titles and lines wrap to the panel (font pixels are 2 CSS px); names and numbers stay on one line.
+      const wrap = kind === "title" || kind === "line" ? Math.max(40, Math.floor(((root.clientWidth || 300) - 44) / 2)) : undefined;
+      node.append(px(words, { scale: 2, weight: kind === "title" || kind === "num" ? "bold" : "regular", color: colour, outline: PX.dark, maxWidth: wrap }), el("span", "lto-sr", words));
+    } else {
+      node.textContent = words;
+    }
+    return node;
+  };
+
+  function draw(): void {
+    const s = last;
+    if (!s) return;
+    root.classList.toggle("lto-px", isPixel());
+    root.classList.toggle("lto-sb", !isPixel());
+    panel.className = "lto-hud-panel";
+    if (isPixel()) panel.classList.add("lto-fr", "fr-win");
+    else panel.classList.add("lto-plate");
+    panel.replaceChildren();
+    panel.append(text(s.title, "title"));
+    if (s.lines.length) {
+      const lines = el("div", "lto-hud-lines");
+      for (const l of s.lines) lines.append(text(l, "line"));
+      panel.append(lines);
+    }
+    if (s.bars.length) {
+      const bars = el("div", "lto-hud-bars");
+      for (const b of s.bars) {
+        const row = el("div", "lto-hud-bar");
+        row.dataset.side = b.side;
+        const meter = el("div", "lto-hud-meter");
+        const fill = el("i");
+        fill.style.setProperty("--hp", hpColour(b));
+        fill.style.width = `${b.max > 0 ? Math.max(0, Math.min(100, (b.hp / b.max) * 100)) : 0}%`;
+        meter.append(fill);
+        meter.setAttribute("aria-hidden", "true");
+        row.append(text(b.label, "name"), meter, text(b.down ? "DOWN" : `${b.hp}/${b.max}`, "num"));
+        bars.append(row);
+      }
+      panel.append(bars);
+    }
+    actions.replaceChildren();
+    for (const a of s.actions) {
+      const btn = el("button", "lto-hud-btn");
+      btn.type = "button";
+      btn.dataset.action = a.id;
+      btn.disabled = !a.enabled;
+      if (a.emphasis) btn.classList.add("is-now");
+      // The thin frame: a button needs its width for the label and the key.
+      if (isPixel()) btn.classList.add("lto-fr", "fs1", a.emphasis ? "fr-gold" : "fr-win");
+      btn.setAttribute("aria-label", a.key ? `${a.label} (${a.key})` : a.label);
+      if (isPixel()) {
+        btn.append(px(a.label, { scale: 2, weight: "bold", color: a.emphasis ? PX.gold : PX.ink, outline: PX.dark }));
+        if (a.key) btn.append(px(a.key, { scale: 2, color: PX.muted, outline: PX.dark }));
+      } else {
+        btn.append(el("span", undefined, a.label));
+        if (a.key) btn.append(el("span", "lto-hud-key", a.key));
+      }
+      btn.onclick = () => onAction(a.id);
+      actions.append(btn);
+    }
+  }
+
+  return {
+    setStyle(next: TextStyle): void {
+      if (next === style) return;
+      style = next;
+      draw();
+    },
+    render(state: HudState): void {
+      // Rebuilt only when what it shows changed: a turn is a handful of changes, not one per frame.
+      const key = JSON.stringify(state) + style;
+      if (key === lastKey) return;
+      lastKey = key;
+      // Keep keyboard focus on the same button across a redraw.
+      const focused = (document.activeElement as HTMLElement | null)?.dataset?.action;
+      last = state;
+      draw();
+      if (focused) (actions.querySelector(`[data-action="${focused}"]`) as HTMLButtonElement | null)?.focus();
+    },
+    destroy(): void {
+      root.remove();
+    },
+  };
+}
+
 export interface OverlayDemoOptions {
   /** Multiplies every pause. Default 1; 0 runs the whole thing back to back. */
   pace?: number;
