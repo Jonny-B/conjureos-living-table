@@ -35,12 +35,16 @@ import {
   formatSkills,
   formatSpeed,
   formatSubtitle,
+  ROLLS_WITH_TIP,
   queryWords,
+  rollsWithInfo,
   ruleBlockText,
   sizeOptions,
   splitHighlight,
+  splitTierWords,
   typeOptions,
 } from "../scripts/asset-bench/books";
+import { FOE_TIER_WORDS } from "../scripts/asset-bench/foeDice";
 import { BESTIARY, beastById } from "../src/games/livingtable/rules/bestiary";
 import { RULEBOOK } from "../src/games/livingtable/rules/rulebook";
 import { SRD_ATTRIBUTION } from "../src/games/livingtable/menu/labels";
@@ -296,6 +300,50 @@ test("the SRD attribution footer carries every part of SRD_ATTRIBUTION", () => {
   for (const part of [SRD_ATTRIBUTION.creator, SRD_ATTRIBUTION.copyright, SRD_ATTRIBUTION.license, SRD_ATTRIBUTION.licenseUrl, SRD_ATTRIBUTION.modified, SRD_ATTRIBUTION.disclaimer]) {
     assert.ok(joined.includes(part), part);
   }
+});
+
+test("splitTierWords takes a tier line apart into label, CR range and sentence", () => {
+  assert.deepEqual(splitTierWords("Tier 1 (CR 1/4 to 1/2): a dark iron die in a box."), { tierLabel: "Tier 1", crRange: "CR 1/4 to 1/2", tierText: "a dark iron die in a box." });
+  assert.deepEqual(splitTierWords("no shape here"), { tierLabel: "", crRange: "", tierText: "no shape here" });
+  FOE_TIER_WORDS.forEach((line, i) => {
+    const t = splitTierWords(line);
+    assert.equal(t.tierLabel, `Tier ${i}`);
+    assert.match(t.crRange, /^CR \d/);
+    assert.ok(t.tierText.length > 10);
+  });
+});
+
+test("rollsWithInfo gives every creature a tier, one to six marks, a look name and its tier words", () => {
+  for (const b of BESTIARY) {
+    const info = rollsWithInfo(b);
+    assert.ok(info.look.tier >= 0 && info.look.tier <= 5, b.id);
+    assert.equal(info.marks, info.look.tier + 1, b.id);
+    assert.equal(info.tierLabel, `Tier ${info.look.tier}`, b.id);
+    assert.ok(info.crRange.startsWith("CR "), b.id);
+    assert.ok(info.tierText.length > 10 && info.look.name.length > 3, b.id);
+    assert.ok(!DASH_CHARS.test(info.look.name + info.tierText + info.crRange), b.id);
+  }
+});
+
+test("rollsWithInfo climbs the ladder from the rat to the dragon", () => {
+  const rat = rollsWithInfo(beastById("rat")!);
+  const gob = rollsWithInfo(goblin);
+  const dragon = rollsWithInfo(beastById("young-green-dragon")!);
+  assert.equal(rat.look.tier, 0);
+  assert.equal(rat.marks, 1);
+  assert.equal(gob.look.tier, 1);
+  assert.equal(dragon.look.accent, "dragon");
+  assert.ok(dragon.marks > gob.marks && gob.marks > rat.marks);
+  assert.equal(rollsWithInfo(beastById("wight")!).look.accent, "undead");
+  assert.match(rollsWithInfo(beastById("wight")!).accentNote, /^Undead/);
+  assert.match(dragon.accentNote, /^Dragons/);
+  assert.equal(gob.accentNote, "");
+});
+
+test("the Rolls with tip says what the owner asked it to say", () => {
+  assert.equal(ROLLS_WITH_TIP.title, "Rolls with");
+  assert.ok(ROLLS_WITH_TIP.lines.join(" ").includes("When this creature attacks, its dice are thrown in its own tray. Tougher creatures roll fancier dice."));
+  assert.ok(!DASH_CHARS.test(JSON.stringify(ROLLS_WITH_TIP)));
 });
 
 test("books.ts is pure at import and keeps clear of dash characters", () => {

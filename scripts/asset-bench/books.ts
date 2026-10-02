@@ -20,6 +20,8 @@ import { RULEBOOK, type RuleBlock, type RuleSection } from "../../src/games/livi
 import { BESTIARY, CR_ORDER, abilityMod, type Beast, type BeastAttack, type CreatureSize } from "../../src/games/livingtable/rules/bestiary";
 import { SRD_ATTRIBUTION } from "../../src/games/livingtable/menu/labels";
 import { attachTip, type TipContent } from "./tip";
+import { renderTrayPreview } from "./dice";
+import { FOE_TIER_WORDS, foeDiceFor, type FoeDiceLook } from "./foeDice";
 
 // ===========================================================================
 // Pure helpers (no DOM)
@@ -184,6 +186,41 @@ export function engineNote(b: Pick<Beast, "tokenAssetId">): string {
     ? "On the board: the game applies this creature's armor class, hit points, attack bonus, damage and ability modifiers. The DM rules on every trait and special action."
     : "Reference only: this creature has no token on the board yet. The DM rules on every number and trait here.";
 }
+
+/** What the "Rolls with" box says about a creature's dice: its look plus the tier line split into its parts. Pure, so it is unit tested. */
+export interface RollsWithInfo {
+  look: FoeDiceLook;
+  /** "Tier 1". */
+  tierLabel: string;
+  /** "CR 1/4 to 1/2". */
+  crRange: string;
+  /** "a dark iron die in an iron-bound, riveted box lined with dark leather." */
+  tierText: string;
+  /** For undead and dragons, one sentence on how the kind reshapes the tier's base look; empty for everyone else. */
+  accentNote: string;
+  /** How many small marks the compact row shows: one for tier 0 up to six for tier 5. */
+  marks: number;
+}
+
+/** Splits one FOE_TIER_WORDS line ("Tier 1 (CR 1/4 to 1/2): a dark iron die ...") into its label, its CR range and its sentence. */
+export function splitTierWords(line: string): { tierLabel: string; crRange: string; tierText: string } {
+  const m = /^(Tier \d+) \((CR [^)]*)\):\s*(.*)$/.exec(line);
+  return m ? { tierLabel: m[1]!, crRange: m[2]!, tierText: m[3]! } : { tierLabel: "", crRange: "", tierText: line };
+}
+
+/** The dice and tray a creature rolls with, ready for the stat block. */
+export function rollsWithInfo(b: Beast): RollsWithInfo {
+  const look = foeDiceFor(b);
+  const accentNote = look.accent === "undead" ? "Undead roll bone-white dice in an ossuary rim, so this is that tier's look in grave dress." : look.accent === "dragon" ? "Dragons roll in a scaled rim with hoard-gold, tinted to the dragon's colour, over that tier's look." : "";
+  return { look, ...splitTierWords(FOE_TIER_WORDS[look.tier] ?? ""), accentNote, marks: look.tier + 1 };
+}
+
+/** The hover help on the "Rolls with" box. */
+export const ROLLS_WITH_TIP: TipContent = {
+  title: "Rolls with",
+  lines: ["When this creature attacks, its dice are thrown in its own tray. Tougher creatures roll fancier dice."],
+  footer: "The look follows the challenge rating. Your own dice and tray stay yours.",
+};
 
 // ---- the small glossary behind the hover help -------------------------------
 
@@ -501,6 +538,15 @@ function injectBooksStyle(): void {
 #bench-root .bk-prose p{margin:0}
 #bench-root .bk-fights{margin-top:12px;padding:9px 12px;border:1px solid var(--bn-line);border-left:4px solid var(--bn-danger);border-radius:8px;background:var(--bn-panel-alt)}
 #bench-root .bk-fights h4{margin:0 0 2px}
+#bench-root .bk-rolls{margin-top:12px;padding:9px 12px;border:1px solid var(--bn-line);border-left:4px solid var(--bn-accent);border-radius:8px;background:var(--bn-panel-alt);display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;align-items:start}
+#bench-root .bk-rolls h4{grid-column:1/-1;margin:0}
+#bench-root .bk-rolls-pic{display:block;width:192px;max-width:100%;height:auto;aspect-ratio:96/60;image-rendering:pixelated;border-radius:6px;border:1px solid var(--bn-line)}
+#bench-root .bk-rolls-name{font-weight:700;font-size:13.5px;margin:0;overflow-wrap:anywhere}
+#bench-root .bk-rolls-text{margin:2px 0 0;font-size:12.5px}
+#bench-root .bk-rolls-tier{margin:4px 0 0;font-size:12px;color:var(--bn-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+@media (max-width:420px){#bench-root .bk-rolls{grid-template-columns:minmax(0,1fr)}}
+#bench-root .bk-pips{display:inline-flex;gap:2px;margin-left:5px;vertical-align:middle}
+#bench-root .bk-pips>i{display:block;width:5px;height:5px;border-radius:1px;background:currentColor;opacity:.75}
 #bench-root .bk-engine{margin:12px 0 0;font-size:12.5px;color:var(--bn-muted)}
 #bench-root .bk-sb{grid-area:stat;background:var(--bn-bg);border:1px solid var(--bn-line);border-top:4px solid var(--bn-accent);border-bottom:4px solid var(--bn-accent);border-radius:4px;padding:12px 14px;font-size:13.5px;min-width:0}
 #bench-root .bk-sb h3{margin:0;font-size:20px;letter-spacing:-.01em;color:var(--bn-accent);font-variant:small-caps;overflow-wrap:anywhere}
@@ -816,6 +862,37 @@ function buildStatBlock(b: Beast, tips: (() => void)[]): HTMLElement {
   return sb;
 }
 
+/** One to six small marks for the creature's dice tier, shown beside its CR in the compact row. */
+function tierPips(info: RollsWithInfo): HTMLElement {
+  const pips = h("span", "bk-pips", undefined, { role: "img", "aria-label": `Dice ${info.tierLabel.toLowerCase()}`, title: `Rolls ${info.look.name.toLowerCase()}` });
+  for (let i = 0; i < info.marks; i++) pips.appendChild(h("i"));
+  return pips;
+}
+
+/** The "Rolls with" box: the creature's tray with a settled d20 showing 20. Built only when the entry is first opened, so 40 canvases are never made at once. Null if the preview cannot be drawn. */
+function buildRollsWith(b: Beast, tips: (() => void)[]): HTMLElement | null {
+  const info = rollsWithInfo(b);
+  let pic: HTMLCanvasElement;
+  try {
+    pic = renderTrayPreview(info.look.trayId, info.look.skinId, "d20", 20, { scale: 2 });
+  } catch {
+    return null;
+  }
+  pic.className = "bk-rolls-pic";
+  const box = h("div", "bk-rolls", undefined, { "data-tier": String(info.look.tier) });
+  const title = h("h4");
+  const label = h("span", "bk-term", "Rolls with");
+  tips.push(attachTip(label, ROLLS_WITH_TIP), attachTip(pic, ROLLS_WITH_TIP));
+  title.appendChild(label);
+  const text = h("div");
+  text.append(h("p", "bk-rolls-name", info.look.name), h("p", "bk-rolls-text", `${info.tierLabel} base: ${info.tierText}`));
+  if (info.accentNote) text.appendChild(h("p", "bk-rolls-text", info.accentNote));
+  const tier = h("p", "bk-rolls-tier", `${info.tierLabel}, ${info.crRange}`);
+  text.appendChild(tier);
+  box.append(title, pic, text);
+  return box;
+}
+
 function buildEntryBody(b: Beast, tips: (() => void)[]): HTMLElement {
   const body = h("div", "bk-body");
   const prose = h("div", "bk-prose");
@@ -827,6 +904,8 @@ function buildEntryBody(b: Beast, tips: (() => void)[]): HTMLElement {
   fights.appendChild(h("h4", undefined, "How it fights"));
   fights.appendChild(h("p", undefined, b.tactics));
   prose.appendChild(fights);
+  const rolls = buildRollsWith(b, tips);
+  if (rolls) prose.appendChild(rolls);
   prose.appendChild(h("p", "bk-engine", engineNote(b)));
   body.append(buildStatBlock(b, tips), prose);
   return body;
@@ -873,7 +952,9 @@ export function mountBestiaryPanel(el: HTMLElement, _api: unknown): () => void {
   for (const b of BESTIARY) {
     const article = h("article", "bk-entry", undefined, { "data-beast": b.id });
     const head = h("button", "bk-entry-head", undefined, { type: "button", "aria-expanded": "false" });
-    head.append(h("span", "bk-entry-name", b.name), h("span", "bk-cr", `CR ${b.cr}`), h("span", "bk-entry-sub", `${b.size} ${b.type}`));
+    const crPill = h("span", "bk-cr", `CR ${b.cr}`);
+    crPill.appendChild(tierPips(rollsWithInfo(b)));
+    head.append(h("span", "bk-entry-name", b.name), crPill, h("span", "bk-entry-sub", `${b.size} ${b.type}`));
     const nums = h("span", "bk-entry-nums");
     const ac = h("span");
     ac.append(h("b", undefined, "AC "), document.createTextNode(String(b.ac)));

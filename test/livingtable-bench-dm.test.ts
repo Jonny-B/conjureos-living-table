@@ -623,3 +623,127 @@ test("validateDmReply refuses a desc that is empty, too long, not a string or na
   okReply({ narration: "x", cost: "free", effects: [{ type: "give", item: "a brass key", desc: "x".repeat(DM_LIMITS.maxDescChars) }] });
   assert.equal(DM_LIMITS.maxDescChars, 200);
 });
+
+// ── suggested next moves (options) ───────────────────────────────────────
+
+const OPT_A = { label: "Pull the stone loose", say: "I pull the loose stone out of the wall" };
+const OPT_B = { label: "Leave it", say: "I leave the stone alone" };
+const OPT_C = { label: "Open the door", say: "I open the door", act: "use" };
+
+test("validateDmReply keeps options at the top level, trimmed and with act only when given", () => {
+  const r = okReply({
+    narration: "A loose stone shifts.",
+    cost: "free",
+    effects: [],
+    options: [{ label: "  Pull   the stone loose ", say: " I pull the loose stone out of the wall " }, OPT_B, { ...OPT_C, ignored: "x" }],
+  });
+  assert.deepEqual(r.options, [OPT_A, OPT_B, OPT_C]);
+  assert.equal("act" in r.options![0]!, false);
+  assert.equal(r.options![2]!.act, "use");
+  // a null act is the same as none
+  assert.deepEqual(okReply({ narration: "x", cost: "free", options: [{ ...OPT_B, act: null }] }).options, [OPT_B]);
+});
+
+test("validateDmReply keeps options inside both branches of a check", () => {
+  const raw = {
+    ...GOOD_REPLY,
+    check: {
+      ...GOOD_REPLY.check,
+      success: { ...GOOD_REPLY.check.success, options: [OPT_A, OPT_B] },
+      failure: { ...GOOD_REPLY.check.failure, effects: [], options: [{ label: "Try again", say: "I try again", act: "attack" }] },
+    },
+  };
+  const r = okReply(raw);
+  assert.deepEqual(r.check!.success.options, [OPT_A, OPT_B]);
+  assert.deepEqual(r.check!.failure.options, [{ label: "Try again", say: "I try again", act: "attack" }]);
+  assert.equal(r.options, undefined);
+  // a branch with a bad option is refused with the branch path named
+  const bad = { ...raw, check: { ...raw.check, success: { ...raw.check.success, options: [{ label: "", say: "x" }] } } };
+  assert.match(errorsOf(bad).join("\n"), /check\.success\.options\[0\]\.label/);
+});
+
+test("validateDmReply trims an over-long option list to 4 instead of refusing", () => {
+  const many = Array.from({ length: 7 }, (_, i) => ({ label: `Move ${i}`, say: `I do move ${i}` }));
+  const r = okReply({ narration: "x", cost: "free", options: many });
+  assert.equal(DM_LIMITS.maxOptions, 4);
+  assert.deepEqual(r.options!.map((o) => o.label), ["Move 0", "Move 1", "Move 2", "Move 3"]);
+  // entries past the cap are never looked at, so junk in them does not refuse the reply
+  okReply({ narration: "x", cost: "free", options: [...many.slice(0, 4), 42, { label: "" }] });
+});
+
+test("validateDmReply drops duplicate option labels (any case) rather than refusing", () => {
+  const r = okReply({
+    narration: "x",
+    cost: "free",
+    options: [OPT_A, { label: "LEAVE IT", say: "I walk away" }, { label: "leave it", say: "I leave" }, OPT_B, OPT_C],
+  });
+  assert.deepEqual(r.options!.map((o) => o.label), ["Pull the stone loose", "LEAVE IT", "Open the door"]);
+  // duplicates do not eat the cap: four distinct moves survive after a duplicate
+  const r2 = okReply({ narration: "x", cost: "free", options: [OPT_A, OPT_A, OPT_B, OPT_C, { label: "Wait", say: "I wait" }] });
+  assert.equal(r2.options!.length, 4);
+});
+
+test("validateDmReply refuses a bad act, bad texts, a wrong type and magic gear in options", () => {
+  const opts = (options: unknown) => errorsOf({ narration: "x", cost: "free", options }).join("\n");
+  assert.match(opts([{ ...OPT_B, act: "cast" }]), /options\[0\]\.act must be one of attack, use, potion, rest, end/);
+  assert.match(opts([{ ...OPT_B, act: 3 }]), /act must be one of/);
+  assert.match(opts([{ label: "x".repeat(DM_LIMITS.maxOptionLabel + 1), say: "I do it" }]), /label must be 1 to 32 characters/);
+  assert.match(opts([{ label: "", say: "I do it" }]), /label must be 1 to 32 characters/);
+  assert.match(opts([{ label: "Go", say: "x".repeat(DM_LIMITS.maxOptionSay + 1) }]), /say must be 1 to 160 characters/);
+  assert.match(opts([{ label: "Go" }]), /say must be 1 to 160 characters/);
+  assert.match(opts([{ label: 7, say: "I do it" }]), /label must be 1 to 32 characters/);
+  assert.match(opts("Pull the stone"), /options must be an array/);
+  assert.match(opts({ label: "Go", say: "I go" }), /options must be an array/);
+  assert.match(opts(["Pull the stone"]), /options\[0\] must be an object/);
+  const multi = MAGIC_GEAR_NAMES.find((n) => n.split(" ").length >= 2 && /^[A-Za-z ]+$/.test(n) && n.length <= 20)!;
+  assert.match(opts([{ label: "Take it", say: `I take the ${multi}` }]), /options\[0\]\.say names magic gear/);
+  assert.match(opts([{ label: multi, say: "I take it" }]), /options\[0\]\.label names magic gear/);
+  // boundary: exactly the cap is fine
+  okReply({ narration: "x", cost: "free", options: [{ label: "x".repeat(32), say: "y".repeat(160) }] });
+});
+
+test("validateDmReply strips control characters from options and an empty list is no list", () => {
+  const r = okReply({ narration: "x", cost: "free", options: [{ label: "Pull\u0007 it\u0000 loose", say: "I pull it\tloose\nnow" }] });
+  assert.deepEqual(r.options, [{ label: "Pull it loose", say: "I pull it loose now" }]);
+  assert.equal(okReply({ narration: "x", cost: "free", options: [] }).options, undefined);
+  assert.equal(okReply({ narration: "x", cost: "free", options: null }).options, undefined);
+});
+
+test("an old reply with no options validates unchanged and carries no options field", () => {
+  const r = okReply(GOOD_REPLY);
+  assert.equal("options" in r, false);
+  assert.equal("options" in r.check!.success, false);
+  assert.equal("options" in r.check!.failure, false);
+  assert.deepEqual(r.check!.success.effects.map((e) => e.type), ["give", "potion", "loot"]);
+});
+
+test("the prompt tells the DM to end every answer with options and its examples parse and validate", () => {
+  const input = buildDmInput(makeView(), ASK_FREE);
+  assert.match(input, /end EVERY answer \(and every check branch\) with 2 to 4 "options"/);
+  assert.match(input, /leave-it option/);
+  assert.match(input, /no attack with no enemy in sight, no potion with none left, no rest while a foe is awake or in a fight/);
+  assert.match(input, /Set "act" ONLY when the move is exactly one of the game's own buttons/);
+  assert.match(input, /"options": \[Option\]/);
+  assert.match(input, /"success": \{ "narration": string, "effects": \[Effect\], "options": \[Option\] \}/);
+  assert.match(input, /"failure": \{ "narration": string, "effects": \[Effect\], "options": \[Option\] \}/);
+  assert.match(input, /Option is \{"label":string,"say":string,"act":"attack"\|"use"\|"potion"\|"rest"\|"end"\}/);
+
+  // both worked examples are the JSON lines starting with {"narration"
+  const examples = input.split("\n").filter((l) => l.startsWith('{"narration"'));
+  assert.equal(examples.length, 2);
+  const withCheck = okReply(parseDmText(examples[0]!));
+  assert.ok(withCheck.check, "the first example is the check one");
+  assert.ok((withCheck.check!.success.options ?? []).length >= 2, "success branch shows options");
+  assert.ok((withCheck.check!.failure.options ?? []).length >= 2, "failure branch shows options");
+  const plain = okReply(parseDmText(examples[1]!));
+  assert.equal(plain.check, undefined);
+  assert.ok((plain.options ?? []).length >= 2, "top level shows options");
+  assert.ok(plain.options!.some((o) => o.act === "use"), "the example shows act on a built-in move");
+});
+
+test("partialNarration ignores options, top level or in a branch", () => {
+  const text = '{"options":[{"label":"Leave it","say":"I leave"}],"narration":"You pause';
+  assert.equal(partialNarration(text), "You pause");
+  assert.equal(partialNarration('{"options":[{"label":"narration","say":"I leave"}]'), null);
+  assert.equal(partialNarration('{"check":{"success":{"narration":"gotcha","options":[{"label":"x","say":"y"}]}}'), null);
+});

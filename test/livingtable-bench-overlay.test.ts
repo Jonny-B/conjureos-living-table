@@ -35,18 +35,36 @@ import {
   wrapWidth,
 } from "../scripts/asset-bench/pixelFont";
 import {
+  DRAWER_TABS,
   FLOAT_BASE_PX,
   FLOAT_GAP_PX,
+  HUD_OPTIONS_MAX,
+  LOG_RENDER_MAX,
+  NOTICE_MAX,
+  OPTION_LABEL_MAX,
+  STRIP_MAX_LINES,
+  clipOptionLabel,
+  createHud,
   createOverlay,
   floatLift,
   floatStackIndex,
   floatStackTop,
+  logWindow,
   narrationHoldMs,
   newPackItems,
+  noticeOverflow,
+  optionsLayout,
   overlayDemo,
   packItemText,
   sizeTier,
+  stripHoldMs,
+  stripMaxLines,
+  stripOverflow,
+  toggleDrawerTab,
+  usableDrawerTab,
   verdictWords,
+  wrapClamp,
+  type DrawerTab,
   type RecentFloat,
 } from "../scripts/asset-bench/overlay";
 import { TIP_GAP, TIP_MARGIN, TIP_MAX_WIDTH, attachTip, intersectBoxes, placeTip, tipMaxWidth, tipTone, type Box } from "../scripts/asset-bench/tip";
@@ -612,6 +630,155 @@ test("tipTone defaults to plain; attachTip is inert without a DOM", () => {
   assert.equal(tipTone({}), "plain");
   assert.equal(tipTone({ tone: "magic" }), "magic");
   assert.equal(typeof attachTip({} as HTMLElement, { title: "x", lines: [] }), "function");
+});
+
+// ---- the calmer board: the story strip, the context-aware HUD, the drawer -----
+
+test("stripHoldMs: 3.5 s plus 40 ms a character, capped at 9 s; longer under reduced motion, and still capped", () => {
+  assert.equal(stripHoldMs(0), 3500);
+  assert.equal(stripHoldMs(50), 5500);
+  assert.equal(stripHoldMs(137), 8980);
+  assert.equal(stripHoldMs(138), 9000);
+  assert.equal(stripHoldMs(2000), 9000);
+  assert.equal(stripHoldMs(-3), 3500);
+  assert.equal(stripHoldMs(0, true), 5250);
+  assert.equal(stripHoldMs(2000, true), 13500);
+  for (const n of [0, 10, 60, 120, 500]) {
+    assert.ok(stripHoldMs(n, true) >= stripHoldMs(n), "reduced motion never reads shorter");
+    assert.ok(Number.isFinite(stripHoldMs(n, true)) && stripHoldMs(n, true) <= 13500, "it still clears");
+  }
+});
+
+test("stripMaxLines: two story lines, one on a phone while the DM narration is up", () => {
+  assert.equal(STRIP_MAX_LINES, 2);
+  assert.equal(stripMaxLines("l", false), 2);
+  assert.equal(stripMaxLines("l", true), 2);
+  assert.equal(stripMaxLines("m", true), 2);
+  assert.equal(stripMaxLines("s", false), 2);
+  assert.equal(stripMaxLines("s", true), 1);
+});
+
+test("stripOverflow: the oldest fades first, and a kept line outlasts an ordinary one", () => {
+  assert.deepEqual(stripOverflow([], 2), []);
+  assert.deepEqual(stripOverflow([false, false], 2), []);
+  assert.deepEqual(stripOverflow([false, false, false], 2), [0]);
+  assert.deepEqual(stripOverflow([false, false, false, false], 2), [0, 1]);
+  assert.deepEqual(stripOverflow([true, false, false], 2), [1], "the sticky line stays, the oldest ordinary one goes");
+  assert.deepEqual(stripOverflow([true, true, false], 2), [2], "a sticky line is never chosen while an ordinary one is left");
+  assert.deepEqual(stripOverflow([true, true, true], 2), [0], "all sticky: the oldest still goes");
+  assert.deepEqual(stripOverflow([false, false], 1), [0], "one line on a phone under the narration");
+  assert.deepEqual(stripOverflow([false], 0), [0]);
+});
+
+test("toggleDrawerTab and usableDrawerTab: one tab at a time, the open one closes it, a missing part shows nothing", () => {
+  assert.deepEqual(DRAWER_TABS, ["pack", "log", "saves"]);
+  assert.equal(toggleDrawerTab(null, "pack"), "pack");
+  assert.equal(toggleDrawerTab("pack", "pack"), null);
+  assert.equal(toggleDrawerTab("pack", "log"), "log");
+  assert.equal(toggleDrawerTab("log", "saves"), "saves");
+  assert.equal(toggleDrawerTab("saves", "saves"), null);
+  const all = { pack: true, log: true, saves: true };
+  assert.equal(usableDrawerTab("log", all), "log");
+  assert.equal(usableDrawerTab(null, all), null);
+  assert.equal(usableDrawerTab("log", { pack: true, log: false, saves: true }), null);
+  assert.equal(usableDrawerTab("saves", { pack: false, log: false, saves: false }), null);
+  // Pressing every tab twice in turn walks open, closed, open, closed.
+  let open: DrawerTab | null = null;
+  const seen: (DrawerTab | null)[] = [];
+  for (const t of DRAWER_TABS) {
+    for (let i = 0; i < 2; i++) {
+      open = toggleDrawerTab(open, t);
+      seen.push(open);
+    }
+  }
+  assert.deepEqual(seen, ["pack", null, "log", null, "saves", null]);
+});
+
+test("clipOptionLabel: one run of words, at most 32 characters, cut with two dots", () => {
+  assert.equal(OPTION_LABEL_MAX, 32);
+  assert.equal(clipOptionLabel("Pull the stone loose"), "Pull the stone loose");
+  assert.equal(clipOptionLabel("  Leave   it \n alone "), "Leave it alone");
+  const exactly = "x".repeat(32);
+  assert.equal(clipOptionLabel(exactly), exactly);
+  const clipped = clipOptionLabel("Pull the loose stone out of the wall and look behind it");
+  assert.equal(clipped.length, 32);
+  assert.ok(clipped.endsWith(".."));
+  assert.equal(clipped, "Pull the loose stone out of th..");
+  assert.equal(clipOptionLabel("abcdef", 4), "ab..");
+  assert.equal(clipOptionLabel(""), "");
+});
+
+test("optionsLayout: four at most, blanks dropped, keys by position, one column unless every label is short", () => {
+  assert.equal(HUD_OPTIONS_MAX, 4);
+  assert.deepEqual(optionsLayout([]), { columns: 1, items: [] });
+  const long = optionsLayout([
+    { id: "a", label: "Pull the stone loose" },
+    { id: "b", label: "Leave it" },
+    { id: "c", label: "Tap it with your sword" },
+    { id: "d", label: "Ask the goblin what it knows about the wall and the stone" },
+    { id: "e", label: "A fifth one that never shows" },
+  ]);
+  assert.equal(long.columns, 1);
+  assert.deepEqual(
+    long.items.map((i) => [i.id, i.key]),
+    [["a", "1"], ["b", "2"], ["c", "3"], ["d", "4"]],
+  );
+  assert.equal(long.items[3]?.label.length, 32);
+  assert.equal(long.items[3]?.full, "Ask the goblin what it knows about the wall and the stone");
+  const short = optionsLayout([{ id: "a", label: "Leave it" }, { id: "b", label: "Look" }]);
+  assert.equal(short.columns, 2);
+  assert.equal(optionsLayout([{ id: "a", label: "Leave it" }]).columns, 1, "a lone button takes the row");
+  const gaps = optionsLayout([{ id: "x", label: "   " }, { id: "", label: "No id" }, { id: "a", label: "Open it", key: "F" }, { id: "b", label: "Shut it" }]);
+  assert.deepEqual(
+    gaps.items.map((i) => [i.id, i.key, i.enabled]),
+    [["a", "F", true], ["b", "2", true]],
+    "blanks never take a number; a given key stays",
+  );
+  assert.equal(optionsLayout([{ id: "a", label: "Twelve chars", enabled: false }, { id: "b", label: "Thirteen char" }]).columns, 1);
+  assert.equal(optionsLayout([{ id: "a", label: "Leave it", enabled: false }]).items[0]?.enabled, false);
+});
+
+test("wrapClamp: wrapped to the width, never more than the lines allowed, the last line cut with two dots", () => {
+  const width = 21 * 6;
+  const lines = wrapClamp("Pull the loose stone out of the wall", width, 2);
+  assert.ok(lines.length <= 2);
+  assert.deepEqual(wrapClamp("Leave it", width, 2), ["Leave it"]);
+  const clamped = wrapClamp("Ask the goblin what it knows about the wall and the stone", width, 2);
+  assert.equal(clamped.length, 2);
+  assert.ok(clamped[1]?.endsWith(".."));
+  for (const l of clamped) assert.ok(textWidth(l) <= width, `"${l}" fits ${width}`);
+  const one = wrapClamp("Ask the goblin what it knows about the wall", width, 1);
+  assert.equal(one.length, 1);
+  assert.ok(textWidth(one[0] ?? "") <= width);
+  assert.equal(wrapClamp("short", width, 0).length, 1, "at least one line");
+  // Every clipped label is two lines at most at the narrowest column (the pixel font, scale 2, regular).
+  const room = Math.floor((320 - 30 - 12 - 8 - 2) / 2);
+  assert.ok(wrapClamp(clipOptionLabel("W".repeat(40)), room, 2).length <= 2);
+});
+
+test("logWindow: the newest lines, and how many older ones are left out", () => {
+  const log = Array.from({ length: 5 }, (_, i) => ({ text: `line ${i}` }));
+  assert.deepEqual(logWindow(log, 10), { shown: log, hidden: 0 });
+  assert.deepEqual(logWindow(log, 5), { shown: log, hidden: 0 });
+  const cut = logWindow(log, 3);
+  assert.equal(cut.hidden, 2);
+  assert.deepEqual(cut.shown.map((l) => l.text), ["line 2", "line 3", "line 4"], "oldest first, newest last");
+  assert.equal(logWindow([], 3).hidden, 0);
+  assert.ok(LOG_RENDER_MAX >= 100);
+  assert.equal(logWindow(Array.from({ length: LOG_RENDER_MAX + 7 }, () => 1)).hidden, 7);
+});
+
+test("noticeOverflow: the stack holds two, so the third pushes the oldest out", () => {
+  assert.equal(NOTICE_MAX, 2);
+  assert.equal(noticeOverflow(0), 0);
+  assert.equal(noticeOverflow(1), 0);
+  assert.equal(noticeOverflow(2), 1);
+  assert.equal(noticeOverflow(3), 2);
+});
+
+test("the HUD exports its calmer contract and loads without a DOM", () => {
+  assert.equal(typeof createHud, "function");
+  assert.equal(typeof document, "undefined");
 });
 
 // ---- hygiene ----------------------------------------------------------------

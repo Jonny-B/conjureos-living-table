@@ -59,7 +59,8 @@ import {
 import { PLAYABLE_ARCHETYPE_IDS, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
 import { createCharacter, type CharacterSheet } from "../../src/games/livingtable/characters/creation";
 import { packInfo } from "../../src/games/livingtable/inventory/itemInfo";
-import { applyDamage, applyHealing } from "../../src/games/livingtable/characters/health";
+import { applyDamage, applyHealing, longRest, newAdventuringDay } from "../../src/games/livingtable/characters/health";
+import { addSave, latestSave, makeSavePoint, parseSaves, restBlockedReason, saveLabel, serializeSaves, type SaveKind, type SavePoint } from "../../src/games/livingtable/session/savePoints";
 import { parseDiceNotation, rollDice, rollDie } from "../../src/games/livingtable/rules/dice";
 import { packItems, renderPlanFor, slotLabelFor } from "../../src/games/livingtable/menu/equipment";
 import { ABILITY_NAME, attackLine, bonusSources, lootLine, sentenceCase, type TokenNamer } from "../../src/games/livingtable/menu/labels";
@@ -98,8 +99,8 @@ import { headAnchor } from "../../src/games/livingtable/render/anchors";
 import { attackResultToReadout } from "../../src/games/livingtable/render/rollReadoutAdapter";
 import { resolveMonsterTurn } from "../../src/games/livingtable/session/hostileTurns";
 import { attackEvents, type CombatEvent } from "../../src/games/livingtable/session/combatEvents";
-import { createHud, createOverlay, verdictWords, type Hud, type HudAction, type HudBar, type InitiativeSide, type NarrationHandle, type Overlay, type OverlayPoint, type PackSection, type TextStyle } from "./overlay";
-import { askDm, normaliseSkill, validationContextFor, type DmAsk, type DmEffect, type DmReply, type DmSceneView, type SampleFn } from "./dm";
+import { createHud, createOverlay, verdictWords, type DialogueLine, type Hud, type HudAction, type HudBar, type HudOption, type HudSave, type InitiativeSide, type NarrationHandle, type Overlay, type OverlayPoint, type PackSection, type TextStyle } from "./overlay";
+import { askDm, normaliseSkill, validationContextFor, type DmAsk, type DmEffect, type DmOption, type DmReply, type DmSceneView, type SampleFn } from "./dm";
 import { createDiceTray, createSkinPicker, DICE_SKINS, type DiceTray, type DieKind } from "./dice";
 import { dropLowest, featureList, itemCount, itemTip, openCreation, openSheet, type CreationView, type SheetExtras, type SheetView } from "./sheet";
 import { mountBestiaryPanel, mountRulesPanel } from "./books";
@@ -666,7 +667,8 @@ const DRAIN_AT: readonly XY[] = [
 const DRAIN_TILE: Record<TemplateGenre, TileId> = { fantasy: "floor_stone_drain", scifi: "floor_grating" };
 const HERO_ID = "hero";
 const MONSTER_ID = "monster";
-const LOG_KEEP = 60;
+/** The Log tab's history: every roll, find and line of narration, newest last. */
+const LOG_KEEP = 200;
 /** The DM's own limits on what it may leave behind in the scene. */
 const DM_MEMORY_KEEP = 12;
 const DM_RECENT_KEEP = 16;
@@ -676,7 +678,7 @@ const DM_PROPS_MAX = 8;
 const DM_INVENTORY_MAX = 24;
 // Indoor floors for a walled room; the Floor control still offers the rest.
 const ROOM_FLOOR: Record<TemplateGenre, TileId> = { fantasy: "floor_stone", scifi: "floor_deckplate" };
-const DOWN_NOTE = "You are down. Press Reset scene to get back up.";
+const DOWN_NOTE = "You are down. Load the last save, or press Reset scene.";
 
 /** Every sprite's own `walkable` flag, the same one manifestCache.ts turns into the engine's tile walkability and prop `blocks`. */
 const WALKABLE_BY_ID: Record<TemplateGenre, Map<string, boolean>> = {
@@ -686,8 +688,10 @@ const WALKABLE_BY_ID: Record<TemplateGenre, Map<string, boolean>> = {
 
 interface LogLine {
   text: string;
-  /** good: went your way. bad: went against you. plain: neither. */
-  tone: "good" | "bad" | "plain";
+  /** good: went your way. bad: went against you. plain: neither. dm: the DM's own narration (the Log tab sets it apart). */
+  tone: "good" | "bad" | "plain" | "dm";
+  /** A short "+ a tarnished silver ring" the Pack button's notice shows once, when the line is first flushed (see flushLog). The log keeps the full line. */
+  notice?: string;
 }
 
 interface PlayState {
@@ -733,6 +737,8 @@ interface PlayState {
   dmMemory: string[];
   /** The last exchanges with the DM, oldest first, refusals included (so it stays honest). */
   dmRecent: { who: "player" | "dm"; text: string }[];
+  /** The DM's suggested next moves from its last answer (at most 4); empty when there are none. Never saved: it clears when the hero moves, acts or the next answer comes. */
+  options: DmOption[];
   /** Healing potions the DM has handed out this scene (capped at DM_POTION_CAP). */
   potionsGranted: number;
   /** Bumps whenever the DM changes the tiles or props, so sight and the picture know to rebuild. */
@@ -791,6 +797,7 @@ function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: Til
     doorLocked: false,
     dmMemory: [],
     dmRecent: [],
+    options: [],
     potionsGranted: 0,
     worldRev: 0,
     propSeq: 1,
@@ -802,6 +809,117 @@ function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: Til
 
 // Module level, so leaving the tab and coming back finds the fight where it was.
 let play: PlayState | null = null;
+
+// ---------------------------------------------------------------------------
+// Save points (session/savePoints.ts decides what to keep and how it reads back;
+// this is what the bench puts in one). A snapshot is the scene minus what only
+// the picture needs (the two animated figures, the fight, the pending note, the
+// DM's suggested moves) and with the explored squares written as text. Saves are
+// only ever made while nothing is fighting (a long rest needs a calm scene, a
+// checkpoint is a scene's start), so there is no fight to put back. They live in
+// memory, and are mirrored to this browser's localStorage when it lets us.
+// ---------------------------------------------------------------------------
+
+const SNAPSHOT_VERSION = 1;
+const SAVES_STORAGE_KEY = "livingtable-bench-saves-v1";
+
+type PlaySnapshot = Omit<PlayState, "heroActor" | "monsterActor" | "explored" | "exploredRev" | "round" | "note" | "options"> & {
+  v: number;
+  /** One "1" (seen) or "0" per square, row-major: PlayState.explored as text. */
+  explored: string;
+};
+
+const encodeExplored = (e: Uint8Array): string => Array.from(e, (b) => (b ? "1" : "0")).join("");
+const decodeExplored = (s: string): Uint8Array => Uint8Array.from(s, (c) => (c === "1" ? 1 : 0));
+
+/** A copy that later play cannot reach into. */
+function toSnapshot(p: PlayState): PlaySnapshot {
+  const { heroActor: _hero, monsterActor: _monster, explored, exploredRev: _rev, round: _round, note: _note, options: _options, ...rest } = p;
+  return JSON.parse(JSON.stringify({ ...rest, v: SNAPSHOT_VERSION, explored: encodeExplored(explored) })) as PlaySnapshot;
+}
+
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isStr = (v: unknown): v is string => typeof v === "string";
+const inRoom = (v: unknown): boolean => isRec(v) && isNum(v.x) && isNum(v.y) && Number.isInteger(v.x) && Number.isInteger(v.y) && v.x >= 0 && v.y >= 0 && v.x < CELL_WIDTH && v.y < CELL_HEIGHT;
+const isSheetLike = (v: unknown): boolean => isRec(v) && isStr(v.name) && isStr(v.archetypeId) && isNum(v.currentHp) && isNum(v.maxHp) && Array.isArray(v.inventory) && isRec(v.modifiers);
+
+/** Whether a stored payload is one this bench wrote and can put back whole. The envelope is savePoints.ts's; this guards the data inside. */
+function isSnapshot(d: unknown): d is PlaySnapshot {
+  if (!isRec(d) || d.v !== SNAPSHOT_VERSION) return false;
+  if (d.template !== "fantasy" && d.template !== "scifi") return false;
+  const known = WALKABLE_BY_ID[d.template];
+  if (!isStr(d.archetypeId) || !PLAYABLE_HEROES.includes(d.archetypeId as ArchetypeId)) return false;
+  if (!isStr(d.floorId) || !known.has(d.floorId)) return false;
+  if (!isSheetLike(d.hero) || !isSheetLike(d.start) || !isRec(d.itemNotes) || !Object.values(d.itemNotes).every(isStr)) return false;
+  if (!inRoom(d.heroAt)) return false;
+  const m = d.monster;
+  if (m !== null && !(isRec(m) && inRoom(m.at) && isNum(m.hp) && typeof m.awake === "boolean")) return false;
+  if (d.fallenAt !== null && !inRoom(d.fallenAt)) return false;
+  if (typeof d.doorOpen !== "boolean" || typeof d.searched !== "boolean" || typeof d.doorLocked !== "boolean" || typeof d.monsterSeen !== "boolean") return false;
+  if (!isNum(d.potions) || !isNum(d.potionsGranted) || !isNum(d.worldRev) || !isNum(d.propSeq)) return false;
+  if (!isStr(d.explored) || d.explored.length !== CELL_WIDTH * CELL_HEIGHT || !/^[01]+$/.test(d.explored)) return false;
+  if (!Array.isArray(d.log) || !d.log.every((l) => isRec(l) && isStr(l.text) && (l.tone === "good" || l.tone === "bad" || l.tone === "plain" || l.tone === "dm"))) return false;
+  if (!Array.isArray(d.extraProps) || !d.extraProps.every((e) => isRec(e) && isStr(e.id) && isStr(e.assetId) && known.has(e.assetId) && inRoom(e) && isStr(e.label) && (e.secret === undefined || isStr(e.secret)))) return false;
+  if (!isRec(d.propSecrets) || !Object.values(d.propSecrets).every(isStr)) return false;
+  if (!Array.isArray(d.tileOverrides) || !d.tileOverrides.every((o) => isRec(o) && inRoom(o) && isStr(o.tile) && known.has(o.tile))) return false;
+  if (!Array.isArray(d.dmMemory) || !d.dmMemory.every(isStr)) return false;
+  if (!Array.isArray(d.dmRecent) || !d.dmRecent.every((r) => isRec(r) && (r.who === "player" || r.who === "dm") && isStr(r.text))) return false;
+  return true;
+}
+
+/** The scene a snapshot holds, as a fresh PlayState: new animated figures, no fight, no suggested moves. Null when it is not a snapshot. */
+function fromSnapshot(data: unknown): PlayState | null {
+  if (!isSnapshot(data)) return null;
+  const s = JSON.parse(JSON.stringify(data)) as PlaySnapshot;
+  const { v: _v, explored, ...rest } = s;
+  const p: PlayState = {
+    ...rest,
+    note: null,
+    round: null,
+    options: [],
+    heroActor: newActor("down"),
+    monsterActor: newActor("left"),
+    explored: decodeExplored(explored),
+    exploredRev: 1,
+  };
+  noteSight(p);
+  return p;
+}
+
+type SavedGame = SavePoint<PlaySnapshot>;
+/** Newest first (savePoints.ts addSave). Module level, so leaving the tab and coming back keeps them. */
+let saves: SavedGame[] = [];
+let savesLoaded = false;
+
+/** What is in this browser's storage; nothing when it is empty, unreadable or blocked. Never throws. */
+function readStoredSaves(): SavedGame[] {
+  try {
+    return parseSaves<PlaySnapshot>(globalThis.localStorage?.getItem(SAVES_STORAGE_KEY), isSnapshot);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredSaves(list: readonly SavedGame[]): void {
+  try {
+    globalThis.localStorage?.setItem(SAVES_STORAGE_KEY, serializeSaves(list));
+  } catch {
+    // Storage can be blocked, full or absent (a private window): the saves still work for this visit.
+  }
+}
+
+/** Make a save of the scene as it is now (newest first, each kind trimmed on its own) and mirror it to storage. */
+function addSavePoint(p: PlayState, kind: SaveKind, label: string): void {
+  saves = addSave(saves, makeSavePoint(kind, label, toSnapshot(p)));
+  writeStoredSaves(saves);
+}
+
+/** A line under a save in the Saves tab: who, how hurt, what is in the pack. */
+function saveDetail(save: SavedGame): string {
+  const h = save.data.hero;
+  return `${h.name}, ${h.currentHp}/${h.maxHp} HP, ${save.data.potions} potion${save.data.potions === 1 ? "" : "s"}`;
+}
 
 const same = (a: XY, b: XY): boolean => a.x === b.x && a.y === b.y;
 
@@ -923,7 +1041,7 @@ function rollLoot(p: PlayState, source: "fight" | "container"): boolean {
     return false;
   }
   const name = roll.item ? gearItemName(p.archetypeId, roll.item.slot, roll.item.tier) : null;
-  p.log.push({ text: lootLine(roll, name), tone: roll.item ? "good" : "plain" });
+  p.log.push({ text: lootLine(roll, name), tone: roll.item ? "good" : "plain", ...(roll.item && name ? { notice: `+ ${name}` } : {}) });
   return true;
 }
 
@@ -1225,6 +1343,8 @@ function heroAttackRules(p: PlayState): { refused: string } | { refused: null; d
       p.monster = null;
       p.round = null;
       rollLoot(p, "fight");
+      // Something happened: the in-fiction day turns over, so the hero can make camp again (health.ts newAdventuringDay).
+      p.hero = newAdventuringDay(p.hero);
     }
     return events;
   };
@@ -1261,6 +1381,12 @@ function heroInteractRules(p: PlayState): TurnResult {
   // A door opened or shut changes what the hero sees.
   noteSight(p);
   return { events: [], refused: null };
+}
+
+/** Why the hero cannot make camp right now, in words: the sheet's own day rule, then the table's (no fight, nothing hostile awake or in sight). Null when it can. */
+function restRefusal(p: PlayState): string | null {
+  if (heroDown(p)) return DOWN_NOTE;
+  return restBlockedReason(p.hero, { inFight: p.round !== null, hostileAwake: !!p.monster && p.monster.awake, hostileInSight: monsterInSight(p) });
 }
 
 const POTION_NOTATION = "2d4+2";
@@ -1628,7 +1754,7 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       p.hero = { ...p.hero, inventory: [...p.hero.inventory, e.item] };
       // What the DM says it is: the pack's hover tip shows it (and says the game does not use it by itself).
       if (typeof e.desc === "string" && e.desc.trim()) p.itemNotes[e.item] = e.desc.trim();
-      return { ok: true, line: { text: `You now carry ${e.item}.`, tone: "good" } };
+      return { ok: true, line: { text: `You now carry ${e.item}.`, tone: "good", notice: `+ ${e.item}` } };
     }
     case "take": {
       const want = foldItem(e.item);
@@ -1645,7 +1771,7 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       if (grant <= 0) return fail(`no more healing potions can be handed out in this scene (the limit is ${DM_POTION_CAP})`);
       p.potions += grant;
       p.potionsGranted += grant;
-      return { ok: true, line: { text: grant === 1 ? "You gain a potion of healing." : `You gain ${grant} potions of healing.`, tone: "good" } };
+      return { ok: true, line: { text: grant === 1 ? "You gain a potion of healing." : `You gain ${grant} potions of healing.`, tone: "good", notice: `+${grant} potion${grant === 1 ? "" : "s"}` } };
     }
     case "loot":
       // The game's own roll, capped by the cell's ledger (it logs its own line either way).
@@ -2581,7 +2707,9 @@ function portraitCanvas(archetypeId: string): HTMLCanvasElement | null {
 function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
-  if (!play || !PLAYABLE_HEROES.includes(play.archetypeId)) play = newPlay("fantasy", PLAYABLE_HEROES[0]!, ROOM_FLOOR.fantasy);
+  // A scene that starts here (first visit, or a hero the bench no longer offers) gets its checkpoint below; coming back to one in progress does not.
+  const startedNew = !play || !PLAYABLE_HEROES.includes(play.archetypeId);
+  if (startedNew) play = newPlay("fantasy", PLAYABLE_HEROES[0]!, ROOM_FLOOR.fantasy);
   const st = (): PlayState => play!;
 
   // Per SOURCE pixel, integers only; renderCell's own unit is canvas px PER
@@ -2657,11 +2785,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   controls.appendChild(rollField);
   const resetBtn = el_("button", "bn-btn lt-reset", "Reset scene");
   resetBtn.type = "button";
-  resetBtn.onclick = () => {
-    const p = st();
-    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero, p.start);
-    newScene();
-  };
+  resetBtn.onclick = () => resetScene();
   controls.appendChild(resetBtn);
   // A chosen option must not keep the arrow keys: they walk the hero.
   el.addEventListener("change", (e) => {
@@ -2673,7 +2797,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     el_(
       "p",
       "lt-note lt-howto",
-      "Click a square to walk there, the goblin to attack it, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press anything to look closer; type what you do in the box. Hover or tap anything in the pack, or any number on the sheet, to read exactly what it is. Sheet (C) opens your character sheet and makes your own hero; the Hero setting here quick-picks a ready-made one. Keys: arrows or WASD step, F attack, E use, Q potion, I pack, C sheet, T end turn, Space skips the goblin's turn, Esc stops the DM.",
+      "Click a square to walk there, the goblin to attack it, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press anything to look closer; type what you do in the box. Hover or tap anything in the pack, or any number on the sheet, to read exactly what it is. Sheet (C) opens your character sheet and makes your own hero; the Hero setting here quick-picks a ready-made one. The DM's answers come with two to four suggested next moves (keys 1 to 4, or press them); Attack, Use, Potion and End turn show only when they would do something. Rest (R) makes camp once a day and saves; the Saves tab goes back to any save, and a checkpoint is made when a scene starts. The Log tab (L) keeps every roll, find and line of narration; the board shows only the story, and it fades. Keys: arrows or WASD step, F attack, E use, Q potion, R rest, 1 to 4 suggested moves, I pack, L log, C sheet, T end turn, Space skips the goblin's turn, Esc stops the DM.",
     ),
   );
 
@@ -2838,7 +2962,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const sheet = made.appearanceAssetId === bodySpriteId(id) ? made : { ...made, appearanceAssetId: bodySpriteId(id) };
     play = newPlay(p.template, id, ROOM_FLOOR[p.template], undefined, sheet);
     newScene();
-    overlay.say({ text: `${sheet.name} steps into the room.`, tone: "plain" });
+    story({ text: `${sheet.name} steps into the room.`, tone: "plain" });
   }
 
   function openCreationView(): void {
@@ -3049,17 +3173,33 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       requestAnimationFrame(tick);
     });
 
-  /** Show every new line of the story in the dialogue box. */
+  /**
+   * The log is the full history (the Log tab). The board's story strip gets only story: creature speech and the big moments,
+   * through story(). Here, every line the log gained since the last call that carries a short notice (an item or a potion
+   * gained) flashes it beside the Pack button once, and the history is trimmed to LOG_KEEP.
+   */
   let said = 0;
   function flushLog(): void {
     const p = st();
-    if (said > p.log.length) said = 0;
-    for (const line of p.log.slice(said)) overlay.say({ text: line.text, tone: line.tone });
+    if (said > p.log.length) said = p.log.length;
+    for (const line of p.log.slice(said)) if (line.notice) hud.notice(line.notice, "good");
     said = p.log.length;
     if (p.log.length > LOG_KEEP) {
       p.log.splice(0, p.log.length - LOG_KEEP);
       said = p.log.length;
     }
+  }
+
+  /** A line for the board's story strip (a creature's words, a big moment). It goes in the Log as well; everything mechanical goes only there. */
+  function story(line: DialogueLine, alsoLog = true): void {
+    overlay.say(line);
+    if (alsoLog) st().log.push({ text: line.speaker ? `${line.speaker}: ${line.text}` : line.text, tone: "plain" });
+  }
+
+  /** The DM's suggested moves go away when the hero moves, acts, or the next answer arrives. */
+  function clearOptions(): void {
+    const p = st();
+    if (p.options.length > 0) p.options = [];
   }
 
   function refuse(reason: string): void {
@@ -3092,9 +3232,10 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     busy = true;
     walkQueue.length = 0;
     onArrive = null;
+    clearOptions();
     startFight(p);
     p.monsterActor.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
-    overlay.say({ speaker: p.monsterSeen ? "Goblin" : "Something", text: bark(GOBLIN_BARKS.wake), tone: "bad" });
+    story({ speaker: p.monsterSeen ? "Goblin" : "Something", text: bark(GOBLIN_BARKS.wake), tone: "bad" });
     flushLog();
     refreshAll();
     void overlay.banner("ROLL INITIATIVE", "initiative");
@@ -3168,7 +3309,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         showAttack(swing, "hero");
         const now = performance.now();
         if (!REDUCED_MOTION && p.hero.currentHp < hpBefore) playClips(p.heroActor, [heroDown(p) ? "death" : "hit"], now);
-        if (swing.some((e) => e.kind === "miss")) overlay.say({ speaker: "Goblin", text: "Grr! Hold still!", tone: "plain" });
+        if (swing.some((e) => e.kind === "miss")) story({ speaker: "Goblin", text: "Grr! Hold still!", tone: "plain" });
       } else {
         p.hero = turn.sheet;
       }
@@ -3181,7 +3322,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         p.round = null;
         refreshAll();
         await overlay.banner("DEFEAT", "defeat");
-        overlay.say({ text: DOWN_NOTE, tone: "bad" });
+        story({ text: DOWN_NOTE, tone: "bad", sticky: true });
         break;
       }
       p.round = endTurn(p.round!);
@@ -3216,6 +3357,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       return false;
     }
     stepAnim(p.heroActor, from, to);
+    // Walking away leaves the DM's suggestions behind.
+    clearOptions();
     stage.invalidate();
     return true;
   }
@@ -3264,6 +3407,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const target = { ...p.monster.at };
     const r = heroAttackRules(p);
     if (r.refused !== null) return refuse(r.refused);
+    clearOptions();
     fightWasOn = true;
     busy = true;
     const d = r.dice;
@@ -3290,8 +3434,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (!p.monster) playClips(p.monsterActor, ["death"], now);
       else if (hit) playClips(p.monsterActor, ["hit"], now);
     }
-    if (p.monster && hit && Math.random() < 0.6) overlay.say({ speaker: "Goblin", text: bark(GOBLIN_BARKS.hurt), tone: "good" });
-    if (p.monster && !hit && Math.random() < 0.6) overlay.say({ speaker: "Goblin", text: bark(GOBLIN_BARKS.dodge), tone: "bad" });
+    if (p.monster && hit && Math.random() < 0.6) story({ speaker: "Goblin", text: bark(GOBLIN_BARKS.hurt), tone: "good" });
+    if (p.monster && !hit && Math.random() < 0.6) story({ speaker: "Goblin", text: bark(GOBLIN_BARKS.dodge), tone: "bad" });
     if (!p.monster && !REDUCED_MOTION) playClips(p.heroActor, ["cheer"], now + 400);
     busy = false;
     await afterHeroAction();
@@ -3313,6 +3457,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
             ? async () => {
                 const r = heroInteractRules(st());
                 if (r.refused) return refuse(r.refused);
+                clearOptions();
                 if (!REDUCED_MOTION) playClips(st().heroActor, ["interact"], performance.now());
                 stage.invalidate();
                 await afterHeroAction();
@@ -3335,6 +3480,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const p = st();
     const r = heroInteractRules(p);
     if (r.refused) return refuse(r.refused);
+    clearOptions();
     if (!REDUCED_MOTION) playClips(p.heroActor, ["interact"], performance.now());
     stage.invalidate();
     await afterHeroAction();
@@ -3345,6 +3491,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const p = st();
     const r = drinkPotionRules(p);
     if (r.refused) return refuse(r.refused);
+    clearOptions();
     busy = true;
     const heal = r.events.find((e): e is Extract<CombatEvent, { kind: "heal" }> => e.kind === "heal");
     const rolls = lastPotionDice;
@@ -3360,8 +3507,73 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (busy || !p.round || !isPlayersTurn(p.round)) return refuse(p.round ? "Wait for your turn." : "There is no fight on. Your turn ends when the goblin notices you.");
     walkQueue.length = 0;
     onArrive = null;
+    clearOptions();
     p.round = endTurn(p.round);
     await runHostiles();
+  }
+
+  /**
+   * Make camp: the game's own longRest on the sheet (full hit points, hit dice and spell slots, once a day; the potions are
+   * items and are not refilled), then a "rest" save point. Refused, in the sheet's or the table's words, in a fight, with
+   * anything hostile awake or in sight, or once today's sleep is spent (a won fight turns the day over).
+   */
+  async function restFlow(): Promise<void> {
+    if (busy) return;
+    const p = st();
+    const why = restRefusal(p);
+    if (why) return refuse(why);
+    const out = longRest(p.hero);
+    p.hero = out.sheet;
+    clearOptions();
+    p.log.push({ text: out.note, tone: "good" });
+    p.dmRecent.push({ who: "player", text: "I make camp and sleep until morning." });
+    if (p.dmRecent.length > DM_RECENT_KEEP) p.dmRecent.splice(0, p.dmRecent.length - DM_RECENT_KEEP);
+    story({ text: "You make camp and sleep. Morning comes.", tone: "plain" }, false);
+    addSavePoint(p, "rest", "");
+    hud.notice("Rested. Game saved.", "good");
+    flushLog();
+    refreshAll();
+  }
+
+  /** Put a save back: the scene, the sheet and the DM's memory as they were. "last" is the newest of any kind. */
+  function loadSave(id: string): void {
+    if (overlayOpen()) return refuse("Close the sheet first.");
+    if (busy) return refuse("Wait until the table is free.");
+    const save = id === "last" ? latestSave(saves) : saves.find((s) => s.id === id);
+    if (!save) return refuse("There is no save to load.");
+    const restored = fromSnapshot(save.data);
+    if (!restored) return refuse("That save could not be read.");
+    // A number the sight and tile caches have never seen under this scene's name (they key on it).
+    restored.worldRev = Math.max(st().worldRev, restored.worldRev) + 1;
+    play = restored;
+    newScene(false);
+    hud.closeDrawer();
+    const words = saveLabel(save);
+    restored.log.push({ text: `Loaded: ${words}`, tone: "plain" });
+    said = restored.log.length;
+    hud.notice(`Loaded: ${words}`, "plain");
+    refreshAll();
+  }
+
+  /** Start the scene again from the hero as it began (gear and pack kept). */
+  function resetScene(): void {
+    const p = st();
+    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero, p.start);
+    newScene();
+  }
+
+  /** The DM's suggested move number `i`: one of the game's own buttons when it says so, otherwise the same as typing its words. */
+  function pickOption(i: number): void {
+    const p = st();
+    const o = p.options[i];
+    if (!o || busy || overlayOpen() || heroDown(p)) return;
+    // Each built-in refuses with its own reason when it cannot be done right now (and keeps the suggestions then).
+    if (o.act === "attack") void attackGoblin();
+    else if (o.act === "use") void useNearby();
+    else if (o.act === "potion") void drinkPotion();
+    else if (o.act === "rest") void restFlow();
+    else if (o.act === "end") void endTurnFlow();
+    else void runDm({ kind: "freehand", text: o.say });
   }
 
   // ---- the DM ------------------------------------------------------------------
@@ -3461,6 +3673,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (p.round && !isPlayersTurn(p.round)) return refuse("Wait for your turn.");
     const sample = benchHook() ?? sampleFn;
     if (!sample) return refuse(NO_DM);
+    clearOptions();
+    p.log.push({ text: ask.kind === "freehand" ? `You: ${ask.text.slice(0, 300)}` : `You look closely at ${ask.what}.`, tone: "plain" });
     const ctl = new AbortController();
     dmCtl = ctl;
     dmThinking = true;
@@ -3520,9 +3734,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     /** A line in the bench log that the dialogue box does not repeat (the narration box already shows it). */
     const logQuiet = (text: string): void => {
       flushLog();
-      p.log.push({ text, tone: "plain" });
+      p.log.push({ text, tone: "dm" });
       said = p.log.length;
     };
+    /** The DM's suggested next moves: a check's own branch carries them (the branch the dice picked); without a check, the reply does. */
+    let nextOptions: DmOption[] | undefined = reply.check ? undefined : reply.options;
 
     // The cost, enforced by the engine: in a fight a check always costs the action, and an action that is spent is refused.
     const cost = p.round && reply.check ? "action" : reply.cost;
@@ -3596,6 +3812,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         // Doors, tiles and props change what the hero can see.
         noteSight(p);
         stage.invalidate();
+        // An item gained flashes its notice now, not when the whole answer is over.
+        flushLog();
       }
     };
 
@@ -3630,6 +3848,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (!stale()) {
         const branch = success ? reply.check.success : reply.check.failure;
         narrate(branch.narration, reply.speaker, null);
+        nextOptions = branch.options;
         await runEffects(branch.effects);
       }
     }
@@ -3649,9 +3868,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       p.round = null;
       refreshAll();
       await overlay.banner("DEFEAT", "defeat");
-      overlay.say({ text: DOWN_NOTE, tone: "bad" });
+      story({ text: DOWN_NOTE, tone: "bad", sticky: true });
       return false;
     }
+    // A hero who is about to be in a fight has no use for suggestions made for the calm before it.
+    p.options = wake ? [] : (nextOptions ?? []).slice(0, 4).map((o) => ({ ...o }));
     return wake;
   }
 
@@ -3732,6 +3953,10 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   // ---- the readout -------------------------------------------------------------
 
   async function onHudAction(id: string): Promise<void> {
+    if (id.startsWith("opt:")) return pickOption(Number(id.slice(4)));
+    if (id.startsWith("load:")) return loadSave(id.slice(5));
+    if (id === "rest") return restFlow();
+    if (id === "reset") return busy ? undefined : resetScene();
     if (id === "attack") return attackGoblin();
     if (id === "use") return useNearby();
     if (id === "potion") return drinkPotion();
@@ -3759,6 +3984,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       lines.push(p.monster ? "Click a square to walk" : "Open the chest, or Reset scene");
     } else if (p.round && !mine) {
       lines.push("Space or a click skips");
+    } else if (heroDown(p)) {
+      lines.push("Load your last save, or reset");
     }
     const bonus = attackerBonusFor(h);
     lines.push(`AC ${effectiveArmorClass(h)}, hit ${bonus >= 0 ? "+" : ""}${bonus}, ${weaponDamageNotationFor(h)}`);
@@ -3766,23 +3993,42 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     // Unknown until it has been seen once ("???"); a fight that began on a sound alone still lists it.
     if (p.monster && (p.monsterSeen || p.round)) bars.push({ id: MONSTER_ID, label: foeName(p), hp: p.monster.hp, max: block.maxHp, side: "enemy" });
     else if (p.fallenAt) bars.push({ id: MONSTER_ID, label: block.name, hp: 0, max: block.maxHp, side: "enemy", down: true });
-    const near = tileDistance(p.heroAt, DOOR_AT) <= 1 || (tileDistance(p.heroAt, CONTAINER_AT) <= 1 && !p.searched);
+    // The door when it can be used (shut or open, not locked, nobody standing in it), or the chest when it is still shut.
+    const doorUsable = tileDistance(p.heroAt, DOOR_AT) <= 1 && !p.doorLocked && !same(p.heroAt, DOOR_AT) && !(p.monster && same(p.monster.at, DOOR_AT));
+    const near = doorUsable || (tileDistance(p.heroAt, CONTAINER_AT) <= 1 && !p.searched);
     const myMove = !p.round || mine;
     const actionLeft = heroActionReady(p);
     const moveLeft = (c?.economy.movementRemaining ?? 0) >= FEET_PER_TILE;
     // While the sheet or the creator is open the game waits: only Sheet itself (to close it) stays live.
     const free = !overlayOpen();
-    const actions: HudAction[] = [
-      { id: "attack", label: "Attack", key: "F", enabled: free && !busy && !heroDown(p) && monsterInSight(p) && actionLeft },
-      { id: "use", label: "Use", key: "E", enabled: free && !busy && !heroDown(p) && myMove && near },
-      { id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: free && !busy && p.potions > 0 && actionLeft && (heroDown(p) || h.currentHp < h.maxHp) },
-      // The thing to press once the action is spent, or nothing is left to do.
-      { id: "end", label: "End turn", key: "T", enabled: free && !busy && mine, emphasis: free && !busy && mine && (!actionLeft || (!moveLeft && !near)) },
-      { id: "sheet", label: "Sheet", key: "C", enabled: creationView === null },
-    ];
+    const down = heroDown(p);
+    // The built-in buttons show only when they would do something right now (hidden, not greyed out); busy and the open sheet only grey them.
+    const canAttack = !down && !!p.monster && monsterInSight(p) && actionLeft && (p.round !== null || tileDistance(p.heroAt, p.monster.at) <= heroReachTiles(p));
+    const canPotion = p.potions > 0 && !p.hero.dead && actionLeft && (down || h.currentHp < h.maxHp);
+    const actions: HudAction[] = [];
+    if (down) {
+      // Down: go back to a save, or start the scene again, as the two next moves (keys 1 and 2, full width: the labels are long for the dock's
+      // two-column grid). A downed hero who is not dead can still be given a potion.
+      actions.push({ id: "load:last", label: "Load last save", key: "1", kind: "suggestion", enabled: free && !busy && saves.length > 0 });
+      actions.push({ id: "reset", label: "Reset scene", key: "2", kind: "suggestion", enabled: free && !busy });
+      actions.push({ id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: free && !busy, hidden: !canPotion });
+    } else {
+      actions.push(
+        { id: "attack", label: "Attack", key: "F", enabled: free && !busy, hidden: !canAttack },
+        { id: "use", label: "Use", key: "E", enabled: free && !busy && myMove, hidden: !(near && myMove) },
+        { id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: free && !busy, hidden: !canPotion },
+        // The thing to press once the action is spent, or nothing is left to do.
+        { id: "end", label: "End turn", key: "T", enabled: free && !busy && mine, hidden: !mine, emphasis: free && !busy && mine && (!actionLeft || (!moveLeft && !near)) },
+        { id: "rest", label: "Rest", key: "R", enabled: free && !busy, hidden: restRefusal(p) !== null },
+      );
+    }
+    actions.push({ id: "sheet", label: "Sheet", key: "C", enabled: creationView === null });
     // While the DM thinks, the one live button is Cancel (Escape does the same).
     if (dmThinking) actions.push({ id: "cancel", label: "Cancel", key: "Esc", enabled: true });
-    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) } });
+    // The DM's suggested next moves show only while the table is free (they are buttons that act when pressed).
+    const options: HudOption[] = free && !busy && !down ? p.options.map((o, i) => ({ id: `opt:${i}`, label: o.label, key: String(i + 1) })) : [];
+    const saveRows: HudSave[] = saves.map((s) => ({ id: s.id, label: saveLabel(s), detail: saveDetail(s), canLoad: free && !busy }));
+    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) }, options, log: p.log.map((l) => ({ text: l.text, tone: l.tone })), saves: saveRows });
     // The open sheet follows the hero: hit points, potions and anything the DM hands over.
     if (sheetView) {
       const sig = sheetSigFor(p);
@@ -3916,8 +4162,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     refreshAll();
   }
 
-  /** A new hero, a reset: nothing pending carries over, and the camera jumps to the hero. */
-  function newScene(): void {
+  /** A new hero, a reset, a loaded save: nothing pending carries over, and the camera jumps to the hero. A new scene is also a checkpoint (a load is not: it is going back to one). */
+  function newScene(checkpoint = true): void {
     // The sheet and the creator belong to the old hero.
     closeViews();
     // A DM call still out belongs to the old scene: let it go.
@@ -3931,10 +4177,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     skipping = false;
     fightWasOn = false;
     hover = null;
-    said = 0;
+    said = st().log.length;
     overlay.clear();
     tray.clear();
     stage.snapCamera();
+    if (checkpoint) addSavePoint(st(), "checkpoint", "start of the scene");
     renderAll();
   }
 
@@ -3972,6 +4219,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       e.preventDefault();
       return;
     }
+    if (key === "l" && !e.repeat) {
+      hud.toggleLog();
+      e.preventDefault();
+      return;
+    }
     if (key === " " || key === "escape") {
       if (busy) {
         skipping = true;
@@ -3984,6 +4236,20 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       return;
     }
     if (busy) return;
+    // 1 to 4 pick the DM's suggested moves. With the hero down the two next moves are Load last save (1, or Enter) and Reset scene (2).
+    if (heroDown(st()) && (key === "enter" || key === "1" || key === "2")) {
+      if (!e.repeat) {
+        if (key === "2") resetScene();
+        else loadSave("last");
+      }
+      e.preventDefault();
+      return;
+    }
+    if (key >= "1" && key <= "4" && key.length === 1) {
+      if (!e.repeat) pickOption(Number(key) - 1);
+      e.preventDefault();
+      return;
+    }
     const dir = KEY_DIR[key];
     if (dir) {
       (target as HTMLElement | null)?.blur?.();
@@ -4003,6 +4269,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (!e.repeat) void drinkPotion();
     } else if (key === "t") {
       if (!e.repeat) void endTurnFlow();
+    } else if (key === "r") {
+      if (!e.repeat) void restFlow();
     } else {
       return;
     }
@@ -4101,6 +4369,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   // One animation-frame loop paints the scene, and runs the walk first.
   const stage = createPlayStage({ viewport, canvas, state: st, zoom: () => scale, beforeFrame: (now) => pump(now), afterFrame: shroudFrame });
 
+  // The saves this browser kept, read once per page load; a scene that starts here is a checkpoint.
+  if (!savesLoaded) {
+    saves = readStoredSaves();
+    savesLoaded = true;
+  }
+  if (startedNew) addSavePoint(st(), "checkpoint", "start of the scene");
   renderAll();
   said = st().log.length;
   if (st().round) void runHostiles();

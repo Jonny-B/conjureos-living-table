@@ -63,6 +63,15 @@
  * carries data-ltd-root, data-state (empty, waiting, rolling, settled), data-skin,
  * data-dice ("d20=18,d8=5") and data-text (the label and detail, or the prompt
  * while waiting), because the pixels are canvas.
+ *
+ * Foe looks: a roll may carry skin (a skin id), tray (a TrayLook id) and who (a
+ * caption such as "The goblin rolls") for THAT throw only. The tray repaints in
+ * that look (a 150 ms crossfade, instant under reduced motion), keeps it until the
+ * next roll, and a roll, awaitRoll, setSkin or clear without them goes back to the
+ * player's own skin and PLAYER_TRAY_ID. The root also carries data-tray and
+ * data-who. Which look a creature gets is foeDice.ts; the foe skins live in
+ * FOE_DICE_SKINS (never DICE_SKINS, never in the shop) and the trays in TRAY_LOOKS.
+ * renderTrayPreview / composeTrayStill draw a small still of any look for other views.
  */
 import { CELL_H, LINE_GAP, deviceScale, paintBitmap, pixelText, rasterize, textWidth, wrapWidth, type PixelBitmap, type PixelColor } from "./pixelFont";
 
@@ -109,6 +118,12 @@ export interface RollRequest {
   tone?: "good" | "bad" | "plain";
   /** Optional: fixes the throw so a screenshot or a test can repeat it. Omit for a fresh throw each time. */
   seed?: number;
+  /** A skin id (the shop's list or the foe list) for THIS throw only: the dice take that skin, and the next throw without one goes back to the player's own. */
+  skin?: string;
+  /** A TrayLook id (TRAY_LOOKS) for THIS throw only: the tray is repainted in that look and keeps it until the next roll, which without one goes back to the player's own (PLAYER_TRAY_ID). */
+  tray?: string;
+  /** Whose roll this is, a short caption such as "The goblin rolls": a small plaque on the rim in the look's own accent colour, until the next roll. */
+  who?: string;
 }
 
 export interface DiceTray {
@@ -116,8 +131,12 @@ export interface DiceTray {
   awaitRoll(prompt: string, preview: readonly DieKind[]): Promise<void>;
   /** Throw these dice and settle each on its result; resolves when they rest. Then shows label (for example "18 + 4 = 22 vs 15") and detail ("HIT") under them until the next roll. */
   roll(req: RollRequest): Promise<void>;
+  /** Sets the PLAYER's own skin (the shop's list only). If a foe's look is showing, the tray goes back to the player's look at once, so the shop always shows what it picked. */
   setSkin(id: string): void;
+  /** The player's own skin, whatever look the current throw is in. */
   skin(): DiceSkin;
+  /** The tray look showing now: the player's (PLAYER_TRAY_ID) or the foe's for this throw. */
+  look(): TrayLook;
   /** Skip any running animation to its end state at once (the player pressed Space during the monster's turn). */
   skip(): void;
   clear(): void;
@@ -1336,19 +1355,466 @@ function injectStyle(): void {
   document.head.appendChild(style);
 }
 
-// ---- the tray: the felt and the wooden rim ----------------------------------
+// ---- the tray: looks, and the pure painters ---------------------------------
 //
-// Painted once per size into a background canvas at tray resolution: a wooden
-// frame (a rounded rectangle, lit from the upper left like the dice), a dark lip
-// inside it, and felt with a little deterministic mottling that darkens toward
-// the rim.
+// A TrayLook is data: a rim (palette, texture, corner pieces, studs), a felt
+// (palette, texture, piping) and optional motion (a shimmer, drifting embers, a
+// pulsing glow). The painters are pure: paintTray fills an ImageData-like buffer
+// with the still tray (the browser caches it per size and look), and
+// paintTrayEffects lays the motion over a copy of it each frame. The player's own
+// look (wood rim, green felt) is painted exactly as it always was, pixel for
+// pixel (the unit test pins it by hash); the foe looks are a ladder of six tiers
+// plus bone (undead) and scale (dragon) variants, built in one place below.
+//
+// Painted once per size into a background canvas at tray resolution: a rounded
+// rectangle rim lit from the upper left like the dice, a dark lip inside it, and
+// felt that darkens toward the rim.
 
 const RIM = 5;
-const WOOD = { light: "#d6a86e", body: "#b07a46", deep: "#8a5a30", dark: "#6c401e", lip: "#2a160a", outline: "#1a0e06" };
-const FELT = { dark: "#173f29", base: "#1b4a30", light: "#205335", rimShade: "#112f1f" };
 const CORNER = 3;
 
-function paintBackground(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+export type TrayTexture = "wood" | "planks" | "iron" | "stone" | "oak" | "gold" | "scales" | "bone" | "black";
+export type FeltTexture = "felt" | "sack" | "leather" | "slate" | "velvet";
+/** The little piece stamped on each of the tray's four corners. */
+export type CornerKind = "none" | "iron" | "silver" | "gems" | "claws" | "skulls" | "coins";
+
+export interface TrayPalette {
+  light: string;
+  body: string;
+  deep: string;
+  dark: string;
+  /** The dark line just inside the rim, where the rim meets the felt. */
+  lip: string;
+  /** The 1 px outline round the whole tray. */
+  outline: string;
+}
+
+export type TrayEffect =
+  /** A faint diagonal sheen sliding slowly across the felt. */
+  | { kind: "shimmer"; color: string; strength: number }
+  /** Specks that rise from the bottom of the felt, cooling as they go. */
+  | { kind: "embers"; color: string; count: number }
+  /** The glowing cracks in the rim brighten and dim in a slow wave. */
+  | { kind: "pulse"; color: string }
+  /** The inner lip of the rim breathes a coloured light. */
+  | { kind: "glow"; color: string; strength: number };
+
+export interface TrayLook {
+  id: string;
+  name: string;
+  rim: {
+    palette: TrayPalette;
+    /** Seeded flecks: a hash below `dark` paints a dark fleck, above `light` a light one. */
+    grain: { seed: number; dark: number; light: number };
+    texture: TrayTexture;
+    /** The metal of the iron bands, silver caps, gold or ember cracks. */
+    metal?: { light: string; body: string; deep: string };
+    corners: CornerKind;
+    /** Colours of the corner gems, used in turn. */
+    gems?: readonly string[];
+    /** Pips (or bars) set into the straight runs of the rim, every `every` pixels. */
+    studs?: { color: string; every: number; shape: "pip" | "bar" };
+  };
+  felt: {
+    dark: string;
+    base: string;
+    light: string;
+    /** The first rows against the rim. */
+    rimShade: string;
+    texture: FeltTexture;
+    /** A fine line set a little way in from the rim. */
+    piping?: { color: string; dashed: boolean };
+  };
+  /** The look's own colour: the "who" tag is lettered in it. */
+  accent: string;
+  /** Motion. None means the tray is still, and the browser draws it from its cache. */
+  effects: readonly TrayEffect[];
+}
+
+/** An ImageData-like target: what the painters write into. A real ImageData fits, and so does a plain object in a unit test. */
+export interface PixelBuffer {
+  readonly width: number;
+  readonly height: number;
+  readonly data: Uint8ClampedArray;
+}
+
+const WOOD = { light: "#d6a86e", body: "#b07a46", deep: "#8a5a30", dark: "#6c401e", lip: "#2a160a", outline: "#1a0e06" };
+const FELT = { dark: "#173f29", base: "#1b4a30", light: "#205335", rimShade: "#112f1f" };
+
+export const PLAYER_TRAY_ID = "player";
+
+const PLAYER_LOOK: TrayLook = {
+  id: PLAYER_TRAY_ID,
+  name: "Wood and green felt",
+  rim: { palette: WOOD, grain: { seed: 77, dark: 0.04, light: 0.97 }, texture: "wood", corners: "none" },
+  felt: { ...FELT, texture: "felt" },
+  accent: "#e8c872",
+  effects: [],
+};
+
+// ---- the foe ladder: the looks ------------------------------------------------
+
+export type FoeTier = 0 | 1 | 2 | 3 | 4 | 5;
+export type FoeAccent = "undead" | "dragon";
+export type DragonColour = "red" | "green" | "blue" | "black" | "white";
+export const FOE_TIERS: readonly FoeTier[] = [0, 1, 2, 3, 4, 5];
+export const DRAGON_COLOURS: readonly DragonColour[] = ["red", "green", "blue", "black", "white"];
+
+function foeId(kind: "die" | "tray", tier: FoeTier, accent?: FoeAccent, colour?: DragonColour): string {
+  return ["foe", kind, accent, accent === "dragon" ? colour : undefined, `t${tier}`].filter(Boolean).join("-");
+}
+
+/** The id of the foe die skin for a tier, with an optional accent (and a dragon's colour). */
+export function foeSkinId(tier: FoeTier, accent?: FoeAccent, colour?: DragonColour): string {
+  return foeId("die", tier, accent, colour);
+}
+
+/** The id of the foe tray look for a tier, with an optional accent (and a dragon's colour). */
+export function foeTrayId(tier: FoeTier, accent?: FoeAccent, colour?: DragonColour): string {
+  return foeId("tray", tier, accent, colour);
+}
+
+function hexMix(a: string, b: string, t: number): string {
+  const c = mix(hexRgb(a), hexRgb(b), t);
+  return `#${[c[0], c[1], c[2]].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Name of the thing a tier's tray is, for the look's display name. */
+const TIER_NOUN: readonly string[] = ["crate lid", "box", "stone bowl", "tray", "tray", "brazier tray"];
+
+const FOE_TRAY_TIERS: readonly Omit<TrayLook, "id">[] = [
+  // tier 0: a battered crate lid with scuffed sackcloth.
+  {
+    name: "Battered crate lid",
+    rim: { palette: { light: "#a39478", body: "#857757", deep: "#675b42", dark: "#4b4230", lip: "#241d14", outline: "#15110b" }, grain: { seed: 31, dark: 0.07, light: 0.95 }, texture: "planks", corners: "none" },
+    felt: { dark: "#4a3d2a", base: "#5e4e36", light: "#74623f", rimShade: "#32291c", texture: "sack" },
+    accent: "#d8c9a0",
+    effects: [],
+  },
+  // tier 1: an iron-banded box, riveted, lined with dark leather.
+  {
+    name: "Iron-bound box",
+    rim: {
+      palette: { light: "#6f5238", body: "#533b28", deep: "#3b2a1c", dark: "#271b12", lip: "#150e08", outline: "#0a0705" },
+      grain: { seed: 41, dark: 0.05, light: 0.97 },
+      texture: "iron",
+      metal: { light: "#b4bcc8", body: "#7a8392", deep: "#4a515e" },
+      corners: "iron",
+    },
+    felt: { dark: "#2a1b14", base: "#38251a", light: "#4a3324", rimShade: "#1c110c", texture: "leather", piping: { color: "#7a5a3c", dashed: true } },
+    accent: "#c4cede",
+    effects: [],
+  },
+  // tier 2: a carved stone rim and slate-blue felt.
+  {
+    name: "Carved stone bowl",
+    rim: { palette: { light: "#c4c9d2", body: "#979eab", deep: "#707886", dark: "#4d5460", lip: "#1f232b", outline: "#101318" }, grain: { seed: 53, dark: 0.07, light: 0.94 }, texture: "stone", corners: "none" },
+    felt: { dark: "#1e2b46", base: "#283c5e", light: "#344b72", rimShade: "#131c32", texture: "slate" },
+    accent: "#9cc4ff",
+    effects: [],
+  },
+  // tier 3: a dark oak rim with silver corner caps and crimson velvet.
+  {
+    name: "Oak and silver tray",
+    rim: {
+      palette: { light: "#b8743e", body: "#8c4a26", deep: "#66331a", dark: "#46210f", lip: "#1f0f08", outline: "#120804" },
+      grain: { seed: 63, dark: 0.04, light: 0.97 },
+      texture: "oak",
+      metal: { light: "#f4f6fc", body: "#bfc6d8", deep: "#7f88a0" },
+      corners: "silver",
+      studs: { color: "#e4e8f4", every: 24, shape: "pip" },
+    },
+    felt: { dark: "#4a0a16", base: "#6e1224", light: "#92203a", rimShade: "#2e060e", texture: "velvet", piping: { color: "#b8bccc", dashed: false } },
+    accent: "#e8ecf8",
+    effects: [],
+  },
+  // tier 4: a gold filigree rim with a gem on each corner, royal purple velvet with a faint shimmer.
+  {
+    name: "Gilded filigree tray",
+    rim: {
+      palette: { light: "#fff0a0", body: "#e4b83c", deep: "#aa7a1a", dark: "#6e4a0c", lip: "#2e1c06", outline: "#1a0e02" },
+      grain: { seed: 71, dark: 0.03, light: 0.985 },
+      texture: "gold",
+      metal: { light: "#fff6c0", body: "#f2cc50", deep: "#b88a20" },
+      corners: "gems",
+      gems: ["#e8284c", "#3a82f0"],
+    },
+    felt: { dark: "#2c1050", base: "#44187c", light: "#5c2c9c", rimShade: "#1c0a34", texture: "velvet", piping: { color: "#c8a448", dashed: false } },
+    accent: "#ffd96a",
+    effects: [{ kind: "shimmer", color: "#dcbcff", strength: 0.17 }],
+  },
+  // tier 5: a black iron rim with ember cracks and bone claws, black velvet with drifting embers.
+  {
+    name: "Dragon-bone and ember tray",
+    rim: {
+      palette: { light: "#6a6074", body: "#453e52", deep: "#2e293a", dark: "#1a1622", lip: "#07050a", outline: "#030205" },
+      grain: { seed: 83, dark: 0.04, light: 0.98 },
+      texture: "black",
+      metal: { light: "#ffa240", body: "#9a3412", deep: "#4a1408" },
+      corners: "claws",
+      studs: { color: "#eadfc2", every: 20, shape: "bar" },
+    },
+    felt: { dark: "#06050a", base: "#0f0c16", light: "#1c1628", rimShade: "#030205", texture: "velvet", piping: { color: "#8a2c10", dashed: false } },
+    accent: "#ff9a3c",
+    effects: [
+      { kind: "pulse", color: "#ff8a2c" },
+      { kind: "embers", color: "#ff7a24", count: 16 },
+    ],
+  },
+];
+
+const BONE_RIM: TrayPalette = { light: "#f6efd6", body: "#dccfae", deep: "#ab9f7c", dark: "#7a6f54", lip: "#2a2618", outline: "#14120a" };
+const BONE_METAL = { light: "#fbf6e0", body: "#e0d4b4", deep: "#a89c78" };
+const HOARD_METAL = { light: "#fff3a6", body: "#eab932", deep: "#a87a18" };
+
+const DRAGON_RIMS: Readonly<Record<DragonColour, { palette: TrayPalette; accent: string; felt: string }>> = {
+  red: { palette: { light: "#e8785e", body: "#b4302a", deep: "#7c1c1a", dark: "#4a0f11", lip: "#1e0508", outline: "#120304" }, accent: "#ff8a6a", felt: "#7a1810" },
+  green: { palette: { light: "#86cc5c", body: "#418f2e", deep: "#28621f", dark: "#16380f", lip: "#08180a", outline: "#040c05" }, accent: "#9ae070", felt: "#1e5a1a" },
+  blue: { palette: { light: "#7cb4f2", body: "#3c6ec2", deep: "#264c8c", dark: "#162c58", lip: "#08122a", outline: "#040816" }, accent: "#8cc4ff", felt: "#1a3a80" },
+  black: { palette: { light: "#74747f", body: "#4a4a55", deep: "#32323c", dark: "#1c1c24", lip: "#08080c", outline: "#030304" }, accent: "#b4b4c8", felt: "#1a1a22" },
+  white: { palette: { light: "#f4fbff", body: "#c8dce8", deep: "#96b2c4", dark: "#688296", lip: "#26323c", outline: "#121a20" }, accent: "#e0f4ff", felt: "#5a7890" },
+};
+
+const WHOLE_DRAGON_NAMES: Readonly<Record<DragonColour, string>> = { red: "Red", green: "Green", blue: "Blue", black: "Black", white: "White" };
+
+function buildTrayLooks(): TrayLook[] {
+  const out: TrayLook[] = [PLAYER_LOOK];
+  for (const tier of FOE_TIERS) {
+    const base = FOE_TRAY_TIERS[tier] as Omit<TrayLook, "id">;
+    out.push({ ...base, id: foeTrayId(tier) });
+  }
+  const noun = (tier: FoeTier): string => TIER_NOUN[tier] as string;
+  for (const tier of FOE_TIERS) {
+    const base = FOE_TRAY_TIERS[tier] as Omit<TrayLook, "id">;
+    // Undead: a bone or ossuary rim; skull corners from tier 3; a sickly green glow from tier 2.
+    const glow = tier >= 2;
+    const felt = glow ? { ...base.felt, dark: hexMix(base.felt.dark, "#1a3a16", 0.3), base: hexMix(base.felt.base, "#26481e", 0.28), light: hexMix(base.felt.light, "#3a6228", 0.28) } : base.felt;
+    out.push({
+      id: foeTrayId(tier, "undead"),
+      name: `Ossuary ${noun(tier)}`,
+      rim: {
+        palette: BONE_RIM,
+        grain: { seed: 91 + tier, dark: 0.05, light: 0.97 },
+        texture: "bone",
+        metal: BONE_METAL,
+        corners: tier >= 3 ? "skulls" : "none",
+        ...(tier >= 4 ? { studs: { color: "#c8e87c", every: 22, shape: "pip" as const } } : {}),
+      },
+      felt,
+      accent: glow ? "#b4ea6c" : "#e0d4b4",
+      effects: [...(glow ? [{ kind: "glow" as const, color: "#9be15a", strength: 0.26 + tier * 0.05 }] : []), ...base.effects],
+    });
+  }
+  // Dragons: a scaled rim and hoard gold. With no colour in the id the rim keeps its tier's own palette.
+  for (const colour of [undefined, ...DRAGON_COLOURS] as (DragonColour | undefined)[]) {
+    for (const tier of FOE_TIERS) {
+      const base = FOE_TRAY_TIERS[tier] as Omit<TrayLook, "id">;
+      const tint = colour ? DRAGON_RIMS[colour] : null;
+      const lead = colour ? `${WHOLE_DRAGON_NAMES[colour]}-scaled` : "Scaled";
+      out.push({
+        id: foeTrayId(tier, "dragon", colour),
+        name: `${lead} ${noun(tier)}`,
+        rim: {
+          palette: tint ? tint.palette : base.rim.palette,
+          grain: { seed: 101 + tier, dark: 0.04, light: 0.97 },
+          texture: "scales",
+          metal: HOARD_METAL,
+          corners: tier >= 2 ? "coins" : "none",
+          studs: { color: "#f6cc48", every: 16, shape: "pip" },
+        },
+        felt: tint ? { ...base.felt, dark: hexMix(base.felt.dark, tint.felt, 0.22), base: hexMix(base.felt.base, tint.felt, 0.3), light: hexMix(base.felt.light, tint.felt, 0.3) } : base.felt,
+        accent: tint ? tint.accent : "#ffd24a",
+        effects: base.effects,
+      });
+    }
+  }
+  return out;
+}
+
+export const TRAY_LOOKS: readonly TrayLook[] = buildTrayLooks();
+
+const TRAY_BY_ID: ReadonlyMap<string, TrayLook> = new Map(TRAY_LOOKS.map((l) => [l.id, l]));
+
+/** The tray look with this id (the player's or a foe's), or undefined. */
+export function trayLookById(id: string | undefined): TrayLook | undefined {
+  return id === undefined ? undefined : TRAY_BY_ID.get(id);
+}
+
+/** Everything wrong with a tray look, as sentences; empty when it is fit to use. */
+export function trayLookProblems(look: TrayLook): string[] {
+  const out: string[] = [];
+  if (!/^[a-z][a-z0-9-]*$/.test(look.id)) out.push("id must be lowercase letters, digits and hyphens");
+  if (!look.name.trim()) out.push("name is empty");
+  const colours = [
+    ...Object.values(look.rim.palette),
+    ...Object.values(look.rim.metal ?? {}),
+    ...(look.rim.gems ?? []),
+    look.rim.studs?.color ?? look.rim.palette.dark,
+    look.felt.dark,
+    look.felt.base,
+    look.felt.light,
+    look.felt.rimShade,
+    look.felt.piping?.color ?? look.felt.dark,
+    look.accent,
+    ...look.effects.map((e) => e.color),
+  ];
+  for (const c of colours) if (!HEX.test(c)) out.push(`${c} is not a #rrggbb colour`);
+  const r = look.rim;
+  if (["iron", "silver", "gems", "claws", "skulls", "coins"].includes(r.corners) && !r.metal) out.push("corner pieces need a rim.metal palette");
+  if (["iron", "gold", "scales", "bone", "black"].includes(r.texture) && !r.metal) out.push(`the ${r.texture} rim texture needs a rim.metal palette`);
+  if (r.corners === "gems" && !(r.gems && r.gems.length > 0)) out.push("gem corners need rim.gems");
+  if (r.studs && !(Number.isInteger(r.studs.every) && r.studs.every >= 6)) out.push("studs.every must be a whole number, 6 or more");
+  return out;
+}
+
+// ---- the foe skins ----------------------------------------------------------
+//
+// The dice a monster rolls. They are NOT in DICE_SKINS: they are never in the
+// shop, never sold and never equippable by the player; a roll asks for one by id
+// (RollRequest.skin) and the tray looks it up here. Six tiers, each clearly
+// richer than the last, plus bone-white undead and hoard-gold dragon variants.
+// Every one keeps a legible numeral on every face (the unit test checks the
+// contrast of the numeral against every body colour, with its halo counted).
+
+type FoeSkinBase = Omit<DiceSkin, "id" | "priceCredits">;
+
+const FOE_DIE_TIERS: readonly FoeSkinBase[] = [
+  // 0: cheap wood, chipped and dull, flecks of pale wood showing where the paint has gone.
+  {
+    name: "Worn wooden dice",
+    ramp: ["#d2b78a", "#bb9d6e", "#9a7e52", "#85693f"],
+    edge: "#2a1a0c",
+    numeral: "#22140a",
+    numeralOutline: null,
+    finish: "matte",
+    pattern: { kind: "speckle", color: "#ecdcb4", amount: 0.09, seed: 7 },
+  },
+  // 1: dark iron, a plain finish.
+  {
+    name: "Iron dice",
+    ramp: ["#7a808a", "#585e68", "#3c414a", "#262a31"],
+    edge: "#07080b",
+    numeral: "#f2e6c4",
+    numeralOutline: "#12141a",
+    finish: "matte",
+  },
+  // 2: bronze with a metal sheen.
+  {
+    name: "Bronze dice",
+    ramp: ["#f6d49c", "#dcaa66", "#b8844a", "#8a5e30"],
+    edge: "#2a1608",
+    numeral: "#241204",
+    numeralOutline: null,
+    finish: "metal",
+    shine: "#fff0cc",
+  },
+  // 3: polished silver.
+  {
+    name: "Silver dice",
+    ramp: ["#f8f9fc", "#d2d5de", "#a4a8b6", "#737888"],
+    edge: "#1a1c26",
+    numeral: "#10142c",
+    numeralOutline: null,
+    finish: "metal",
+    shine: "#ffffff",
+  },
+  // 4: ivory shot through with gold veins, high gloss.
+  {
+    name: "Gold-veined dice",
+    ramp: ["#fffaf0", "#f2e8d0", "#dccfa8", "#b8a878"],
+    edge: "#3a2a10",
+    numeral: "#2c1458",
+    numeralOutline: null,
+    finish: "gloss",
+    shine: "#ffffff",
+    pattern: { kind: "marble", color: "#e0a820", amount: 0.09, seed: 13 },
+  },
+  // 5: obsidian with glowing ember veins.
+  {
+    name: "Ember-vein obsidian dice",
+    ramp: ["#52485e", "#342c40", "#201a2a", "#120e1a"],
+    edge: "#050308",
+    numeral: "#ffe6a0",
+    numeralOutline: "#2a0a02",
+    finish: "gloss",
+    shine: "#d8c8ff",
+    pattern: { kind: "marble", color: "#ff8a26", amount: 0.11, seed: 17 },
+  },
+];
+
+/** The finish a tier's dice take: plain at the bottom, sheen in the middle, gloss at the top. */
+const TIER_FINISH: readonly DiceFinish[] = ["matte", "matte", "metal", "metal", "gloss", "gloss"];
+
+function undeadSkin(tier: FoeTier): FoeSkinBase {
+  const bone = ["#fdfaf0", "#ece6d2", "#cdc4a8", "#a49b80"] as const;
+  const veins = ["#9ad060", "#9ad060", "#9ad060", "#aadc64", "#b8e468", "#c8f070"] as const;
+  const amount = [0, 0, 0.06, 0.09, 0.11, 0.13] as const;
+  return {
+    name: tier >= 2 ? "Grave-bone dice, green-veined" : "Grave-bone dice",
+    ramp: tier >= 5 ? ["#e2e6cc", "#bcc6a6", "#92a082", "#687860"] : tier >= 4 ? ["#fff8e0", "#f0e2b8", "#d4c088", "#a8935a"] : bone,
+    edge: "#1c2010",
+    numeral: tier >= 5 ? "#10180a" : "#1a2210",
+    numeralOutline: null,
+    finish: tier >= 3 ? "gloss" : "matte",
+    shine: "#f0ffdc",
+    pattern: tier >= 2 ? { kind: "marble", color: veins[tier] as string, amount: amount[tier] as number, seed: 23 + tier } : { kind: "speckle", color: "#c4b890", amount: 0.03 + 0.01 * (1 - tier), seed: 19 },
+  };
+}
+
+const DRAGON_DICE: Readonly<Record<DragonColour | "hoard", { ramp: readonly string[]; edge: string; numeral: string; outline: string | null; vein: string }>> = {
+  red: { ramp: ["#ff9c84", "#e04a34", "#a62a1e", "#6a1812"], edge: "#2a0806", numeral: "#fff2d8", outline: "#3a0a08", vein: "#ffd84a" },
+  green: { ramp: ["#b4ec7c", "#62c03c", "#3a8c28", "#22581a"], edge: "#08240a", numeral: "#f8ffe4", outline: "#0c3010", vein: "#ffd84a" },
+  blue: { ramp: ["#a8dcff", "#58a0e8", "#3468b8", "#1e407c"], edge: "#081a38", numeral: "#f4faff", outline: "#0a2048", vein: "#ffd84a" },
+  black: { ramp: ["#7a7a88", "#52525e", "#34343e", "#1c1c24"], edge: "#050508", numeral: "#f2e8c8", outline: "#0a0a10", vein: "#ffd84a" },
+  white: { ramp: ["#fafdff", "#d8e8f2", "#abc6d8", "#7c9ab0"], edge: "#1a2a38", numeral: "#0e2234", outline: null, vein: "#e8b020" },
+  hoard: { ramp: ["#fad070", "#e09a30", "#b06a1c", "#744012"], edge: "#2e1804", numeral: "#fff4d0", outline: "#3a1c04", vein: "#fff6c0" },
+};
+
+function dragonSkin(tier: FoeTier, colour: DragonColour | undefined): FoeSkinBase {
+  const t = DRAGON_DICE[colour ?? "hoard"];
+  const lead = colour ? `${colour[0]?.toUpperCase()}${colour.slice(1)} dragon-scale dice` : "Dragon-scale dice";
+  return {
+    name: lead,
+    ramp: t.ramp,
+    edge: t.edge,
+    numeral: t.numeral,
+    numeralOutline: t.outline,
+    finish: TIER_FINISH[tier] as DiceFinish,
+    shine: "#fff4d8",
+    pattern: { kind: "marble", color: t.vein, amount: 0.05 + 0.012 * tier, seed: 31 + tier },
+  };
+}
+
+function buildFoeSkins(): DiceSkin[] {
+  const out: DiceSkin[] = [];
+  const add = (id: string, s: FoeSkinBase): void => {
+    out.push({ ...s, id, priceCredits: 0 });
+  };
+  for (const tier of FOE_TIERS) add(foeSkinId(tier), FOE_DIE_TIERS[tier] as FoeSkinBase);
+  for (const tier of FOE_TIERS) add(foeSkinId(tier, "undead"), undeadSkin(tier));
+  for (const colour of [undefined, ...DRAGON_COLOURS] as (DragonColour | undefined)[]) for (const tier of FOE_TIERS) add(foeSkinId(tier, "dragon", colour), dragonSkin(tier, colour));
+  return out;
+}
+
+/** The dice monsters roll, separate from DICE_SKINS: never in the shop, never sold. Ask for one by id with RollRequest.skin. */
+export const FOE_DICE_SKINS: readonly DiceSkin[] = buildFoeSkins();
+
+const FOE_SKIN_BY_ID: ReadonlyMap<string, DiceSkin> = new Map(FOE_DICE_SKINS.map((s) => [s.id, s]));
+
+/** A skin by id, from the shop's list or the foe list. */
+export function skinById(id: string): DiceSkin | undefined {
+  return findSkin(id) ?? FOE_SKIN_BY_ID.get(id);
+}
+
+// ---- the painters (pure) ----------------------------------------------------
+
+const distCache = new Map<string, Uint16Array>();
+
+/** For each pixel of a w by h tray: 0 outside the rounded rectangle, 1 on its outline, 2 and up for each step inward. */
+function distanceMap(w: number, h: number): Uint16Array {
+  const key = `${w}x${h}`;
+  const hit = distCache.get(key);
+  if (hit) return hit;
   const inside = (x: number, y: number): boolean => {
     const ax = Math.min(x, w - 1 - x);
     const ay = Math.min(y, h - 1 - y);
@@ -1369,35 +1835,375 @@ function paintBackground(ctx: CanvasRenderingContext2D, w: number, h: number): v
       d[i] = Math.min(d[i] as number, x === w - 1 ? 1 : (d[i + 1] as number) + 1, y === h - 1 ? 1 : (d[i + w] as number) + 1);
     }
   }
-  const img = ctx.createImageData(w, h);
-  const set = (i: number, hex: string): void => {
-    const c = hexRgb(hex);
-    img.data[i * 4] = c[0];
-    img.data[i * 4 + 1] = c[1];
-    img.data[i * 4 + 2] = c[2];
-    img.data[i * 4 + 3] = 255;
+  if (distCache.size > 12) distCache.clear();
+  distCache.set(key, d);
+  return d;
+}
+
+const rgbMemo = new Map<string, RGB>();
+function rgbOf(hex: string): RGB {
+  let c = rgbMemo.get(hex);
+  if (!c) {
+    c = hexRgb(hex);
+    rgbMemo.set(hex, c);
+  }
+  return c;
+}
+
+/** Filigree: one 8 by 3 tile, a wave of engraved lines with a highlight pip in each hollow. */
+const FILIGREE: readonly string[] = [".##..+..", "#..#..##", ".+..##.."];
+
+/** The corner pieces, 5 by 5, drawn on the top left and mirrored onto the other three. . keeps the rim underneath. */
+const CORNER_ART: Readonly<Record<Exclude<CornerKind, "none">, readonly string[]>> = {
+  iron: ["kkkkk", "kmmMd", "kmMMd", "kMMMd", "kdddd"],
+  silver: ["kkkkk", "kmmmM", "kmMMd", "kmMdd", "kMddd"],
+  gems: ["kmmMk", "mgggd", "mghgd", "mgggd", "kMddk"],
+  claws: ["kBBBk", "BBtBb", "BtTtb", "BBtBb", "kbbbk"],
+  skulls: [".mmm.", "mmmmM", "mkMkM", "MMmMd", ".dkd."],
+  coins: ["kkkkk", "kmmMk", "kmDMk", "kMMdk", "kkkkk"],
+};
+
+interface RimGeom {
+  vertical: boolean;
+  corner: boolean;
+  along: number;
+}
+
+function rimGeom(x: number, y: number, w: number, h: number): RimGeom {
+  const ax = Math.min(x, w - 1 - x);
+  const ay = Math.min(y, h - 1 - y);
+  const vertical = ax < ay;
+  return { vertical, corner: ax < RIM && ay < RIM, along: vertical ? y : x };
+}
+
+/** Where the glowing cracks of a black rim are: the same rule the painter and the pulse effect both use. */
+function isCrack(x: number, y: number): boolean {
+  return hash3(x, y, 2, 91) < 0.07;
+}
+
+/**
+ * Paint the still tray (rim and felt, no motion) into `buf`: the whole buffer is
+ * the tray, opaque inside the rounded rectangle and clear outside it. Pure and
+ * deterministic. For the player's look the output is, byte for byte, what the
+ * tray has always drawn.
+ */
+export function paintTray(buf: PixelBuffer, look: TrayLook): void {
+  const { width: w, height: h, data } = buf;
+  const d = distanceMap(w, h);
+  const P = look.rim.palette;
+  const pal = { light: rgbOf(P.light), body: rgbOf(P.body), deep: rgbOf(P.deep), dark: rgbOf(P.dark), lip: rgbOf(P.lip), outline: rgbOf(P.outline) };
+  const ramp: readonly RGB[] = [pal.light, pal.body, pal.deep, pal.dark];
+  const M = look.rim.metal ? { light: rgbOf(look.rim.metal.light), body: rgbOf(look.rim.metal.body), deep: rgbOf(look.rim.metal.deep) } : null;
+  const F = { dark: rgbOf(look.felt.dark), base: rgbOf(look.felt.base), light: rgbOf(look.felt.light), rimShade: rgbOf(look.felt.rimShade) };
+  const tex = look.rim.texture;
+  const gr = look.rim.grain;
+  const studs = look.rim.studs ?? null;
+  const studRgb = studs ? rgbOf(studs.color) : null;
+
+  const put = (i: number, c: RGB): void => {
+    data[i * 4] = c[0];
+    data[i * 4 + 1] = c[1];
+    data[i * 4 + 2] = c[2];
+    data[i * 4 + 3] = 255;
   };
+
+  const rimColor = (x: number, y: number, dist: number, lit: boolean, grain: number): RGB => {
+    const across = dist - 2;
+    const g = rimGeom(x, y, w, h);
+    const stepIdx = dist === 2 ? (lit ? 0 : 1) : dist === 3 ? (lit ? 1 : 2) : lit ? 2 : 3;
+    let c: RGB = ramp[stepIdx] as RGB;
+    if (grain < gr.dark) c = pal.dark;
+    else if (grain > gr.light) c = pal.light;
+    if (g.corner) return c;
+    const { along, vertical } = g;
+    switch (tex) {
+      case "planks": {
+        const m = along % 19;
+        if (m === 0) c = pal.dark;
+        else if (m === 3 && across === 1) c = pal.light;
+        if (dist === 2 && hash3(x, y, 2, 5) < 0.08) c = pal.dark;
+        break;
+      }
+      case "iron": {
+        const m = along % 30;
+        if (M && m < 4) {
+          c = across === 0 ? M.light : across === 1 ? M.body : M.deep;
+          if (m === 0 || m === 3) c = across === 0 ? M.body : M.deep;
+          if (across === 1 && m === 1) c = M.light;
+          else if (across === 1 && m === 2) c = M.deep;
+        }
+        break;
+      }
+      case "stone": {
+        const phase = (along + (across === 1 ? 7 : 0)) % 14;
+        if (phase === 0) c = pal.dark;
+        else if (phase === 1 && across !== 2) c = pal.light;
+        break;
+      }
+      case "oak": {
+        if (hash3(Math.floor(along / 6) + (vertical ? 100 : 0), across, 3, 21) < 0.34) c = ramp[Math.min(3, stepIdx + 1)] as RGB;
+        if (dist === 2 && lit) c = pal.light;
+        break;
+      }
+      case "gold": {
+        const ch = (FILIGREE[across] as string)[along % 8];
+        if (ch === "#") c = pal.deep;
+        else if (ch === "+") c = pal.light;
+        break;
+      }
+      case "scales": {
+        const u = (along + across * 2) % 4;
+        if (u === 0) c = ramp[Math.min(3, stepIdx + 1)] as RGB;
+        else if (u === 2 && across === 0) c = pal.light;
+        break;
+      }
+      case "bone": {
+        const m = along % 7;
+        if (m === 0) c = pal.deep;
+        else if (m === 1 && across === 0) c = pal.light;
+        else if (m === 6) c = ramp[Math.min(3, stepIdx + 1)] as RGB;
+        break;
+      }
+      case "black": {
+        if (M && isCrack(x, y)) c = M.body;
+        break;
+      }
+      default:
+        break;
+    }
+    if (studs && studRgb) {
+      const m = along % studs.every;
+      if (studs.shape === "pip") {
+        if (across === 1 && m === 0) c = studRgb;
+        else if (across === 1 && m === 1) c = pal.dark;
+      } else if (m === 0) c = across === 0 ? rgbOf(hexMix(studs.color, "#ffffff", 0.35)) : studRgb;
+      else if (m === 1) c = pal.dark;
+    }
+    return c;
+  };
+
+  const feltColor = (x: number, y: number, into: number, grain: number): RGB => {
+    const edge = into < 2;
+    if (edge) return grain < 0.55 ? F.rimShade : F.dark;
+    switch (look.felt.texture) {
+      case "felt": {
+        const n = noise3(x / 6, y / 6, 0, 3) * 0.6 + grain * 0.4;
+        return n < 0.26 ? F.dark : n > 0.8 ? F.light : F.base;
+      }
+      case "sack": {
+        const t = (x % 3 === 0 ? 1 : 0) + (y % 3 === 0 ? 1 : 0);
+        const stain = noise3(x / 7, y / 7, 4, 6);
+        if (stain < 0.24) return F.dark;
+        if (t === 2) return F.dark;
+        if (t === 0 && grain > 0.6) return F.light;
+        return F.base;
+      }
+      case "leather": {
+        const n = noise3(x / 3.2, y / 3.2, 1, 5);
+        if (grain < 0.025) return F.dark;
+        return n < 0.3 ? F.dark : n > 0.74 ? F.light : F.base;
+      }
+      case "slate": {
+        const n = noise3(x / 5, y / 3, 2, 9);
+        if (y % 8 === 3 && grain < 0.7) return F.dark;
+        return n < 0.28 ? F.dark : n > 0.78 ? F.light : F.base;
+      }
+      default: {
+        // velvet: a soft vignette and a sparse diagonal nap.
+        const v = Math.max(Math.abs((x + 0.5) / w - 0.5), Math.abs((y + 0.5) / h - 0.5)) * 2;
+        if (v > 0.9) return F.dark;
+        if (v > 0.78 && grain < 0.5) return F.dark;
+        if (((x - y) % 6 + 6) % 6 === 0 && grain < 0.5) return F.light;
+        if (grain > 0.985) return F.light;
+        return F.base;
+      }
+    }
+  };
+
+  const piping = look.felt.piping ?? null;
+  const pipingRgb = piping ? rgbOf(piping.color) : null;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
       const dist = d[i] as number;
-      if (dist === 0) continue;
+      if (dist === 0) {
+        data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = data[i * 4 + 3] = 0;
+        continue;
+      }
       const lit = Math.min(x, y) <= Math.min(w - 1 - x, h - 1 - y);
-      const grain = hash3(x, y, 1, 77);
-      if (dist === 1) set(i, WOOD.outline);
-      else if (dist < RIM) {
-        // 2 is the bevel (light on the lit sides), 3 the body, 4 the shaded inner edge.
-        const step = dist === 2 ? (lit ? WOOD.light : WOOD.body) : dist === 3 ? (lit ? WOOD.body : WOOD.deep) : lit ? WOOD.deep : WOOD.dark;
-        set(i, grain < 0.04 ? WOOD.dark : grain > 0.97 ? WOOD.light : step);
-      } else if (dist === RIM) set(i, WOOD.lip);
+      const grain = hash3(x, y, 1, gr.seed);
+      if (dist === 1) put(i, pal.outline);
+      else if (dist < RIM) put(i, rimColor(x, y, dist, lit, grain));
+      else if (dist === RIM) put(i, pal.lip);
       else {
         const into = dist - RIM - 1;
-        const n = noise3(x / 6, y / 6, 0, 3) * 0.6 + grain * 0.4;
-        set(i, into < 2 ? (grain < 0.55 ? FELT.rimShade : FELT.dark) : n < 0.26 ? FELT.dark : n > 0.8 ? FELT.light : FELT.base);
+        if (pipingRgb && piping && into === 2 && (!piping.dashed || (x + y) % 4 < 2)) put(i, pipingRgb);
+        else put(i, feltColor(x, y, into, grain));
       }
     }
   }
-  ctx.putImageData(img, 0, 0);
+
+  // Corner pieces, stamped on last so they sit over the rim and the lip.
+  if (look.rim.corners !== "none" && M) {
+    const art = CORNER_ART[look.rim.corners];
+    const gems = look.rim.gems ?? [];
+    for (let k = 0; k < 4; k++) {
+      const flipX = k % 2 === 1;
+      const flipY = k >= 2;
+      const gem = rgbOf(gems.length ? (gems[k % gems.length] as string) : "#ffffff");
+      const glint = mix(gem, [255, 255, 255], 0.6);
+      for (let ay = 0; ay < 5; ay++) {
+        for (let ax = 0; ax < 5; ax++) {
+          const ch = (art[ay] as string)[ax];
+          if (!ch || ch === ".") continue;
+          const x = flipX ? w - 1 - ax : ax;
+          const y = flipY ? h - 1 - ay : ay;
+          const i = y * w + x;
+          if (x < 0 || y < 0 || x >= w || y >= h || (d[i] as number) === 0) continue;
+          const c: RGB | null =
+            ch === "k" ? pal.outline : ch === "m" ? M.light : ch === "M" ? M.body : ch === "d" ? M.deep : ch === "g" ? gem : ch === "h" ? glint : ch === "B" ? rgbOf("#eadfc2") : ch === "b" ? rgbOf("#b8a888") : ch === "t" ? rgbOf("#ff9a3c") : ch === "T" ? rgbOf("#ffe08a") : null;
+          if (c) put(i, c);
+        }
+      }
+    }
+  }
+}
+
+function blend(data: Uint8ClampedArray, i: number, c: RGB, a: number): void {
+  if (a <= 0) return;
+  const k = Math.min(1, a);
+  data[i * 4] = Math.round((data[i * 4] as number) + (c[0] - (data[i * 4] as number)) * k);
+  data[i * 4 + 1] = Math.round((data[i * 4 + 1] as number) + (c[1] - (data[i * 4 + 1] as number)) * k);
+  data[i * 4 + 2] = Math.round((data[i * 4 + 2] as number) + (c[2] - (data[i * 4 + 2] as number)) * k);
+}
+
+/**
+ * Lay the look's motion over a tray already painted into `buf` (a copy of the
+ * cached still, each frame). `tMs` is the clock. `still` draws one fixed frame
+ * with no motion: what reduced motion gets, and what a contact sheet shows.
+ * Only the pixels the effect touches change, and never an outside pixel.
+ */
+export function paintTrayEffects(buf: PixelBuffer, look: TrayLook, tMs: number, still: boolean): void {
+  if (look.effects.length === 0) return;
+  const { width: w, height: h, data } = buf;
+  const d = distanceMap(w, h);
+  const t = still ? 2200 : tMs;
+  const slow = (period: number, phase = 0): number => (1 + Math.sin(t / period + phase)) / 2;
+  for (const fx of look.effects) {
+    const col = rgbOf(fx.color);
+    if (fx.kind === "glow") {
+      const a = fx.strength * (0.45 + 0.55 * slow(1100));
+      for (let i = 0; i < w * h; i++) {
+        const dist = d[i] as number;
+        if (dist === RIM) blend(data, i, col, a);
+        else if (dist === RIM + 1) blend(data, i, col, a * 0.5);
+        else if (dist === 3 || dist === 2) {
+          // The notches of the bone take a little of it too.
+          const x = i % w;
+          const y = Math.floor(i / w);
+          const g = rimGeom(x, y, w, h);
+          if (!g.corner && g.along % 7 === 0) blend(data, i, col, a * 0.7);
+        }
+      }
+    } else if (fx.kind === "pulse") {
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          const dist = d[i] as number;
+          if (dist < 2 || dist > RIM) continue;
+          const g = rimGeom(x, y, w, h);
+          if (dist < RIM && (g.corner || !isCrack(x, y))) continue;
+          const phase = still ? 0.5 : (1 + Math.sin(t / 900 + g.along * 0.12 + (g.vertical ? 1.7 : 0))) / 2;
+          blend(data, i, col, dist === RIM ? 0.12 + 0.2 * phase : 0.3 + 0.65 * phase);
+        }
+      }
+    } else if (fx.kind === "shimmer") {
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          if ((d[i] as number) <= RIM) continue;
+          const s = (((x * 3 + y * 2 - (still ? 330 : Math.floor(t * 0.03))) % 280) + 280) % 280;
+          if (s < 12) blend(data, i, col, fx.strength * (1 - Math.abs(s - 5.5) / 6.5));
+        }
+      }
+    } else {
+      const x0 = RIM + 1;
+      const y0 = RIM + 1;
+      const fw = Math.max(1, w - 2 * (RIM + 1));
+      const fh = Math.max(1, h - 2 * (RIM + 1));
+      for (let k = 0; k < fx.count; k++) {
+        const rate = 0.005 + 0.006 * hash3(k, 1, 0, 555);
+        const climb = still ? hash3(k, 2, 0, 555) * fh : (t * rate + hash3(k, 2, 0, 555) * fh) % fh;
+        const life = climb / fh;
+        const px = Math.round(x0 + hash3(k, 0, 0, 555) * fw + Math.sin(t / 700 + k * 1.9) * (still ? 0 : 1.6));
+        const py = Math.round(y0 + fh - 1 - climb);
+        if (px < x0 || px >= x0 + fw || py < y0 || py >= y0 + fh) continue;
+        const heat = mix(col, [80, 20, 10], life);
+        const a = Math.max(0, 1 - life * 1.05) * 0.95;
+        blend(data, py * w + px, heat, a);
+        if (k % 3 === 0 && py + 1 < y0 + fh) blend(data, (py + 1) * w + px, heat, a * 0.5);
+      }
+    }
+  }
+}
+
+/** Whether the look moves (and so needs repainting every frame). */
+export function trayHasMotion(look: TrayLook): boolean {
+  return look.effects.length > 0;
+}
+
+// ---- the "who" tag ----------------------------------------------------------
+
+export interface WhoTag {
+  readonly w: number;
+  readonly h: number;
+  /** RGBA, straight alpha. */
+  readonly data: Uint8ClampedArray;
+}
+
+/**
+ * A small plaque set into the top of the tray, lettered in the look's own accent
+ * colour: whose roll it is ("The goblin rolls"). Pure. The text is cut to fit
+ * `maxW` tray pixels.
+ */
+export function renderWhoTag(text: string, look: TrayLook, maxW: number): WhoTag {
+  const line = fitLine(text, Math.max(12, maxW - 8), "bold");
+  const accent = rgbOf(look.accent);
+  const bmp = rasterize(line, { weight: "bold", color: [hexMix(look.accent, "#ffffff", 0.55), look.accent], outline: look.rim.palette.outline });
+  const w = bmp.w + 6;
+  const h = bmp.h + 4;
+  const data = new Uint8ClampedArray(w * h * 4);
+  const edge = rgbOf(look.rim.palette.outline);
+  const body = rgbOf(look.rim.palette.dark);
+  const trim = mix(rgbOf(look.rim.palette.body), accent, 0.35);
+  const set = (x: number, y: number, c: RGB): void => {
+    const i = (y * w + x) * 4;
+    data[i] = c[0];
+    data[i + 1] = c[1];
+    data[i + 2] = c[2];
+    data[i + 3] = 255;
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const corner = (x === 0 || x === w - 1) && (y === 0 || y === h - 1);
+      if (corner) continue;
+      const border = x === 0 || y === 0 || x === w - 1 || y === h - 1;
+      set(x, y, border ? edge : y === 1 || x === 1 || x === w - 2 || y === h - 2 ? trim : body);
+    }
+  }
+  const inkAt = (x: number, y: number): void => {
+    const k = y * bmp.w + x;
+    const v = bmp.ink[k] as number;
+    if (v) set(x + 3, y + 2, rgbOf(bmp.fills[v - 1] as string));
+    else if (bmp.outline[k]) set(x + 3, y + 2, edge);
+  };
+  for (let y = 0; y < bmp.h; y++) for (let x = 0; x < bmp.w; x++) inkAt(x, y);
+  return { w, h, data };
+}
+
+/** Where a tag sits in a tray `w` wide: centred, flush with the top edge. */
+export function whoTagOrigin(tagW: number, trayW: number): { x: number; y: number } {
+  return { x: Math.round((trayW - tagW) / 2), y: 0 };
 }
 
 // ---- the tray ---------------------------------------------------------------
@@ -1475,15 +2281,20 @@ export function pickScale(cssWidth: number, dpr: number): number {
 }
 
 /** Cut a line of text down to fit, with "..." where it was cut. */
-function fitLine(text: string, maxW: number): string {
-  if (textWidth(text) <= maxW) return text;
+function fitLine(text: string, maxW: number, weight: "regular" | "bold" = "regular"): string {
+  if (textWidth(text, weight) <= maxW) return text;
   let s = text;
-  while (s.length > 1 && textWidth(`${s}...`) > maxW) s = s.slice(0, -1);
+  while (s.length > 1 && textWidth(`${s}...`, weight) > maxW) s = s.slice(0, -1);
   return `${s.trimEnd()}...`;
 }
 
-function sentence(list: readonly { kind: DieKind; result: number }[], cap: Caption | null): string {
-  return [list.map((d) => `${d.kind} ${d.result}`).join(", "), cap?.label, cap?.detail].filter(Boolean).join(". ");
+/** How long a change of tray look takes to fade, in ms. */
+const FADE_MS = 150;
+/** A look that moves is repainted about this often while it sits still, in ms: its motion is slow. */
+const MOTION_FRAME_MS = 60;
+
+function sentence(list: readonly { kind: DieKind; result: number }[], cap: Caption | null, who: string | null = null): string {
+  return [who, list.map((d) => `${d.kind} ${d.result}`).join(", "), cap?.label, cap?.detail].filter(Boolean).join(". ");
 }
 
 export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTrayOptions = {}): DiceTray {
@@ -1491,7 +2302,13 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
   const clock = opts.now ?? (() => performance.now());
   const seedBase = opts.seed ?? Math.floor(Math.random() * 0x7fffffff);
   let throws = 0;
-  let skin: DiceSkin = findSkin(skinId) ?? (SKINS[0] as DiceSkin);
+  /** The player's own skin: what setSkin sets and skin() returns. */
+  let playerSkin: DiceSkin = findSkin(skinId) ?? (SKINS[0] as DiceSkin);
+  /** The skin the dice wear NOW: the player's, or a foe's for the current throw. */
+  let skin: DiceSkin = playerSkin;
+  /** The tray look NOW: the player's, or a foe's for the current throw. */
+  let trayLook: TrayLook = PLAYER_LOOK;
+  let whoText: string | null = null;
   let destroyed = false;
 
   let mode: Mode = "empty";
@@ -1505,7 +2322,15 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
   let roll: { plan: RollPlan; start: number; pending: Caption; resolve: () => void; watchdog: number } | null = null;
   let raf = 0;
   let layout: Layout | null = null;
-  let bg: HTMLCanvasElement | null = null;
+  /** The painted tray for each look seen at this size: the still pixels, and the canvas made from them. */
+  const bgs = new Map<string, { canvas: HTMLCanvasElement; data: Uint8ClampedArray }>();
+  /** Scratch for a look that moves: a copy of its still, with this frame's motion laid over it. */
+  let motion: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; img: ImageData } | null = null;
+  /** The "who" plaques already cut for this size, by look and text. */
+  const tags = new Map<string, HTMLCanvasElement>();
+  /** The last frame of the look we just left, fading out over the new one. */
+  let fade: { from: HTMLCanvasElement; start: number } | null = null;
+  let lastMotionPaint = -1e9;
   let low: HTMLCanvasElement | null = null;
   let lowCtx: CanvasRenderingContext2D | null = null;
   let sprite: HTMLCanvasElement | null = null;
@@ -1517,6 +2342,7 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
   root.dataset.ltdRoot = "";
   root.dataset.state = mode;
   root.dataset.skin = skin.id;
+  root.dataset.tray = trayLook.id;
   root.setAttribute("role", "group");
   root.setAttribute("aria-label", "Dice tray");
   const canvas = el("canvas");
@@ -1552,12 +2378,94 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
     low.width = w;
     low.height = h;
     lowCtx = low.getContext("2d");
-    bg = el("canvas");
-    bg.width = w;
-    bg.height = h;
-    const bctx = bg.getContext("2d");
-    if (bctx) paintBackground(bctx, w, h);
+    bgs.clear();
+    tags.clear();
+    motion = null;
+    fade = null;
     lastWidth = cssW;
+  }
+
+  /** The still tray for a look at the current size, painted once and kept. */
+  function bgFor(look: TrayLook): { canvas: HTMLCanvasElement; data: Uint8ClampedArray } | null {
+    const hit = bgs.get(look.id);
+    if (hit) return hit;
+    const L = layout;
+    if (!L) return null;
+    const canvas = el("canvas");
+    canvas.width = L.w;
+    canvas.height = L.h;
+    const bctx = canvas.getContext("2d");
+    if (!bctx) return null;
+    const img = bctx.createImageData(L.w, L.h);
+    paintTray(img, look);
+    bctx.putImageData(img, 0, 0);
+    const made = { canvas, data: img.data };
+    bgs.set(look.id, made);
+    return made;
+  }
+
+  /** Draw the tray under the dice: from the cache, or, for a look that moves, a copy with this frame's motion laid over it. */
+  function drawTray(c: CanvasRenderingContext2D, now: number, still: boolean): void {
+    const L = layout as Layout;
+    const entry = bgFor(trayLook);
+    if (!entry) return;
+    if (!trayHasMotion(trayLook)) {
+      c.drawImage(entry.canvas, 0, 0);
+      return;
+    }
+    if (!motion) {
+      const canvas = el("canvas");
+      canvas.width = L.w;
+      canvas.height = L.h;
+      const mctx = canvas.getContext("2d");
+      if (!mctx) {
+        c.drawImage(entry.canvas, 0, 0);
+        return;
+      }
+      motion = { canvas, ctx: mctx, img: mctx.createImageData(L.w, L.h) };
+    }
+    motion.img.data.set(entry.data);
+    paintTrayEffects(motion.img, trayLook, now, still);
+    motion.ctx.putImageData(motion.img, 0, 0);
+    c.drawImage(motion.canvas, 0, 0);
+  }
+
+  /** The "who" plaque for the current look and text, cut once per size. */
+  function drawWho(c: CanvasRenderingContext2D): void {
+    if (!whoText || !layout) return;
+    const L = layout;
+    const key = `${trayLook.id}|${whoText}`;
+    let tagCanvas = tags.get(key);
+    if (!tagCanvas) {
+      const t = renderWhoTag(whoText, trayLook, L.w - 2 * (RIM + 4));
+      tagCanvas = el("canvas");
+      tagCanvas.width = t.w;
+      tagCanvas.height = t.h;
+      tagCanvas.getContext("2d")?.putImageData(new ImageData(t.data as Uint8ClampedArray<ArrayBuffer>, t.w, t.h), 0, 0);
+      if (tags.size > 12) tags.clear();
+      tags.set(key, tagCanvas);
+    }
+    const o = whoTagOrigin(tagCanvas.width, L.w);
+    c.drawImage(tagCanvas, o.x, o.y);
+  }
+
+  /** Put the tray in a look for this throw. A different tray look fades in over about 150 ms (instantly under reduced motion, or when `animate` is false). */
+  function applyLook(nextSkin: DiceSkin, nextLook: TrayLook, who: string | null, animate: boolean): void {
+    if (nextLook !== trayLook && animate && layout && low && !reducedMotion()) {
+      const snap = el("canvas");
+      snap.width = low.width;
+      snap.height = low.height;
+      snap.getContext("2d")?.drawImage(low, 0, 0);
+      fade = { from: snap, start: clock() };
+    }
+    skin = nextSkin;
+    trayLook = nextLook;
+    whoText = who && who.trim() ? who.trim() : null;
+  }
+
+  /** Back to the player's own skin and tray, with no plaque. */
+  function usePlayerLook(animate: boolean): void {
+    applyLook(playerSkin, PLAYER_LOOK, null, animate);
   }
 
   /** Where n dice rest and how far they may roam, for the current layout. */
@@ -1597,6 +2505,8 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
 
   function syncData(): void {
     root.dataset.skin = skin.id;
+    root.dataset.tray = trayLook.id;
+    root.dataset.who = whoText ?? "";
     root.dataset.dice = dice.map((d) => `${d.kind}=${d.result}`).join(",");
     root.dataset.text = caption ? [caption.label, caption.detail].filter(Boolean).join(" | ") : prompt && mode === "waiting" ? prompt : "";
   }
@@ -1642,13 +2552,14 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
   }
 
   function paint(now: number): void {
-    if (!layout || !ctx || !low || !lowCtx || !bg) return;
+    if (!layout || !ctx || !low || !lowCtx) return;
     const L = layout;
     const c = lowCtx;
     const still = reducedMotion();
     c.imageSmoothingEnabled = false;
     c.clearRect(0, 0, L.w, L.h);
-    c.drawImage(bg, 0, 0);
+    drawTray(c, now, still);
+    drawWho(c);
     const size = spriteSize;
     if (!sprite || sprite.width !== size) {
       sprite = el("canvas");
@@ -1681,6 +2592,16 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
     } else if (waiting && prompt && (still || tapped || now % 1300 < 1000)) {
       centred(textBitmap(fitLine(prompt, maxW), true, TEXT_GOLD), L.bandTop + (TEXT_BAND - CELL_H) / 2);
     }
+    // The look we just left fades out over the new one: about 150 ms, and never under reduced motion.
+    if (fade) {
+      const p = (now - fade.start) / FADE_MS;
+      if (p >= 1 || still) fade = null;
+      else {
+        c.globalAlpha = 1 - p;
+        c.drawImage(fade.from, 0, 0);
+        c.globalAlpha = 1;
+      }
+    }
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(low, 0, 0, L.w * L.kDev, L.h * L.kDev);
@@ -1711,6 +2632,13 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
     } else if (mode === "waiting") {
       paint(now);
       if (!reducedMotion()) schedule();
+    } else if ((mode === "settled" || mode === "empty") && !reducedMotion() && (trayHasMotion(trayLook) || fade)) {
+      // A settled tray in a look that moves (embers, a shimmer, a glow) keeps breathing: repainted at a slow rate, and not at all when the page is hidden (the browser stops the frames).
+      if (now - lastMotionPaint >= MOTION_FRAME_MS || fade) {
+        lastMotionPaint = now;
+        paint(now);
+      }
+      schedule();
     }
   }
 
@@ -1735,8 +2663,9 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
     caption = r.pending;
     setMode("settled");
     syncData();
-    live.textContent = sentence(dice, caption);
+    live.textContent = sentence(dice, caption, whoText);
     paint(clock());
+    if (trayHasMotion(trayLook) && !reducedMotion()) schedule();
     r.resolve();
   }
 
@@ -1787,6 +2716,7 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
       if (roll) finishRoll();
       endWait();
       if (!layout) measure();
+      usePlayerLook(true);
       tapped = false;
       prompt = promptText;
       caption = null;
@@ -1807,6 +2737,8 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
       const waitedAt = mode === "waiting" ? dice.map((d) => ({ x: d.x, y: d.y, rot: d.rest })) : null;
       endWait();
       if (!layout) measure();
+      // This throw's look: the foe's skin and tray when it asks for them (an unknown id is ignored), the player's own otherwise.
+      applyLook((req.skin !== undefined ? skinById(req.skin) : undefined) ?? playerSkin, (req.tray !== undefined ? trayLookById(req.tray) : undefined) ?? PLAYER_LOOK, req.who ?? null, true);
       tapped = false;
       prompt = null;
       caption = null;
@@ -1817,7 +2749,7 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
         caption = pending;
         setMode("settled");
         syncData();
-        live.textContent = sentence(list, caption);
+        live.textContent = sentence(list, caption, whoText);
         paint(clock());
         return Promise.resolve();
       }
@@ -1833,14 +2765,20 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
 
     setSkin(id: string): void {
       const next = findSkin(id);
-      if (destroyed || !next || next === skin) return;
-      skin = next;
+      if (destroyed || !next) return;
+      if (next === playerSkin && trayLook === PLAYER_LOOK) return;
+      playerSkin = next;
+      usePlayerLook(false);
       syncData();
       paint(clock());
     },
 
     skin(): DiceSkin {
-      return skin;
+      return playerSkin;
+    },
+
+    look(): TrayLook {
+      return trayLook;
     },
 
     skip(): void {
@@ -1855,6 +2793,7 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
       prompt = null;
       caption = null;
       dice = [];
+      usePlayerLook(false);
       setMode("empty");
       syncData();
       live.textContent = "";
@@ -1871,6 +2810,132 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
       root.remove();
     },
   };
+}
+
+// ---- a still of a tray, for other views --------------------------------------
+//
+// A small picture of a look with settled dice in it, composed at tray resolution
+// by the same painters the live tray uses (so the Bestiary, a shop shelf or the
+// contact sheet shows exactly what the tray will). Pure down to the pixels; only
+// renderTrayPreview touches the DOM.
+
+export interface TrayStillOptions {
+  /** The tray's size in tray pixels. Default 96 by 60 (at least 48 by 36). */
+  width?: number;
+  height?: number;
+  /** A "who" plaque, as the live tray draws it. */
+  who?: string;
+  /** The clock for a look that moves. Omit for one fixed frame with no motion. */
+  t?: number;
+}
+
+/** The tray in a look, with these dice settled on their results, as RGBA pixels. Pure. Unknown ids fall back to the player's tray and the first shop skin. */
+export function composeTrayDice(lookId: string, skinId: string, diceList: readonly { kind: DieKind; result: number }[], opts: TrayStillOptions = {}): PixelBuffer {
+  const w = Math.max(48, Math.floor(opts.width ?? 96));
+  const h = Math.max(36, Math.floor(opts.height ?? 60));
+  const look = trayLookById(lookId) ?? PLAYER_LOOK;
+  const skin = skinById(skinId) ?? (SKINS[0] as DiceSkin);
+  const buf: PixelBuffer = { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+  const data = buf.data;
+  paintTray(buf, look);
+  paintTrayEffects(buf, look, opts.t ?? 0, opts.t === undefined);
+  const who = opts.who && opts.who.trim() ? opts.who.trim() : null;
+  let tagH = 0;
+  if (who) {
+    const tag = renderWhoTag(who, look, w - 2 * (RIM + 4));
+    const o = whoTagOrigin(tag.w, w);
+    tagH = tag.h;
+    for (let y = 0; y < tag.h; y++) {
+      for (let x = 0; x < tag.w; x++) {
+        const k = (y * tag.w + x) * 4;
+        if (tag.data[k + 3] === 0) continue;
+        const i = ((o.y + y) * w + o.x + x) * 4;
+        data[i] = tag.data[k] as number;
+        data[i + 1] = tag.data[k + 1] as number;
+        data[i + 2] = tag.data[k + 2] as number;
+        data[i + 3] = 255;
+      }
+    }
+  }
+  const list = diceList.slice(0, 4);
+  const n = list.length;
+  if (n === 0) return buf;
+  const innerW = w - 2 * (RIM + 1);
+  const innerH = h - 2 * (RIM + 1);
+  const gap = 4;
+  const room = Math.max(16, innerH - 4 - (tagH > 0 ? Math.max(0, tagH - RIM - 1) : 0));
+  const size = Math.max(16, Math.min(SPRITE_CAP[Math.min(4, n)] as number, Math.floor((innerW - gap * (n + 1)) / n), room));
+  const total = n * size + (n - 1) * gap;
+  const cy = Math.round(h / 2 + (tagH > 0 ? Math.max(0, tagH - RIM - 1) / 2 : 0));
+  list.forEach((d, i) => {
+    const kind = d.kind;
+    const result = Math.min(DIE_SIDES[kind], Math.max(1, Math.round(d.result)));
+    const cx = Math.round(w / 2 - total / 2 + size / 2 + i * (size + gap));
+    // The soft shadow under the die, as the live tray draws it (a die at rest: solid).
+    const rx = Math.max(3, Math.round(size * 0.3));
+    const ry = Math.max(2, Math.round(size * 0.1));
+    const sy = Math.round(cy + size * 0.34);
+    for (let dy = -ry; dy <= ry; dy++) {
+      const half = Math.round(rx * Math.sqrt(1 - (dy / (ry + 0.5)) ** 2));
+      for (let dx = -half; dx <= half; dx++) {
+        const px = cx + dx;
+        const py = sy + dy;
+        if (px >= 0 && py >= 0 && px < w && py < h && data[(py * w + px) * 4 + 3] === 255) blend(data, py * w + px, [4, 16, 9], 0.5);
+      }
+    }
+    const sprite = renderDie(kind, restOrientation(kind, result), skin, size);
+    const ox = Math.round(cx - size / 2);
+    const oy = Math.round(cy - size / 2);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const k = (y * size + x) * 4;
+        if (sprite.data[k + 3] === 0) continue;
+        const px = ox + x;
+        const py = oy + y;
+        if (px < 0 || py < 0 || px >= w || py >= h) continue;
+        const j = (py * w + px) * 4;
+        data[j] = sprite.data[k] as number;
+        data[j + 1] = sprite.data[k + 1] as number;
+        data[j + 2] = sprite.data[k + 2] as number;
+        data[j + 3] = 255;
+      }
+    }
+  });
+  return buf;
+}
+
+/** One settled die in a tray look, as RGBA pixels. Pure; see composeTrayDice for several dice. */
+export function composeTrayStill(lookId: string, skinId: string, kind: DieKind, result: number, opts: TrayStillOptions = {}): PixelBuffer {
+  return composeTrayDice(lookId, skinId, [{ kind, result }], opts);
+}
+
+/**
+ * A small still of a tray look with one settled die in it, as a canvas: for the
+ * Bestiary, a shop shelf, anywhere a view wants to show what a foe's dice and tray
+ * look like. The canvas is exactly `width` by `height` pixels (default 96 by 60);
+ * pass `scale` (a whole number) to draw it up crisp, which multiplies both. Browser only.
+ */
+export function renderTrayPreview(lookId: string, skinId: string, kind: DieKind, result: number, opts: { width?: number; height?: number; scale?: number; who?: string } = {}): HTMLCanvasElement {
+  const buf = composeTrayStill(lookId, skinId, kind, result, { width: opts.width, height: opts.height, who: opts.who });
+  const k = Math.max(1, Math.floor(opts.scale ?? 1));
+  const src = document.createElement("canvas");
+  src.width = buf.width;
+  src.height = buf.height;
+  src.getContext("2d")?.putImageData(new ImageData(buf.data as Uint8ClampedArray<ArrayBuffer>, buf.width, buf.height), 0, 0);
+  if (k === 1) {
+    src.setAttribute("aria-hidden", "true");
+    return src;
+  }
+  const out = document.createElement("canvas");
+  out.width = buf.width * k;
+  out.height = buf.height * k;
+  const o = out.getContext("2d");
+  if (o) {
+    o.imageSmoothingEnabled = false;
+    o.drawImage(src, 0, 0, out.width, out.height);
+  }
+  out.setAttribute("aria-hidden", "true");
+  return out;
 }
 
 // ---- the skin picker --------------------------------------------------------

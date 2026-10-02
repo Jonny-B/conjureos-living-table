@@ -21,6 +21,18 @@ import { getGlyph } from "../scripts/asset-bench/pixelFont";
 import {
   DICE_SKINS,
   DIE_KINDS,
+  FOE_DICE_SKINS,
+  PLAYER_TRAY_ID,
+  TRAY_LOOKS,
+  composeTrayDice,
+  composeTrayStill,
+  paintTray,
+  paintTrayEffects,
+  renderWhoTag,
+  skinById,
+  trayLookById,
+  trayLookProblems,
+  type PixelBuffer,
   DIE_SIDES,
   IDENTITY,
   MIN_DIE_SIZE,
@@ -672,4 +684,182 @@ test("the tray never switches numerals off, and the only place the renderer can 
   const src = readFileSync(new URL("../scripts/asset-bench/dice.ts", import.meta.url), "utf8");
   const code = src.split(/\r?\n/).filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//"));
   assert.equal(code.some((l) => /numerals:\s*false/.test(l)), false, "no call in dice.ts passes numerals: false");
+});
+
+// ---- the tray looks (foe dice and foe trays) ----------------------------------
+
+function fnv(d: Uint8ClampedArray): string {
+  let h = 0x811c9dc5;
+  for (const b of d) {
+    h ^= b;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+function blank(w: number, h: number): PixelBuffer {
+  return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+}
+
+test("the player's tray paints exactly as it did before the foe looks existed (pinned by hash at four sizes)", () => {
+  // These hashes were taken from the painter as it stood at commit 52833f6c, before any tray look existed: wood rim, green felt.
+  const pinned: [number, number, string][] = [
+    [180, 100, "f3811e40"],
+    [140, 80, "e3e639bc"],
+    [96, 60, "d7ea2455"],
+    [121, 73, "7950ebbc"],
+  ];
+  const player = trayLookById(PLAYER_TRAY_ID) as NonNullable<ReturnType<typeof trayLookById>>;
+  for (const [w, h, want] of pinned) {
+    const buf = blank(w, h);
+    paintTray(buf, player);
+    assert.equal(fnv(buf.data), want, `${w}x${h}`);
+  }
+  // The player's tray has no motion, so reduced motion and the clock change nothing.
+  const a = blank(180, 100);
+  paintTray(a, player);
+  const before = fnv(a.data);
+  paintTrayEffects(a, player, 12345, false);
+  assert.equal(fnv(a.data), before);
+});
+
+test("the player's look is first in TRAY_LOOKS, ids are unique and valid, and every look is fit to use", () => {
+  assert.equal(TRAY_LOOKS[0]?.id, PLAYER_TRAY_ID);
+  const ids = TRAY_LOOKS.map((l) => l.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const look of TRAY_LOOKS) assert.deepEqual(trayLookProblems(look), [], look.id);
+  assert.equal(trayLookById("nope"), undefined);
+  assert.equal(trayLookById(undefined), undefined);
+  const broken = { ...(TRAY_LOOKS[0] as (typeof TRAY_LOOKS)[number]), id: "Bad Id", accent: "red" };
+  assert.ok(trayLookProblems(broken).length >= 2);
+});
+
+test("every tray look paints opaque inside its rounded rectangle and clear outside, deterministically, at any size", () => {
+  for (const look of TRAY_LOOKS) {
+    for (const [w, h] of [[180, 100], [140, 80], [121, 73]] as const) {
+      const a = blank(w, h);
+      const b = blank(w, h);
+      // Poison one buffer first: the painter must overwrite every byte, not rely on a zeroed buffer.
+      b.data.fill(77);
+      paintTray(a, look);
+      paintTray(b, look);
+      assert.deepEqual(a.data, b.data, `${look.id} ${w}x${h} deterministic and does not depend on what was there`);
+      // The four extreme corner pixels are outside the rounded corner; the middle is felt.
+      for (const [x, y] of [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]] as const) assert.equal(a.data[(y * w + x) * 4 + 3], 0, `${look.id} corner clear`);
+      assert.equal(a.data[((h >> 1) * w + (w >> 1)) * 4 + 3], 255);
+      let opaque = 0;
+      for (let i = 0; i < w * h; i++) {
+        const al = a.data[i * 4 + 3] as number;
+        assert.ok(al === 0 || al === 255, `${look.id}: pixels are opaque or clear`);
+        if (al) opaque++;
+      }
+      assert.ok(opaque > w * h * 0.95, `${look.id}: the tray fills its rectangle`);
+    }
+  }
+});
+
+test("no two tray looks paint the same tray (tiers, accents and dragon colours are all different)", () => {
+  const seen = new Map<string, string>();
+  for (const look of TRAY_LOOKS) {
+    const buf = blank(180, 100);
+    paintTray(buf, look);
+    const h = fnv(buf.data);
+    assert.equal(seen.get(h), undefined, `${look.id} paints the same as ${seen.get(h)}`);
+    seen.set(h, look.id);
+  }
+});
+
+test("effects: only the pixels they name change, never an outside pixel or an alpha, and the still frame ignores the clock", () => {
+  const moving = TRAY_LOOKS.filter((l) => l.effects.length > 0);
+  assert.ok(moving.length >= 10, "tiers 4 and 5 and the undead glow all move");
+  for (const look of moving) {
+    const base = blank(180, 100);
+    paintTray(base, look);
+    const a = blank(180, 100);
+    a.data.set(base.data);
+    paintTrayEffects(a, look, 5000, false);
+    let changed = 0;
+    for (let i = 0; i < 180 * 100; i++) {
+      assert.equal(a.data[i * 4 + 3], base.data[i * 4 + 3], `${look.id}: alpha untouched`);
+      if (base.data[i * 4 + 3] === 0) assert.equal(a.data[i * 4], 0, `${look.id}: outside untouched`);
+      if (a.data[i * 4] !== base.data[i * 4] || a.data[i * 4 + 1] !== base.data[i * 4 + 1] || a.data[i * 4 + 2] !== base.data[i * 4 + 2]) changed++;
+    }
+    assert.ok(changed > 20, `${look.id}: its motion is visible (${changed} pixels)`);
+    // Reduced motion: one fixed frame whatever the clock says.
+    const s1 = blank(180, 100);
+    s1.data.set(base.data);
+    paintTrayEffects(s1, look, 100, true);
+    const s2 = blank(180, 100);
+    s2.data.set(base.data);
+    paintTrayEffects(s2, look, 987654, true);
+    assert.deepEqual(s1.data, s2.data, `${look.id}: the still frame does not move`);
+    // And the moving frame does move.
+    const m1 = blank(180, 100);
+    m1.data.set(base.data);
+    paintTrayEffects(m1, look, 0, false);
+    const m2 = blank(180, 100);
+    m2.data.set(base.data);
+    paintTrayEffects(m2, look, 1700, false);
+    assert.notDeepEqual(m1.data, m2.data, `${look.id}: it animates`);
+  }
+});
+
+test("foe skins are separate from the shop: none is in DICE_SKINS, all are free, valid and unique, and skinById finds both lists", () => {
+  const shop = new Set(DICE_SKINS.map((s) => s.id));
+  const ids = FOE_DICE_SKINS.map((s) => s.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const s of FOE_DICE_SKINS) {
+    assert.equal(shop.has(s.id), false, `${s.id} must not be in the shop`);
+    assert.deepEqual(skinProblems(s), [], s.id);
+    assert.equal(s.priceCredits, 0);
+    assert.equal(skinById(s.id), s);
+  }
+  for (const s of DICE_SKINS) assert.equal(skinById(s.id), s);
+  assert.equal(skinById("nope"), undefined);
+});
+
+test("composeTrayStill is the asked size, shows the die and its numeral, and the who plaque", () => {
+  const skin = FOE_DICE_SKINS.find((s) => s.id === "foe-die-t1") as DiceSkin;
+  const look = "foe-tray-t1";
+  const bare = blank(96, 60);
+  paintTray(bare, trayLookById(look) as NonNullable<ReturnType<typeof trayLookById>>);
+  const still = composeTrayStill(look, skin.id, "d20", 20);
+  assert.equal(still.width, 96);
+  assert.equal(still.height, 60);
+  assert.equal(still.data.length, 96 * 60 * 4);
+  assert.notDeepEqual(still.data, bare.data);
+  const [nr, ng, nb] = hex(skin.numeral);
+  let numeral = 0;
+  for (let i = 0; i < 96 * 60; i++) if (still.data[i * 4] === nr && still.data[i * 4 + 1] === ng && still.data[i * 4 + 2] === nb) numeral++;
+  assert.ok(numeral >= 8, `the 20 is on screen (${numeral} numeral pixels)`);
+  const big = composeTrayStill(look, skin.id, "d6", 6, { width: 180, height: 100 });
+  assert.equal(big.width, 180);
+  assert.equal(big.height, 100);
+  assert.equal(composeTrayStill(look, skin.id, "d6", 6, { width: 10, height: 10 }).width, 48, "tiny sizes are raised to the smallest that holds a die");
+  // The plaque changes the pixels along the top and nothing outside the tray.
+  const withWho = composeTrayStill(look, skin.id, "d20", 20, { width: 180, height: 100, who: "The goblin rolls" });
+  const without = composeTrayStill(look, skin.id, "d20", 20, { width: 180, height: 100 });
+  let top = 0;
+  for (let x = 0; x < 180; x++) if (withWho.data[(2 * 180 + x) * 4] !== without.data[(2 * 180 + x) * 4]) top++;
+  assert.ok(top > 20, "the plaque is on the top rim");
+  // Unknown ids fall back rather than throw.
+  assert.equal(composeTrayStill("nope", "nope", "d6", 3).width, 96);
+  // Four dice at most.
+  const five = composeTrayDice(look, skin.id, [1, 2, 3, 4, 5].map((r) => ({ kind: "d6" as const, result: r })), { width: 180, height: 100 });
+  assert.equal(five.data.length, 180 * 100 * 4);
+});
+
+test("the who plaque is lettered in the look's accent colour, fits the width it is given, and is pure", () => {
+  const look = trayLookById("foe-tray-t4") as NonNullable<ReturnType<typeof trayLookById>>;
+  const a = renderWhoTag("The troll rolls", look, 160);
+  const b = renderWhoTag("The troll rolls", look, 160);
+  assert.deepEqual(a.data, b.data);
+  assert.ok(a.w <= 160 && a.h <= 16, `${a.w}x${a.h}`);
+  const narrow = renderWhoTag("The extremely long named thing rolls and rolls", look, 60);
+  assert.ok(narrow.w <= 60, `cut to fit: ${narrow.w}`);
+  // Some of the lettering is the accent colour itself (the lower tone of the two-tone ink).
+  const [r, g, bl] = hex(look.accent);
+  let accent = 0;
+  for (let i = 0; i < a.w * a.h; i++) if (a.data[i * 4] === r && a.data[i * 4 + 1] === g && a.data[i * 4 + 2] === bl) accent++;
+  assert.ok(accent > 10, `accent pixels: ${accent}`);
 });

@@ -1,6 +1,6 @@
 /**
  * The bench's on-screen text layer: banners, floating damage numbers, roll
- * plates, the dialogue box, the initiative strip and toasts, drawn as DOM over
+ * plates, the story strip, the initiative strip and toasts, drawn as DOM over
  * the Play canvas. "The canvas paints sprites, DOM paints type": the game's own
  * rule (the LivingTable.tsx readout comment), so this layer never touches the
  * board's pixels.
@@ -43,7 +43,7 @@
  * Node for validation), and this file must never be imported by src/.
  */
 import type { RollReadout } from "../../src/games/livingtable/render/canvasRenderer";
-import { CELL_H, LINE_GAP, cssScale, deviceScale, fitScale, pixelText, textWidth, wrapWidth, type PixelColor, type PixelRun, type PixelTextOptions } from "./pixelFont";
+import { CELL_H, LINE_GAP, cssScale, deviceScale, fitScale, pixelText, textWidth, wrapText, wrapWidth, type PixelColor, type PixelRun, type PixelTextOptions, type PixelWeight } from "./pixelFont";
 import { attachTip, type TipContent } from "./tip";
 
 export type { TipContent } from "./tip";
@@ -63,6 +63,8 @@ export interface DialogueLine {
   speaker?: string;
   text: string;
   tone?: DialogueTone;
+  /** Stays on the board until the next action (dismissStory) instead of fading after its reading time: "You are down". Default false. */
+  sticky?: boolean;
 }
 /** Which team a combatant is on, for colour coding the turn-order strip. */
 export type InitiativeSide = "hero" | "enemy";
@@ -101,8 +103,14 @@ export interface Overlay {
   float(at: OverlayPoint, text: string, kind: FloatKind): void;
   /** The d20 maths near a point. Plates queue and never overwrite one another. */
   rollPlate(at: OverlayPoint, readout: PlateReadout): void;
-  /** A line in the dialogue box at the bottom of the board. 2 to 3 lines show; the history scrolls. */
+  /**
+   * A line in the story strip at the bottom of the board: creature speech and the like, not results (the dice tray and the
+   * HUD log carry those). Each line fades after a reading time (stripHoldMs), at most two show at once (one on a phone while the
+   * DM narration is up; the oldest fades first), a click on the strip clears it, and the box goes away when it is empty.
+   */
   say(line: DialogueLine): void;
+  /** Fade the strip's lines now: all of them, or with `stickyOnly` just the ones that were kept ("You are down") for the next action. */
+  dismissStory(opts?: { stickyOnly?: boolean }): void;
   /**
    * The DM's voice at the bottom of the board, above the dialogue box: a parchment box in storybook, a gold pixel frame
    * in pixel, tagged "DM" (or the speaker). It shows a "..." while there is no text yet, follows streamed text through
@@ -113,7 +121,7 @@ export interface Overlay {
   initiative(entries: readonly InitiativeEntry[], activeId: string | null, round: number): void;
   /** A short notice, for refused clicks. */
   toast(text: string): void;
-  /** Drop everything on screen (banners resolve at once), the dialogue history and the initiative strip included. */
+  /** Drop everything on screen (banners resolve at once), the story strip and the initiative strip included. */
   clear(): void;
   destroy(): void;
 }
@@ -143,7 +151,16 @@ const PLATE_HOLD_QUEUED_MS = 1100;
 const PLATE_OUT_MS = 220;
 const TOAST_MS = 1900;
 const TOAST_FADE_MS = 200;
-const HISTORY_LIMIT = 80;
+/** The story strip: a line stays about 3.5 s plus 40 ms a character (capped at 9 s), then fades and shrinks away. */
+const STRIP_BASE_MS = 3500;
+const STRIP_PER_CHAR_MS = 40;
+const STRIP_MAX_MS = 9000;
+/** Under reduced motion nothing animates, so the reading time is longer (it still clears). */
+const STRIP_REDUCED_FACTOR = 1.5;
+const STRIP_REDUCED_MAX_MS = 13500;
+const STRIP_OUT_MS = 450;
+const STRIP_EVICT_MS = 250;
+export const STRIP_MAX_LINES = 2;
 const NARRATION_BASE_MS = 2500;
 const NARRATION_PER_CHAR_MS = 45;
 const NARRATION_MAX_MS = 12000;
@@ -258,6 +275,41 @@ export function verdictWords(r: Pick<PlateReadout, "hit" | "critical" | "fumble"
 /** How long a finished narration box stays up for reading: about 2.5 s plus 45 ms a character, never more than 12 s. */
 export function narrationHoldMs(chars: number): number {
   return Math.min(NARRATION_MAX_MS, NARRATION_BASE_MS + NARRATION_PER_CHAR_MS * Math.max(0, chars));
+}
+
+/**
+ * How long a story-strip line stays up before it fades: about 3.5 s plus 40 ms a character, never more than 9 s. Under reduced
+ * motion (`still`) it is half as long again, up to 13.5 s, but it still clears.
+ */
+export function stripHoldMs(chars: number, still = false): number {
+  const ms = Math.min(STRIP_MAX_MS, STRIP_BASE_MS + STRIP_PER_CHAR_MS * Math.max(0, chars));
+  return still ? Math.min(STRIP_REDUCED_MAX_MS, Math.round(ms * STRIP_REDUCED_FACTOR)) : ms;
+}
+
+/** How many story lines the board shows at once: two, or one on a phone-width board while the DM narration is up. */
+export function stripMaxLines(size: "s" | "m" | "l", narrating: boolean): number {
+  return size === "s" && narrating ? 1 : STRIP_MAX_LINES;
+}
+
+/**
+ * Which story lines must fade now so no more than `max` stay. `sticky` is per visible line, oldest first. The oldest go first, and a
+ * kept (sticky) line outlasts an ordinary one. Returns indices into `sticky`, ascending.
+ */
+export function stripOverflow(sticky: readonly boolean[], max: number): number[] {
+  let excess = sticky.length - Math.max(0, max);
+  if (excess <= 0) return [];
+  const drop: number[] = [];
+  for (let i = 0; i < sticky.length && excess > 0; i++) {
+    if (sticky[i]) continue;
+    drop.push(i);
+    excess--;
+  }
+  for (let i = 0; i < sticky.length && excess > 0; i++) {
+    if (!sticky[i]) continue;
+    drop.push(i);
+    excess--;
+  }
+  return drop.sort((a, b) => a - b);
 }
 
 /**
@@ -446,9 +498,9 @@ const CSS = `
 .lto-px .lto-chip .lto-caret{position:absolute;left:50%;bottom:-17px;transform:translateX(-50%)}
 .lto-px .lto-round{flex:none;padding:0 3px;display:flex;align-items:center}
 .lto-px .lto-toast{padding:0 3px}
-.lto-px .lto-dlg{width:min(760px,100%);padding:0 2px;pointer-events:auto}
+.lto-px .lto-dlg{width:min(760px,100%);padding:0 2px;pointer-events:auto;cursor:pointer;transform-origin:50% 100%}
 .lto-px .lto-dlg-scroll{max-height:calc(var(--lto-lines)*var(--lto-row,20px));overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:#4d5da6 #05061a}
-.lto-px .lto-line:nth-last-child(n+4){opacity:.62}
+.lto-px .lto-line{overflow:hidden}
 .lto-px .lto-roll{padding:2px 4px;display:flex;flex-direction:column;align-items:center;gap:5px}
 .lto-px .lto-math{display:flex;align-items:flex-end;gap:12px}
 .lto-px .lto-math.is-tight{gap:6px}
@@ -480,10 +532,9 @@ const CSS = `
   paint-order:stroke fill;-webkit-text-stroke:.6px rgb(0 0 0/.7);text-shadow:0 1px 0 rgb(0 0 0/.5),0 2px 4px rgb(0 0 0/.5);font-variant-numeric:lining-nums tabular-nums}
 .lto-sb .lto-toast{padding:6px 14px;font-size:14px;font-weight:700;border-radius:999px;border-color:var(--sb-bad);
   box-shadow:0 0 0 1px rgb(var(--sb-shade)/.55),0 6px 16px rgb(0 0 0/.45),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-bad)}
-.lto-sb .lto-dlg{width:min(760px,100%);padding:6px 12px 6px 14px;pointer-events:auto;border-radius:10px}
+.lto-sb .lto-dlg{width:min(760px,100%);padding:6px 12px 6px 14px;pointer-events:auto;border-radius:10px;cursor:pointer;transform-origin:50% 100%}
 .lto-sb .lto-dlg-scroll{max-height:calc(var(--lto-lines)*1.4em);font-size:15px;line-height:1.4;overflow-y:auto;overflow-x:hidden;padding-right:6px;scrollbar-width:thin;scrollbar-color:var(--sb-rule) transparent}
-.lto-sb .lto-line{color:var(--sb-ink);overflow-wrap:anywhere}
-.lto-sb .lto-line:nth-last-child(n+4){opacity:.62}
+.lto-sb .lto-line{color:var(--sb-ink);overflow-wrap:anywhere;overflow:hidden}
 .lto-sb .lto-line b{color:var(--sb-spk);font-variant:small-caps;letter-spacing:.06em;margin-right:.4em}
 .lto-sb .lto-line[data-tone="good"]{color:var(--sb-good)}.lto-sb .lto-line[data-tone="bad"]{color:var(--sb-bad)}
 .lto-sb .lto-roll{padding:9px 14px 10px;display:flex;flex-direction:column;align-items:center;gap:6px;max-width:100%}
@@ -593,7 +644,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
   dlg.hidden = true;
   dlg.tabIndex = 0;
   dlg.setAttribute("role", "group");
-  dlg.setAttribute("aria-label", "Dialogue history");
+  dlg.setAttribute("aria-label", "Story, activate to dismiss");
+  dlg.title = "Click to dismiss";
   const dlgScroll = el("div", "lto-dlg-scroll");
   dlg.append(dlgScroll);
   const narrHost = el("div", "lto-narr-host");
@@ -613,7 +665,16 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
   frameVars();
 
   // ---- state
-  const dialogue: DialogueLine[] = [];
+  /** The story strip: the lines on the board now, oldest first. A fading line stays in the list until it is gone. */
+  interface StripEntry {
+    line: DialogueLine;
+    node: HTMLElement;
+    fading: boolean;
+    epoch: number;
+  }
+  const strip: StripEntry[] = [];
+  /** The fade of the whole box, running while its last line leaves. */
+  let boxFade: Animation | null = null;
   let initState: { entries: readonly InitiativeEntry[]; activeId: string | null; round: number } = { entries: [], activeId: null, round: 1 };
   let recent: RecentFloat[] = [];
   let tier: "s" | "m" | "l" = "l";
@@ -707,6 +768,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
       renderDialogue();
       renderInitiative();
       if (narr && !narr.closed) renderNarration(narr);
+      enforceStripMax();
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
     else run();
@@ -1146,17 +1208,20 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     return node;
   }
 
+  /** Rebuild the strip for the current style and width (a resize, a style switch). Lines that were already leaving are dropped. */
   function renderDialogue(): void {
-    dlg.hidden = dialogue.length === 0;
-    if (dialogue.length === 0) {
+    for (let i = strip.length - 1; i >= 0; i--) if (strip[i]?.fading) strip.splice(i, 1);
+    boxFade?.cancel();
+    boxFade = null;
+    dlg.hidden = strip.length === 0;
+    if (strip.length === 0) {
       dlgScroll.replaceChildren();
       return;
     }
     frameDialogue();
-    // A re-render (a resize, a style switch) keeps the reader where they were, measured from the newest line.
-    const fromBottom = dlgScroll.scrollHeight - dlgScroll.scrollTop - dlgScroll.clientHeight;
-    dlgScroll.replaceChildren(...dialogue.map(lineNode));
-    dlgScroll.scrollTop = Math.max(0, dlgScroll.scrollHeight - dlgScroll.clientHeight - Math.max(0, fromBottom < 14 ? 0 : fromBottom));
+    for (const e of strip) e.node = lineNode(e.line);
+    dlgScroll.replaceChildren(...strip.map((e) => e.node));
+    dlgScroll.scrollTop = dlgScroll.scrollHeight;
   }
 
   function frameDialogue(): void {
@@ -1165,25 +1230,89 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     else dlg.classList.add("lto-plate");
   }
 
+  /** Fade lines out until no more than the allowed number stay (see stripMaxLines): the oldest, ordinary ones first. */
+  function enforceStripMax(): void {
+    const live = strip.filter((e) => !e.fading);
+    const max = stripMaxLines(tier, !!narr && !narr.closed);
+    for (const i of stripOverflow(live.map((e) => !!e.line.sticky), max)) {
+      const e = live[i];
+      if (e) void retireLine(e, STRIP_EVICT_MS);
+    }
+  }
+
+  /** Fade one line and shrink it away. When it is the last one on the board the whole box goes with it. */
+  async function retireLine(entry: StripEntry, ms = STRIP_OUT_MS): Promise<void> {
+    if (destroyed || entry.fading || entry.epoch !== epoch || !strip.includes(entry)) return;
+    entry.fading = true;
+    const still = reduced();
+    const last = strip.every((e) => e.fading);
+    const h = entry.node.offsetHeight;
+    const out = still ? 120 : ms;
+    const ends: Promise<void>[] = [
+      play(
+        entry.node,
+        still ? [{ opacity: 1 }, { opacity: 0 }] : [{ opacity: 1, height: `${h}px` }, { opacity: 0, height: `${h}px`, offset: 0.7 }, { opacity: 0, height: "0px" }],
+        out,
+        "ease-in",
+      ),
+    ];
+    if (last) {
+      const fade = start(dlg, still ? [{ opacity: 1 }, { opacity: 0 }] : [{ opacity: 1, transform: "scale(1)" }, { opacity: 0, transform: "scale(0.92)" }], out, "ease-in");
+      boxFade = fade.anim;
+      ends.push(fade.done);
+    }
+    await Promise.all(ends);
+    // A clear(), a re-render or a newer line may have got there first.
+    const at = strip.indexOf(entry);
+    if (at < 0) return;
+    strip.splice(at, 1);
+    entry.node.remove();
+    if (strip.length === 0) {
+      boxFade?.cancel();
+      boxFade = null;
+      dlg.hidden = true;
+    }
+  }
+
   function say(line: DialogueLine): void {
     if (destroyed) return;
-    dialogue.push(line);
-    while (dialogue.length > HISTORY_LIMIT) dialogue.shift();
     announce(line.speaker ? `${line.speaker}: ${line.text}` : line.text);
-    const wasHidden = dlg.hidden;
-    if (wasHidden) {
+    // A newer line saves the box from a fade that was only waiting on the old last line.
+    boxFade?.cancel();
+    boxFade = null;
+    if (dlg.hidden) {
       dlg.hidden = false;
       frameDialogue();
     }
-    const stick = wasHidden || dlgScroll.scrollHeight - dlgScroll.scrollTop - dlgScroll.clientHeight < 14;
-    const node = lineNode(line);
-    dlgScroll.appendChild(node);
-    while (dlgScroll.childElementCount > HISTORY_LIMIT) dlgScroll.firstElementChild?.remove();
-    if (stick) dlgScroll.scrollTop = dlgScroll.scrollHeight;
-    if (!reduced() && typeof node.animate === "function") {
-      void play(node, [{ opacity: 0, transform: "translateY(5px)" }, { opacity: 1, transform: "translateY(0)" }], 160, "ease-out");
+    const entry: StripEntry = { line, node: lineNode(line), fading: false, epoch };
+    strip.push(entry);
+    dlgScroll.appendChild(entry.node);
+    dlgScroll.scrollTop = dlgScroll.scrollHeight;
+    enforceStripMax();
+    if (!reduced() && typeof entry.node.animate === "function") {
+      void play(entry.node, [{ opacity: 0, transform: "translateY(5px)" }, { opacity: 1, transform: "translateY(0)" }], 160, "ease-out");
+    }
+    if (!line.sticky) {
+      const chars = (line.speaker ? line.speaker.length + 2 : 0) + line.text.length;
+      void wait(stripHoldMs(chars, reduced())).then(() => {
+        if (!destroyed && entry.epoch === epoch) void retireLine(entry);
+      });
     }
   }
+
+  function dismissStory(opts: { stickyOnly?: boolean } = {}): void {
+    if (destroyed) return;
+    for (const e of strip.filter((x) => !x.fading && (!opts.stickyOnly || x.line.sticky))) void retireLine(e);
+  }
+
+  // A click (or Enter, Space, Escape on the focused strip) sends the lines away; the bench's own keys never see those presses.
+  dlg.addEventListener("click", () => dismissStory());
+  dlg.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" && e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    e.stopPropagation();
+    dismissStory();
+  });
 
   // ---- initiative strip
 
@@ -1397,6 +1526,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     root.dataset.narrating = "1";
     narrHost.append(node);
     renderNarration(n);
+    enforceStripMax();
     const closeNow = (): void => void retireNarration(n, NARRATION_CLOSE_MS);
     node.addEventListener("click", closeNow);
     node.addEventListener("keydown", (e) => {
@@ -1456,7 +1586,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     delete root.dataset.narrating;
     dlgScroll.replaceChildren();
     dlg.hidden = true;
-    dialogue.length = 0;
+    strip.length = 0;
+    boxFade = null;
     initState = { entries: [], activeId: null, round: 1 };
     renderInitiative();
     live.replaceChildren();
@@ -1485,7 +1616,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     internals.delete(api);
   }
 
-  const api: Overlay = { setStyle, banner, float, rollPlate, say, narrate, initiative, toast, clear, destroy };
+  const api: Overlay = { setStyle, banner, float, rollPlate, say, dismissStory, narrate, initiative, toast, clear, destroy };
   internals.set(api, { host, root });
   applyStyleClass();
   measure();
@@ -1577,6 +1708,13 @@ export interface HudAction {
   enabled: boolean;
   /** Draw attention: the thing to press now (End turn once nothing else is left). */
   emphasis?: boolean;
+  /** Not drawn at all (an Attack with nothing in reach). The buttons left close up over it; this is not the greyed-out look, that is `enabled: false`. */
+  hidden?: boolean;
+  /**
+   * "builtin" (the default) is one of the game's own buttons, in the grid. "suggestion" is drawn in the DM's row of next moves,
+   * the same as an entry of HudState.options.
+   */
+  kind?: "builtin" | "suggestion";
 }
 export interface HudBar {
   id: string;
@@ -1597,6 +1735,25 @@ export interface PackSection {
  * focus or a tap, in the HUD's current text style, inside the game window). A plain string has no help.
  */
 export type PackItem = string | { text: string; tip?: TipContent };
+/** One of the DM's suggested next moves: a button that, pressed, is the same as typing the label. Its key is shown on it (default 1 to 4 by position). */
+export interface HudOption {
+  id: string;
+  label: string;
+  key?: string;
+}
+export type LogTone = "good" | "bad" | "plain" | "dm";
+/** One line of the log drawer: a roll, a find, a line of narration. */
+export interface HudLogLine {
+  text: string;
+  tone?: LogTone;
+}
+/** One entry of the saves drawer. Pressing Load calls onAction("load:" + id). */
+export interface HudSave {
+  id: string;
+  label: string;
+  detail?: string;
+  canLoad: boolean;
+}
 export interface HudState {
   /** One line on top: "Round 2, your turn", "Exploring". */
   title: string;
@@ -1610,15 +1767,37 @@ export interface HudState {
    * DM answers and shows `status` (default "The DM is thinking...") under it.
    */
   ask?: { enabled: boolean; placeholder?: string; status?: string; busy?: boolean };
-  /** The hero's things. With it the HUD has a "Pack (I)" button that shows or hides them inside the panel. */
+  /** The hero's things. With it the HUD has a "Pack (I)" button that shows or hides them in the drawer. */
   pack?: { sections: readonly PackSection[] };
+  /**
+   * The DM's suggested next moves, as a row of buttons above the built-in ones (labels up to 32 characters, at most 4 shown, keys 1 to 4).
+   * Empty or absent: the row is not there at all. Pressing one calls onAction(option.id).
+   */
+  options?: readonly HudOption[];
+  /** Everything that happened, oldest first. With it the HUD has a "Log (L)" button; the drawer shows the newest at the bottom. */
+  log?: readonly HudLogLine[];
+  /** The save points. With it the HUD has a "Saves" button; the drawer lists them, each with a Load button. */
+  saves?: readonly HudSave[];
 }
+export type DrawerTab = "pack" | "log" | "saves";
 export interface Hud {
   setStyle(style: TextStyle): void;
   render(state: HudState): void;
   /** Show or hide the pack list. Does nothing while the state has no `pack`. */
   togglePack(): void;
+  /** Show or hide the log. Does nothing while the state has no `log`. */
+  toggleLog(): void;
+  /** Show or hide the saves list. Does nothing while the state has no `saves`. */
+  toggleSaves(): void;
+  /** Open the drawer on a tab (switching from another). Does nothing while the state has none of that tab's part. */
+  openDrawer(tab: DrawerTab): void;
+  closeDrawer(): void;
   isPackOpen(): boolean;
+  isDrawerOpen(): boolean;
+  /** The tab showing, or null when the drawer is shut. */
+  drawerTab(): DrawerTab | null;
+  /** A small note under the drawer buttons ("+ a few tarnished copper coins") that fades after about 3 s. At most two show; the oldest goes first. */
+  notice(text: string, tone?: "good" | "bad" | "plain"): void;
   destroy(): void;
 }
 
@@ -1636,7 +1815,7 @@ const HUD_CSS = `
 .lto-hud-btn:disabled{cursor:default;opacity:.42}
 .lto-hud-btn:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
 .lto-hud-key{opacity:.75}
-.lto-hud-pack{display:flex;flex-direction:column;gap:6px;margin-top:2px;padding-top:6px}
+.lto-hud-pack,.lto-hud-logview,.lto-hud-savesview{display:flex;flex-direction:column;gap:6px;min-width:0}
 .lto-hud-pack-list{position:relative;max-height:176px;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:7px;padding-right:4px;scrollbar-width:thin}
 .lto-hud-sec{display:flex;flex-direction:column;gap:2px;min-width:0}
 .lto-hud-row{min-width:0;padding:1px 4px;overflow-wrap:anywhere}
@@ -1658,14 +1837,12 @@ const HUD_CSS = `
 .lto-hud-input{appearance:none;display:block;margin:0;width:100%;min-width:0;min-height:42px;padding:6px 10px;font:16px/1.25 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:inherit}
 .lto-hud-input:disabled{opacity:.55}
 .lto-hud-input:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
-.lto-px .lto-hud-pack{border-top:2px solid #4d5da6}
 .lto-px .lto-hud-pack-list{scrollbar-color:#4d5da6 #05061a}
 .lto-px .lto-hud-seclabel canvas,.lto-px .lto-hud-item canvas{display:block}
 .lto-px .lto-hud-input{color:#f4ecd0;background:#141a3c}
 .lto-px .lto-hud-input.lto-fr{padding:2px 4px}
 .lto-px .lto-hud-input::placeholder{color:#98a5d8;opacity:1}
 .lto-px .lto-hud-btn[data-new="true"]::after{border-radius:0}
-.lto-sb .lto-hud-pack{border-top:1px solid var(--sb-rule)}
 .lto-sb .lto-hud-pack-list{scrollbar-color:var(--sb-rule) transparent}
 .lto-sb .lto-hud-seclabel{font:700 12px/1.2 var(--lto-serif);letter-spacing:.07em;text-transform:uppercase;color:var(--sb-spk)}
 .lto-sb .lto-hud-item{font:14px/1.3 var(--lto-serif);color:var(--sb-ink)}
@@ -1684,7 +1861,125 @@ const HUD_CSS = `
 .lto-sb .lto-hud-btn{border-radius:9px;background:linear-gradient(180deg,var(--sb-paper),var(--sb-paper2));border:1px solid var(--sb-rule);box-shadow:inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold);font:700 15px/1 var(--lto-serif);color:var(--sb-ink)}
 .lto-sb .lto-hud-btn.is-now:not(:disabled){box-shadow:0 0 0 3px var(--sb-gold),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold)}
 .lto-sb .lto-hud-key{font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:2px 5px;border:1px solid currentColor;border-radius:4px}
+.lto-hud-next{display:flex;flex-direction:column;gap:4px;min-width:0}
+.lto-hud-next-label{padding:0 2px}
+.lto-sb .lto-hud-next-label{font:700 11px/1.1 var(--lto-serif);letter-spacing:.1em;text-transform:uppercase;color:var(--sb-spk)}
+.lto-hud-next-list{display:grid;grid-template-columns:repeat(var(--cols,1),minmax(0,1fr));gap:6px}
+.lto-hud-next-list>.lto-hud-btn:last-child:nth-child(odd){grid-column:1/-1}
+.lto-hud-opt{justify-content:flex-start;gap:8px;text-align:left;align-items:center}
+.lto-hud-opt .lto-hud-key{flex:none}
+.lto-hud-opt-label{min-width:0;flex:1 1 auto;overflow-wrap:anywhere}
+.lto-hud-opt-label canvas{display:block}
+.lto-sb .lto-hud-opt{font:600 14px/1.2 var(--lto-serif);border-color:var(--sb-gold);padding-left:14px;box-shadow:inset 5px 0 0 var(--sb-gold),inset 0 0 0 1px var(--sb-paper),0 0 0 1px rgb(var(--sb-shade)/.3)}
+.lto-sb .lto-hud-opt-label{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.lto-hud-actions>.lto-hud-btn:last-child:nth-child(odd){grid-column:1/-1}
+.lto-hud-drawer-btns{display:grid;grid-template-columns:repeat(var(--n,3),minmax(0,1fr));gap:6px}
+.lto-hud-tab{position:relative;min-height:36px;padding:4px 8px}
+.lto-px .lto-hud-tab{padding:4px 6px}
+.lto-hud-tab[data-new="true"]::after{position:absolute;top:2px;right:2px;width:7px;height:7px}
+.lto-px .lto-hud-tab[data-new="true"]::after{top:0;right:0;width:6px;height:6px}
+.lto-sb .lto-hud-btn.is-open{box-shadow:0 0 0 3px var(--sb-gold),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold)}
+.lto-hud-drawer{display:flex;flex-direction:column;gap:6px;padding:8px 10px;min-width:0}
+.lto-hud-notices{display:flex;flex-direction:column;gap:4px;align-items:flex-start;min-width:0}
+.lto-hud-notice{max-width:100%;min-width:0;padding:2px 10px;overflow-wrap:anywhere}
+.lto-px .lto-hud-notice{padding:0 3px}
+.lto-px .lto-hud-notice canvas{display:block}
+.lto-sb .lto-hud-notice{border-radius:999px;box-shadow:0 0 0 1px rgb(var(--sb-shade)/.4),0 3px 8px rgb(0 0 0/.3),inset 0 0 0 1px var(--sb-gold)}
+.lto-hud-logrow{min-width:0;padding:1px 4px;overflow-wrap:anywhere}
+.lto-hud-logrow[data-tone="dm"]{padding-left:8px;box-shadow:inset 2px 0 0 #ffc72a}
+.lto-hud-save{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:2px 4px}
+.lto-hud-save-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lto-hud-load{min-height:34px;padding:4px 12px;justify-content:center}
+.lto-px .lto-hud-load canvas{display:block}
+.lto-hud-tab canvas,.lto-hud-opt canvas{flex:none}
+.lto-sb .lto-hud-tone-good{color:var(--sb-good)}
+.lto-sb .lto-hud-tone-bad{color:var(--sb-bad)}
+.lto-sb .lto-hud-tone-dm{color:var(--sb-spk);font-style:italic}
 `;
+
+// ---- the HUD's pure helpers (unit tested) ------------------------------------
+
+export const DRAWER_TABS: readonly DrawerTab[] = ["pack", "log", "saves"];
+
+/** The drawer after a tab's button is pressed: the open tab closes it, any other tab opens (switching from the one showing). */
+export function toggleDrawerTab(open: DrawerTab | null, tab: DrawerTab): DrawerTab | null {
+  return open === tab ? null : tab;
+}
+
+/** The tab that really shows: the one asked for, if the state still has that part, otherwise none. */
+export function usableDrawerTab(open: DrawerTab | null, has: Readonly<Record<DrawerTab, boolean>>): DrawerTab | null {
+  return open !== null && has[open] ? open : null;
+}
+
+/** The most suggested moves shown at once, and the longest label a button carries (longer ones are cut with "..", the full words stay in its name). */
+export const HUD_OPTIONS_MAX = 4;
+export const OPTION_LABEL_MAX = 32;
+/** Labels this short, all of them, go two to a row; any longer and the buttons take a row each. */
+export const OPTION_SHORT_MAX = 12;
+/** The newest log lines the drawer draws; older ones are counted, not drawn. */
+export const LOG_RENDER_MAX = 300;
+export const NOTICE_MS = 3000;
+export const NOTICE_OUT_MS = 400;
+export const NOTICE_MAX = 2;
+
+/** A button label on one run of words, no more than `max` characters, cut with ".." when longer. */
+export function clipOptionLabel(label: string, max = OPTION_LABEL_MAX): string {
+  const words = label.replace(/\s+/g, " ").trim();
+  return words.length > max ? `${words.slice(0, Math.max(1, max - 2)).trimEnd()}..` : words;
+}
+
+export interface OptionChoice {
+  id: string;
+  /** What the button shows (clipped). */
+  label: string;
+  /** The whole words, for the button's name. */
+  full: string;
+  key: string;
+  enabled: boolean;
+}
+
+/**
+ * The suggested moves as buttons: blanks dropped, the first four kept, labels clipped, keys filled in from the position (1 to 4)
+ * where there is none, and one column unless every label is short enough for two.
+ */
+export function optionsLayout(options: readonly { id: string; label: string; key?: string; enabled?: boolean }[]): { columns: 1 | 2; items: OptionChoice[] } {
+  const items: OptionChoice[] = [];
+  for (const o of options) {
+    const full = o.label.replace(/\s+/g, " ").trim();
+    if (!o.id || !full) continue;
+    items.push({ id: o.id, label: clipOptionLabel(full), full, key: o.key || String(items.length + 1), enabled: o.enabled !== false });
+    if (items.length >= HUD_OPTIONS_MAX) break;
+  }
+  const columns = items.length >= 2 && items.every((i) => i.label.length <= OPTION_SHORT_MAX) ? 2 : 1;
+  return { columns, items };
+}
+
+/**
+ * Pixel text wrapped to `maxWidth` (font pixels) and kept to `maxLines` lines: what does not fit is cut and the last line ends in "..".
+ * Each entry is one line.
+ */
+export function wrapClamp(text: string, maxWidth: number, maxLines: number, weight: PixelWeight = "regular"): string[] {
+  const lines = wrapText(text, maxWidth, weight);
+  const keep = Math.max(1, maxLines);
+  if (lines.length <= keep) return lines;
+  const head = lines.slice(0, keep - 1);
+  let rest = lines.slice(keep - 1).join(" ");
+  while (rest.length > 1 && textWidth(`${rest}..`, weight) > maxWidth) rest = rest.slice(0, -1).trimEnd();
+  return [...head, `${rest}..`];
+}
+
+/** The lines the log drawer draws (the newest `max`) and how many older ones are left out. */
+export function logWindow<T>(log: readonly T[], max = LOG_RENDER_MAX): { shown: readonly T[]; hidden: number } {
+  const hidden = Math.max(0, log.length - Math.max(0, max));
+  return { shown: hidden > 0 ? log.slice(hidden) : log, hidden };
+}
+
+/** How many of the oldest notices must go for a new one to fit: the stack holds NOTICE_MAX. */
+export function noticeOverflow(count: number, max = NOTICE_MAX): number {
+  return Math.max(0, count + 1 - max);
+}
+
+type HudTone = "good" | "bad" | "dm";
 
 /** Hit point colours: hero blue, enemy red, both amber when low, grey when down. */
 function hpColour(bar: HudBar): string {
@@ -1702,9 +1997,11 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     document.head.appendChild(s);
   }
   let style: TextStyle = initialStyle;
+  let destroyed = false;
   let last: HudState | null = null;
   let lastKey = "";
-  let packOpen = false;
+  /** The drawer tab asked for: it shows while the state has that tab's part. */
+  let drawer: DrawerTab | null = null;
   /** The pack as the last render saw it, to tell what is new; null before the first look. */
   let prevPack: readonly PackSection[] | null = null;
   /** New items to light up in the next pack draw, and ones that arrived while the pack was shut (they light up when it opens). */
@@ -1718,9 +2015,34 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
   }
   const panel = el("div", "lto-hud-panel");
   panel.setAttribute("role", "status");
+  // The DM's suggested next moves, above the game's own buttons. Not there at all when there are none.
+  const next = el("div", "lto-hud-next");
+  next.dataset.hudOptions = "";
+  next.hidden = true;
+  next.setAttribute("role", "group");
+  next.setAttribute("aria-label", "Suggested next moves");
+  const nextLabel = el("div", "lto-hud-next-label");
+  nextLabel.setAttribute("aria-hidden", "true");
+  const nextList = el("div", "lto-hud-next-list");
+  next.append(nextLabel, nextList);
   const actions = el("div", "lto-hud-actions");
   actions.setAttribute("role", "toolbar");
   actions.setAttribute("aria-label", "Actions");
+  // Pack, Log and Saves: the drawer's tabs. Notices sit right under them.
+  const tabs = el("div", "lto-hud-drawer-btns");
+  tabs.dataset.hudTabs = "";
+  tabs.hidden = true;
+  tabs.setAttribute("role", "toolbar");
+  tabs.setAttribute("aria-label", "Pack, log and saves");
+  const noticeBox = el("div", "lto-hud-notices");
+  noticeBox.dataset.hudNotices = "";
+  noticeBox.hidden = true;
+  noticeBox.setAttribute("aria-live", "polite");
+  noticeBox.setAttribute("aria-atomic", "false");
+  const drawerBox = el("div", "lto-hud-drawer");
+  drawerBox.dataset.hudDrawer = "";
+  drawerBox.hidden = true;
+  drawerBox.setAttribute("role", "group");
   // The freehand line is built once and kept across redraws, so a half-typed sentence and its focus survive a state change.
   const askBox = el("div", "lto-hud-ask");
   askBox.dataset.hudAsk = "";
@@ -1745,11 +2067,11 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
   askBox.append(askRow, askStatus);
   root.append(panel);
   if (opts.slot) root.append(opts.slot);
-  root.append(actions, askBox);
+  root.append(next, actions, tabs, noticeBox, drawerBox, askBox);
   host.appendChild(root);
 
   const isPixel = (): boolean => style === "pixel";
-  /** The pack's hover helps, detached whenever the panel is rebuilt (their rows are replaced). */
+  /** The pack's hover helps, detached whenever the drawer is rebuilt (their rows are replaced). */
   let tipOff: Array<() => void> = [];
   /** What a tip stays inside: the game window the HUD sits in, or the HUD itself. */
   const tipBoundary = (): HTMLElement => host.closest<HTMLElement>(".lt-game") ?? root;
@@ -1769,12 +2091,14 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     while (cut > 1 && textWidth(`${words.slice(0, cut).trimEnd()}..`) * 2 > room) cut--;
     return `${words.slice(0, cut).trimEnd()}..`;
   };
-  /** A line of HUD text in the current treatment, with the words kept for screen readers. */
-  const text = (words: string, kind: "title" | "line" | "name" | "num" | "seclabel" | "item", inset = 0): HTMLElement => {
+  const toneColour: Record<HudTone, PixelColor> = { good: PX.good, bad: PX.bad, dm: PX.gold };
+  /** A line of HUD text in the current treatment, with the words kept for screen readers. A tone colours it (green, red, or the DM's gold). */
+  const text = (words: string, kind: "title" | "line" | "name" | "num" | "seclabel" | "item", inset = 0, tone?: HudTone): HTMLElement => {
     const node = el("span", `lto-hud-${kind}`);
+    if (tone) node.classList.add(`lto-hud-tone-${tone}`);
     if (isPixel()) {
       const gold = kind === "title" || kind === "seclabel";
-      const colour = gold ? PX.gold : kind === "line" ? PX.muted : PX.ink;
+      const colour = tone ? toneColour[tone] : gold ? PX.gold : kind === "line" ? PX.muted : PX.ink;
       // Titles, lines and pack items wrap to the panel (font pixels are 2 CSS px); names and numbers stay on one line.
       const wrap = kind === "name" || kind === "num" ? undefined : Math.max(40, Math.floor(((root.clientWidth || 300) - 44 - inset) / 2));
       node.append(px(kind === "name" ? fitName(words) : words, { scale: 2, weight: gold || kind === "num" ? "bold" : "regular", color: colour, outline: PX.dark, maxWidth: wrap }), el("span", "lto-sr", words));
@@ -1784,13 +2108,24 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     return node;
   };
 
+  const has = (s: HudState | null): Record<DrawerTab, boolean> => ({ pack: !!s?.pack, log: !!s?.log, saves: !!s?.saves });
+  /** The tab that really shows now. */
+  const openTab = (): DrawerTab | null => usableDrawerTab(drawer, has(last));
+
   function draw(): void {
     const s = last;
     if (!s) return;
     root.classList.toggle("lto-px", isPixel());
     root.classList.toggle("lto-sb", !isPixel());
-    // The pack list scrolls inside the panel, which is rebuilt below: note where the reader was.
-    const packScroll = panel.querySelector<HTMLElement>(".lto-hud-pack-list")?.scrollTop ?? 0;
+    // The drawer's list scrolls inside a box that is rebuilt below: note where the reader was.
+    const prevList = drawerBox.querySelector<HTMLElement>(".lto-hud-list");
+    const tab = openTab();
+    const sameTab = !!prevList && prevList.dataset.tab === tab;
+    const keep = {
+      sameTab,
+      scroll: prevList?.scrollTop ?? 0,
+      atBottom: !prevList || prevList.scrollHeight - prevList.scrollTop - prevList.clientHeight < 14,
+    };
     for (const off of tipOff) off();
     tipOff = [];
     panel.className = "lto-hud-panel";
@@ -1819,9 +2154,66 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       }
       panel.append(bars);
     }
-    if (packOpen && s.pack) panel.append(packView(s.pack.sections, packScroll));
+    drawNext(s);
+    drawActions(s);
+    drawTabs(s, tab);
+    drawDrawer(s, tab, keep);
+    applyAsk(s.ask);
+  }
+
+  // ---- the DM's suggested next moves
+
+  /** The width, in CSS px, a suggestion button's label has: the column, less the frame, the padding, the key and the gap. */
+  function optionRoom(columns: 1 | 2, key: string): number {
+    const rootW = root.clientWidth || 300;
+    const col = columns === 2 ? (rootW - 6) / 2 : rootW;
+    return Math.max(40, col - 30 - textWidth(key, "bold") * 2 - 8 - 2);
+  }
+
+  function drawNext(s: HudState): void {
+    const choices = [
+      ...(s.options ?? []).map((o) => ({ id: o.id, label: o.label, key: o.key, enabled: true })),
+      ...s.actions.filter((a) => !a.hidden && a.kind === "suggestion").map((a) => ({ id: a.id, label: a.label, key: a.key, enabled: a.enabled })),
+    ];
+    const { columns, items } = optionsLayout(choices);
+    nextLabel.replaceChildren();
+    nextList.replaceChildren();
+    next.hidden = items.length === 0;
+    if (items.length === 0) return;
+    nextList.style.setProperty("--cols", String(columns));
+    if (isPixel()) nextLabel.append(px("What next?", { scale: 2, color: PX.gold, outline: PX.dark }));
+    else nextLabel.textContent = "What next?";
+    for (const o of items) {
+      const btn = el("button", "lto-hud-btn lto-hud-opt");
+      btn.type = "button";
+      btn.dataset.option = o.id;
+      btn.dataset.key = o.key;
+      btn.disabled = !o.enabled;
+      btn.setAttribute("aria-label", `${o.full} (${o.key})`);
+      if (o.full !== o.label) btn.title = o.full;
+      const label = el("span", "lto-hud-opt-label");
+      if (isPixel()) {
+        btn.classList.add("lto-fr", "fs1", "fr-gold");
+        // Wrapped and cut to two lines here, since a canvas cannot wrap itself.
+        const lines = wrapClamp(o.label, wrapWidth(optionRoom(columns, o.key), 2, deviceRatio()), 2);
+        label.append(px(lines.join("\n"), { scale: 2, color: PX.ink, outline: PX.dark }));
+        btn.append(px(o.key, { scale: 2, weight: "bold", color: PX.gold, outline: PX.dark }), label);
+      } else {
+        label.textContent = o.label;
+        btn.append(el("span", "lto-hud-key", o.key), label);
+      }
+      btn.onclick = () => onAction(o.id);
+      nextList.append(btn);
+    }
+  }
+
+  // ---- the game's own buttons: only the ones that do something now
+
+  function drawActions(s: HudState): void {
+    const shown = s.actions.filter((a) => !a.hidden && a.kind !== "suggestion");
+    actions.hidden = shown.length === 0;
     actions.replaceChildren();
-    for (const a of s.actions) {
+    for (const a of shown) {
       const btn = el("button", "lto-hud-btn");
       btn.type = "button";
       btn.dataset.action = a.id;
@@ -1840,27 +2232,58 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       btn.onclick = () => onAction(a.id);
       actions.append(btn);
     }
-    if (s.pack) actions.append(packButton());
-    applyAsk(s.ask);
   }
 
-  function packButton(): HTMLButtonElement {
-    const btn = el("button", "lto-hud-btn");
-    btn.type = "button";
-    btn.dataset.hudPack = "";
-    btn.setAttribute("aria-label", "Pack (I)");
-    btn.setAttribute("aria-pressed", String(packOpen));
-    btn.setAttribute("aria-expanded", String(packOpen));
-    if (!packOpen && pendingNew.size > 0) btn.dataset.new = "true";
-    if (isPixel()) {
-      btn.classList.add("lto-fr", "fs1", packOpen ? "fr-gold" : "fr-win");
-      btn.append(px("Pack", { scale: 2, weight: "bold", color: packOpen ? PX.gold : PX.ink, outline: PX.dark }), px("I", { scale: 2, color: PX.muted, outline: PX.dark }));
-    } else {
-      btn.append(el("span", undefined, "Pack"), el("span", "lto-hud-key", "I"));
-      if (packOpen) btn.classList.add("is-now");
+  // ---- the drawer: Pack, Log, Saves
+
+  const TAB_WORDS: Record<DrawerTab, { label: string; key?: string }> = { pack: { label: "Pack", key: "I" }, log: { label: "Log", key: "L" }, saves: { label: "Saves" } };
+
+  function drawTabs(s: HudState, tab: DrawerTab | null): void {
+    const have = has(s);
+    const shown = DRAWER_TABS.filter((t) => have[t]);
+    tabs.hidden = shown.length === 0;
+    tabs.style.setProperty("--n", String(Math.max(1, shown.length)));
+    tabs.replaceChildren();
+    for (const t of shown) {
+      const { label, key } = TAB_WORDS[t];
+      const open = tab === t;
+      const btn = el("button", "lto-hud-btn lto-hud-tab");
+      btn.type = "button";
+      btn.dataset.hudDrawer = t;
+      if (t === "pack") btn.dataset.hudPack = "";
+      btn.setAttribute("aria-label", key ? `${label} (${key})` : label);
+      btn.setAttribute("aria-pressed", String(open));
+      btn.setAttribute("aria-expanded", String(open));
+      if (t === "pack" && !open && pendingNew.size > 0) btn.dataset.new = "true";
+      if (isPixel()) {
+        btn.classList.add("lto-fr", "fs1", open ? "fr-gold" : "fr-win");
+        btn.append(px(label, { scale: 2, weight: "bold", color: open ? PX.gold : PX.ink, outline: PX.dark }));
+        if (key) btn.append(px(key, { scale: 2, color: PX.muted, outline: PX.dark }));
+      } else {
+        btn.append(el("span", undefined, label));
+        if (key) btn.append(el("span", "lto-hud-key", key));
+        if (open) btn.classList.add("is-open");
+      }
+      btn.onclick = () => toggleTab(t);
+      tabs.append(btn);
     }
-    btn.onclick = () => api.togglePack();
-    return btn;
+  }
+
+  function drawDrawer(s: HudState, tab: DrawerTab | null, keep: { sameTab: boolean; scroll: number; atBottom: boolean }): void {
+    drawerBox.className = "lto-hud-drawer";
+    drawerBox.hidden = tab === null;
+    drawerBox.replaceChildren();
+    if (tab === null) {
+      delete drawerBox.dataset.tab;
+      return;
+    }
+    drawerBox.dataset.tab = tab;
+    drawerBox.setAttribute("aria-label", TAB_WORDS[tab].label);
+    if (isPixel()) drawerBox.classList.add("lto-fr", "fr-win");
+    else drawerBox.classList.add("lto-plate");
+    if (tab === "pack" && s.pack) drawerBox.append(packView(s.pack.sections, keep.sameTab ? keep.scroll : 0));
+    else if (tab === "log" && s.log) drawerBox.append(logView(s.log, keep));
+    else if (tab === "saves" && s.saves) drawerBox.append(savesView(s.saves, keep.sameTab ? keep.scroll : 0));
   }
 
   /** The pack list: a heading per section, its items under it, scrolling inside when long. Items in `freshNow` get a brief highlight. */
@@ -1871,7 +2294,8 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     wrap.dataset.hudPackView = "";
     wrap.setAttribute("role", "group");
     wrap.setAttribute("aria-label", "Pack");
-    const list = el("div", "lto-hud-pack-list");
+    const list = el("div", "lto-hud-pack-list lto-hud-list");
+    list.dataset.tab = "pack";
     let firstFresh: HTMLElement | null = null;
     for (const sec of sections) {
       const box = el("div", "lto-hud-sec");
@@ -1917,23 +2341,208 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     return wrap;
   }
 
+  /** The log: every line so far, the newest at the bottom, kept at the bottom unless the reader has scrolled up. */
+  function logView(log: readonly HudLogLine[], keep: { sameTab: boolean; scroll: number; atBottom: boolean }): HTMLElement {
+    const wrap = el("div", "lto-hud-logview");
+    wrap.dataset.hudLogView = "";
+    const list = el("div", "lto-hud-pack-list lto-hud-list lto-hud-log");
+    list.dataset.tab = "log";
+    list.setAttribute("role", "list");
+    const { shown, hidden } = logWindow(log);
+    if (hidden > 0) {
+      const row = el("div", "lto-hud-logrow");
+      row.append(text(`${hidden} older lines are not shown.`, "line", 18));
+      list.append(row);
+    }
+    if (shown.length === 0) {
+      const row = el("div", "lto-hud-logrow");
+      row.append(text("Nothing has happened yet.", "line", 18));
+      list.append(row);
+    }
+    for (const l of shown) {
+      const tone = l.tone ?? "plain";
+      const row = el("div", "lto-hud-logrow");
+      row.setAttribute("role", "listitem");
+      row.dataset.tone = tone;
+      row.append(text(l.text, "item", 18, tone === "plain" ? undefined : tone));
+      list.append(row);
+    }
+    wrap.append(list);
+    queueMicrotask(() => {
+      list.scrollTop = keep.sameTab && !keep.atBottom ? keep.scroll : list.scrollHeight;
+    });
+    return wrap;
+  }
+
+  /** The save points, each with a Load button (greyed where it cannot be loaded), or the empty-state line. */
+  function savesView(saves: readonly HudSave[], prevScroll: number): HTMLElement {
+    const wrap = el("div", "lto-hud-savesview");
+    wrap.dataset.hudSavesView = "";
+    const list = el("div", "lto-hud-pack-list lto-hud-list lto-hud-saves");
+    list.dataset.tab = "saves";
+    if (saves.length === 0) {
+      const row = el("div", "lto-hud-logrow");
+      row.append(text("No saves yet. Rest to save, and every scene start is a checkpoint.", "line", 18));
+      list.append(row);
+    }
+    for (const sv of saves) {
+      const row = el("div", "lto-hud-save");
+      row.dataset.saveRow = sv.id;
+      const info = el("div", "lto-hud-save-info");
+      info.append(text(sv.label, "item", 100));
+      if (sv.detail) info.append(text(sv.detail, "line", 100));
+      const btn = el("button", "lto-hud-btn lto-hud-load");
+      btn.type = "button";
+      btn.dataset.save = sv.id;
+      btn.disabled = !sv.canLoad;
+      btn.setAttribute("aria-label", `Load ${sv.label}`);
+      if (isPixel()) {
+        btn.classList.add("lto-fr", "fs1", "fr-win");
+        btn.append(px("Load", { scale: 2, weight: "bold", color: PX.ink, outline: PX.dark }));
+      } else {
+        btn.append(el("span", undefined, "Load"));
+      }
+      btn.onclick = () => onAction(`load:${sv.id}`);
+      row.append(info, btn);
+      list.append(row);
+    }
+    wrap.append(list);
+    queueMicrotask(() => {
+      list.scrollTop = prevScroll;
+    });
+    return wrap;
+  }
+
+  function setDrawer(want: DrawerTab | null): void {
+    const before = openTab();
+    drawer = want;
+    // Opening the pack lights up what arrived while it was shut.
+    if (openTab() === "pack" && before !== "pack") {
+      freshNow = pendingNew;
+      pendingNew = new Set();
+    }
+    redraw();
+  }
+
+  function toggleTab(tab: DrawerTab): void {
+    if (!has(last)[tab]) return;
+    setDrawer(toggleDrawerTab(openTab(), tab));
+  }
+
   /** Redraw while keeping keyboard focus on the same button. */
   function redraw(): void {
     const at = document.activeElement as HTMLElement | null;
-    const mine = at && actions.contains(at) ? at : null;
-    const sel = mine ? (mine.dataset.action !== undefined ? `[data-action="${mine.dataset.action}"]` : mine.dataset.hudPack !== undefined ? "[data-hud-pack]" : "") : "";
+    let focusKey: [string, string] | null = null;
+    if (at && root.contains(at)) {
+      for (const k of ["action", "option", "hudDrawer", "save"]) {
+        const v = at.dataset[k];
+        if (v !== undefined) {
+          focusKey = [k, v];
+          break;
+        }
+      }
+    }
     // A pack item holding keyboard focus (for its hover help) keeps it across the rebuild, by its words.
-    const rowItem = at && panel.contains(at) && at.classList.contains("lto-hud-row") ? at.dataset.item : undefined;
+    const rowItem = at && drawerBox.contains(at) && at.classList.contains("lto-hud-row") ? at.dataset.item : undefined;
     draw();
-    if (sel) actions.querySelector<HTMLElement>(sel)?.focus();
-    else if (rowItem !== undefined) {
-      for (const r of panel.querySelectorAll<HTMLElement>(".lto-hud-row[data-item]")) {
+    if (focusKey) {
+      for (const b of root.querySelectorAll<HTMLElement>("button")) {
+        if (b.dataset[focusKey[0]] === focusKey[1]) {
+          b.focus();
+          break;
+        }
+      }
+    } else if (rowItem !== undefined) {
+      for (const r of drawerBox.querySelectorAll<HTMLElement>(".lto-hud-row[data-item]")) {
         if (r.dataset.item === rowItem) {
           r.focus({ preventScroll: true });
           break;
         }
       }
     }
+  }
+
+  // Pixel text is drawn for one width, so a change in the column's width (a resize, the HUD shown after being hidden) redraws it.
+  let seenWidth = 0;
+  const ro =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+          const w = root.clientWidth;
+          if (w === seenWidth) return;
+          seenWidth = w;
+          if (w > 0 && last && isPixel() && !destroyed) redraw();
+        })
+      : null;
+  ro?.observe(root);
+
+  // ---- notices: small notes that fade (loot, mostly)
+
+  interface Notice {
+    node: HTMLElement;
+    text: string;
+    tone: "good" | "bad" | "plain";
+    lease: number;
+    timer: number;
+    fade: Animation | null;
+  }
+  const notices: Notice[] = [];
+
+  function fillNotice(n: Notice): void {
+    // A note is a chip that sizes to its words, so it wraps only at the column's width less its frame (inset -28 undoes the 44 the panel keeps).
+    n.node.replaceChildren(text(n.text, "line", -28, n.tone === "plain" ? undefined : n.tone));
+    n.node.classList.remove("lto-fr", "fr-win", "fs1", "lto-plate");
+    if (isPixel()) n.node.classList.add("lto-fr", "fr-win", "fs1");
+    else n.node.classList.add("lto-plate");
+  }
+
+  function dropNotice(n: Notice): void {
+    window.clearTimeout(n.timer);
+    n.fade?.cancel();
+    n.node.remove();
+    const at = notices.indexOf(n);
+    if (at >= 0) notices.splice(at, 1);
+    noticeBox.hidden = notices.length === 0;
+  }
+
+  function armNotice(n: Notice): void {
+    const lease = ++n.lease;
+    window.clearTimeout(n.timer);
+    n.timer = window.setTimeout(() => {
+      if (destroyed || n.lease !== lease || !notices.includes(n)) return;
+      const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (typeof n.node.animate !== "function") return dropNotice(n);
+      n.fade = n.node.animate([{ opacity: 1 }, { opacity: 0 }], { duration: still ? 120 : NOTICE_OUT_MS, fill: "forwards" });
+      n.fade.finished.then(
+        () => {
+          if (n.lease === lease) dropNotice(n);
+        },
+        () => {},
+      );
+    }, NOTICE_MS);
+  }
+
+  function noticeNow(words: string, tone: "good" | "bad" | "plain" = "plain"): void {
+    const said = words.replace(/\s+/g, " ").trim();
+    if (destroyed || !said) return;
+    const again = notices.find((n) => n.text === said && n.tone === tone);
+    if (again) {
+      // The same note again: keep the one showing and give it a fresh stay (a fade already running is stopped).
+      again.fade?.cancel();
+      again.fade = null;
+      armNotice(again);
+      return;
+    }
+    for (let i = noticeOverflow(notices.length); i > 0 && notices[0]; i--) dropNotice(notices[0]);
+    const node = el("div", "lto-hud-notice");
+    node.dataset.hudNotice = "";
+    node.dataset.tone = tone;
+    node.dataset.text = said;
+    const n: Notice = { node, text: said, tone, lease: 0, timer: 0, fade: null };
+    fillNotice(n);
+    notices.push(n);
+    noticeBox.append(node);
+    noticeBox.hidden = false;
+    armNotice(n);
   }
 
   // ---- the freehand line
@@ -1951,7 +2560,7 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     askInput.value = "";
     opts.onAsk?.(words);
   }
-  // Typing must never reach the bench's own keys (arrows, WASD, F, E, Q, T, I), so every key event stops here.
+  // Typing must never reach the bench's own keys (arrows, WASD, F, E, Q, T, I, L, 1 to 4), so every key event stops here.
   askInput.addEventListener("keydown", (e) => {
     e.stopPropagation();
     if (e.key === "Enter" && !e.isComposing) {
@@ -1996,9 +2605,10 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
   }
 
   const api: Hud = {
-    setStyle(next: TextStyle): void {
-      if (next === style) return;
-      style = next;
+    setStyle(to: TextStyle): void {
+      if (to === style) return;
+      style = to;
+      for (const n of notices) fillNotice(n);
       redraw();
     },
     render(state: HudState): void {
@@ -2009,26 +2619,44 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       // What is new in the pack since the last look lights up if the pack is open, and otherwise waits for it to be opened.
       const added = newPackItems(prevPack, state.pack?.sections);
       prevPack = state.pack?.sections ?? null;
-      if (packOpen) freshNow = added;
+      if (drawer === "pack" && state.pack) freshNow = added;
       else for (const item of added) pendingNew.add(item);
       last = state;
       redraw();
     },
     togglePack(): void {
-      if (!last?.pack) return;
-      packOpen = !packOpen;
-      if (packOpen) {
-        freshNow = pendingNew;
-        pendingNew = new Set();
-      }
-      redraw();
+      toggleTab("pack");
+    },
+    toggleLog(): void {
+      toggleTab("log");
+    },
+    toggleSaves(): void {
+      toggleTab("saves");
+    },
+    openDrawer(tab: DrawerTab): void {
+      if (!has(last)[tab]) return;
+      setDrawer(tab);
+    },
+    closeDrawer(): void {
+      if (openTab() === null) return;
+      setDrawer(null);
     },
     isPackOpen(): boolean {
-      return packOpen && !!last?.pack;
+      return openTab() === "pack";
     },
+    isDrawerOpen(): boolean {
+      return openTab() !== null;
+    },
+    drawerTab(): DrawerTab | null {
+      return openTab();
+    },
+    notice: noticeNow,
     destroy(): void {
+      destroyed = true;
       for (const off of tipOff) off();
       tipOff = [];
+      for (const n of Array.from(notices)) dropNotice(n);
+      ro?.disconnect();
       root.remove();
     },
   };
@@ -2045,7 +2673,7 @@ export interface OverlayDemoOptions {
 /**
  * Cycles every element once: the initiative strip, each banner, floating
  * numbers of every kind, two stacked roll plates, dialogue in each tone, a
- * toast. It leaves the dialogue history and the strip on screen (call clear()
+ * toast. It leaves the story lines (until they fade) and the strip on screen (call clear()
  * to wipe them). Resolves when the last banner is gone.
  */
 export async function overlayDemo(overlay: Overlay, opts: OverlayDemoOptions = {}): Promise<void> {
