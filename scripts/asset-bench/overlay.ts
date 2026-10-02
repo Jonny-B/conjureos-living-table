@@ -373,7 +373,7 @@ const CSS = `
 .lto-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .lto-top{position:absolute;left:8px;right:8px;top:8px;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
 .lto-bottom{position:absolute;left:8px;right:8px;bottom:8px;display:flex;justify-content:center;pointer-events:none}
-.lto-banners{position:absolute;left:0;right:0;top:32%;display:flex;flex-direction:column;align-items:center;pointer-events:none}
+.lto-banners{position:absolute;left:0;right:0;top:48px;display:flex;flex-direction:column;align-items:center;pointer-events:none}
 .lto-float{position:absolute;transform:translate(-50%,-100%);pointer-events:none;white-space:nowrap;will-change:transform,opacity}
 .lto-float-in{transform-origin:50% 100%}
 .lto-num{display:block;overflow:visible;filter:drop-shadow(0 3px 5px rgb(0 0 0/.6))}
@@ -447,9 +447,9 @@ const CSS = `
 .lto-sb .lto-verdict.hit{background:linear-gradient(#4cb862,#2a7a3a)}.lto-sb .lto-verdict.miss{background:linear-gradient(#c65a4c,#8a2a20)}.lto-sb .lto-verdict.crit{background:linear-gradient(#f5c64c,#b8790f)}
 .lto-sb .lto-tail{position:absolute;width:13px;height:13px;transform:translateX(-50%) rotate(45deg);background:var(--sb-paper2);border:1px solid var(--sb-rule)}
 .lto-sb .lto-tail.down{bottom:-7px;border-top:0;border-left:0}.lto-sb .lto-tail.up{top:-7px;border-bottom:0;border-right:0;background:var(--sb-paper)}
-.lto-sb .lto-banner{position:relative;width:100%;padding:10px 0 11px;display:flex;justify-content:center;
+.lto-sb .lto-banner{position:relative;width:auto;padding:4px 36px 5px;display:flex;justify-content:center;
   background:linear-gradient(90deg,transparent 0,rgb(12 8 22/.8) 14%,rgb(12 8 22/.88) 50%,rgb(12 8 22/.8) 86%,transparent 100%)}
-.lto-sb .lto-banner::before,.lto-sb .lto-banner::after{content:"";position:absolute;left:6%;right:6%;height:2px;background:linear-gradient(90deg,transparent,#d9ae4a 20%,#ffe9a0 50%,#d9ae4a 80%,transparent)}
+.lto-sb .lto-banner::before,.lto-sb .lto-banner::after{content:"";position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#d9ae4a 20%,#ffe9a0 50%,#d9ae4a 80%,transparent)}
 .lto-sb .lto-banner::before{top:0}.lto-sb .lto-banner::after{bottom:0}
 .lto-sb .lto-dlg:focus-visible,.lto-px .lto-dlg:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
 
@@ -760,13 +760,14 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (isPixel()) {
       frame(node, BANNER_FRAME[kind]);
       const label = text.toUpperCase();
-      const scale = fitScale(textWidth(label, "bold") + 6, avail - 24, 2, 7, deviceRatio());
+      // A title strip, not a poster: the owner found full-width banners blocked the board. Two or three times the font, never more.
+      const scale = fitScale(textWidth(label, "bold") + 6, Math.min(avail - 24, 420), 2, 3, deviceRatio());
       node.append(
         px(label, { scale, weight: "bold", color: [face.top, face.mid], outline: face.outline, outlinePx: 2, shadow: PX.shade, shadowDx: 2, shadowDy: 2 }),
       );
     } else {
       const label = text.toUpperCase();
-      let size = clamp(Math.floor((root.clientWidth || width) * 0.12), 28, 66);
+      let size = clamp(Math.floor((root.clientWidth || width) * 0.045), 18, 30);
       const spacing = 0.08;
       const fits = (s: number) => serifWidth(label, s) + (label.length - 1) * spacing * s + s * 0.6 <= avail;
       while (size > 20 && !fits(size)) size -= 2;
