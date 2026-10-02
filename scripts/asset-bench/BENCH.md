@@ -7,7 +7,7 @@ second drawing of it.
 
 | Tab | What it is for |
 |---|---|
-| **Play** | The game in miniature, turn based like D&D: a two-room scene with a door, a chest and a goblin. Click a square to walk there (the path and its cost in feet show first), the goblin to attack it (walking up first if it can), the door or the chest to use it. When the goblin notices you, everyone rolls initiative; then each side takes its turn: 30 ft of movement and one action for you, then the goblin's turn plays out. Banners, the turn order, the dialogue box, the dice and floating damage and healing numbers are drawn on the board in a pixel or a storybook style (the Text control). Drag items onto the hero's slots and see them worn. |
+| **Play** | The game in miniature, turn based like D&D: a two-room scene with a door, a chest and a goblin. Click a square to walk there (the path and its cost in feet show first), the goblin to attack it (walking up first if it can), the door or the chest to use it. When the goblin notices you, everyone rolls initiative; then each side takes its turn: 30 ft of movement and one action for you, then the goblin's turn plays out. Banners, the turn order, the dialogue box and floating damage and healing numbers are drawn on the board in a pixel or a storybook style (the Text control). The dice roll in a tray beside the board: you tap to roll your initiative, attack, damage and healing dice (or untick I roll my own dice), the goblin's dice roll themselves, and every die lands on the engine's own result. Dice skins shows the skins as a shop preview (buying is not wired). Drag items onto the hero's slots and see them worn. |
 | **Characters** | Every figure the game uses, animated, in four facings: pick the animation, the style (or every style side by side), the detail and the floor. Heroes can wear their starting gear. The goblin, kept hand-drawn, has its own row. |
 | **Pieces** | Every in-play fantasy sprite as a still: the game today beside the KayKit conversion. |
 | **Gear** | One hero's paper doll (the inventory screen's figure) and every item's inventory icon. |
@@ -65,6 +65,7 @@ under src/ imports scripts/asset-bench".
 - `overlay.ts`, `pixelFont.ts`: every word drawn on the Play board (banners,
   dialogue, roll plates, floating numbers, the turn order) in two styles; no
   web fonts, so the game can reuse it.
+- `dice.ts`: the dice tray: pixel-art d4 to d20 that tumble and land on a given result, skins as data, the skin picker.
 - `build-bench.mjs`, `shell.js`: this project's own copy of the asset-bench
   skill's template builder and shell. Adapt them here if the bench needs
   something the template does not provide; they are not shared with other

@@ -55,7 +55,8 @@ import {
 } from "../../src/games/livingtable/characters/equipmentTypes";
 import { PLAYABLE_ARCHETYPE_IDS, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
 import { createCharacter, type CharacterSheet } from "../../src/games/livingtable/characters/creation";
-import { applyHealing, potionHealing } from "../../src/games/livingtable/characters/health";
+import { applyHealing } from "../../src/games/livingtable/characters/health";
+import { parseDiceNotation, rollDice } from "../../src/games/livingtable/rules/dice";
 import { renderPlanFor, slotLabelFor } from "../../src/games/livingtable/menu/equipment";
 import { attackLine, bonusSources, lootLine, sentenceCase, type TokenNamer } from "../../src/games/livingtable/menu/labels";
 import {
@@ -91,7 +92,8 @@ import { headAnchor } from "../../src/games/livingtable/render/anchors";
 import { attackResultToReadout } from "../../src/games/livingtable/render/rollReadoutAdapter";
 import { resolveMonsterTurn } from "../../src/games/livingtable/session/hostileTurns";
 import { attackEvents, type CombatEvent } from "../../src/games/livingtable/session/combatEvents";
-import { createOverlay, type InitiativeSide, type Overlay, type OverlayPoint, type TextStyle } from "./overlay";
+import { createOverlay, verdictWords, type InitiativeSide, type Overlay, type OverlayPoint, type TextStyle } from "./overlay";
+import { createDiceTray, createSkinPicker, DICE_SKINS, type DiceTray, type DieKind } from "./dice";
 import { decodeLibrary, kaykitLibrary, partFile } from "./kaykit";
 import {
   CAST_CLIPS,
@@ -938,12 +940,23 @@ function heroStepTo(p: PlayState, to: XY): TurnResult {
   return { events: [{ kind: "move", tokenId: HERO_ID, from, path: [{ ...to }] }], refused: null };
 }
 
-/** The hero swings at the monster: the game's reach, sight and turn rules, then its dice. */
-function heroAttackRules(p: PlayState): TurnResult {
-  if (heroDown(p)) return refusedWith(DOWN_NOTE);
+/** The dice behind a swing, for the dice tray: the d20 and, on a hit, every damage die. */
+interface SwingDice {
+  roll: number;
+  modifier: number;
+  total: number;
+  target: number;
+  hit: boolean;
+  critical: boolean;
+  fumble: boolean;
+  damage?: { rolls: number[]; sides: number; modifier: number; total: number };
+}
+
+/** Why the hero cannot swing at the monster right now (the game's reach, sight and turn rules), or null. */
+function heroAttackRefusal(p: PlayState): string | null {
+  if (heroDown(p)) return DOWN_NOTE;
   const m = p.monster;
-  if (!m) return refusedWith("Nothing left to fight. Press Reset scene to bring it back.");
-  const kit = SCENE_KIT[p.template];
+  if (!m) return "Nothing left to fight. Press Reset scene to bring it back.";
   const blocked = attackBlockedReason({
     round: p.round,
     attackerAt: p.heroAt,
@@ -952,49 +965,76 @@ function heroAttackRules(p: PlayState): TurnResult {
     reachTiles: heroReachTiles(p),
     hasLineOfSight: canSee(p, sceneTiles(p), p.heroAt, m.at),
   });
-  if (blocked) return refusedWith(sentence(blocked));
+  return blocked ? sentence(blocked) : null;
+}
+
+/**
+ * The hero's swing, rolled with the game's own dice but NOT yet applied, so
+ * the dice tray can show the roll before the scene changes: `apply` lands the
+ * blow (hit points, the log, a kill, the loot) and returns its events.
+ */
+function heroAttackRules(p: PlayState): { refused: string } | { refused: null; dice: SwingDice; apply: () => CombatEvent[] } {
+  const refused = heroAttackRefusal(p);
+  if (refused) return { refused };
+  const m = p.monster!;
+  const kit = SCENE_KIT[p.template];
   const label = monsterLabel(p);
   const bonus = attackerBonusFor(p.hero);
   const targetAC = monsterArmorClassFor(kit.monster);
   const sources = bonusSources(attackBonusSourcesFor(p.hero), bonus);
   const result = resolveAttack({ attackerBonus: bonus, targetAC });
-  let damage: number | undefined;
-  let down = false;
-  const hpBefore = m.hp;
-  if (result.hit) {
-    damage = resolveDamage(weaponDamageNotationFor(p.hero), Math.random, result.critical).total;
-    const hurt = damageMonster({ assetId: kit.monster, currentHp: m.hp }, damage);
-    m.hp = hurt.currentHp;
-    down = hurt.down;
-  }
-  if (p.round) p.round = spendActiveAction(p.round) ?? p.round;
-  p.log.push({
-    text: attackLine({
-      attacker: p.hero.name,
-      target: label,
-      roll: result.roll,
-      modifier: bonus,
-      total: result.total,
-      targetAC,
-      hit: result.hit,
-      critical: result.critical,
-      fumble: result.fumble,
-      damage,
-      targetDown: down,
-      targetHpLeft: result.hit && !down ? m.hp : undefined,
-      sources,
-    }),
-    tone: result.hit ? "good" : "bad",
-  });
-  const readout = { ...attackResultToReadout(result, bonus, targetAC, sources), caption: `${p.hero.name} attacks ${label}`, critical: result.critical, fumble: result.fumble };
-  const events = attackEvents({ by: HERO_ID, against: MONSTER_ID, result, readout, damage, hpLost: hpBefore - m.hp, down });
-  if (down) {
-    p.fallenAt = { ...m.at };
-    p.monster = null;
-    p.round = null;
-    rollLoot(p, "fight");
-  }
-  return { events, refused: null };
+  const notation = weaponDamageNotationFor(p.hero);
+  const rolled = result.hit ? resolveDamage(notation, Math.random, result.critical) : null;
+  const parsed = parseDiceNotation(notation);
+  const dice: SwingDice = {
+    roll: result.roll,
+    modifier: bonus,
+    total: result.total,
+    target: targetAC,
+    hit: result.hit,
+    critical: result.critical,
+    fumble: result.fumble,
+    damage: rolled ? { rolls: rolled.rolls, sides: parsed.sides, modifier: parsed.modifier, total: rolled.total } : undefined,
+  };
+  const apply = (): CombatEvent[] => {
+    const damage = rolled?.total;
+    let down = false;
+    const hpBefore = m.hp;
+    if (damage !== undefined) {
+      const hurt = damageMonster({ assetId: kit.monster, currentHp: m.hp }, damage);
+      m.hp = hurt.currentHp;
+      down = hurt.down;
+    }
+    if (p.round) p.round = spendActiveAction(p.round) ?? p.round;
+    p.log.push({
+      text: attackLine({
+        attacker: p.hero.name,
+        target: label,
+        roll: result.roll,
+        modifier: bonus,
+        total: result.total,
+        targetAC,
+        hit: result.hit,
+        critical: result.critical,
+        fumble: result.fumble,
+        damage,
+        targetDown: down,
+        targetHpLeft: result.hit && !down ? m.hp : undefined,
+        sources,
+      }),
+      tone: result.hit ? "good" : "bad",
+    });
+    const readout = { ...attackResultToReadout(result, bonus, targetAC, sources), caption: `${p.hero.name} attacks ${label}`, critical: result.critical, fumble: result.fumble };
+    const events = attackEvents({ by: HERO_ID, against: MONSTER_ID, result, readout, damage, hpLost: hpBefore - m.hp, down });
+    if (down) {
+      p.fallenAt = { ...m.at };
+      p.monster = null;
+      p.round = null;
+      rollLoot(p, "fight");
+    }
+    return events;
+  };
+  return { refused: null, dice, apply };
 }
 
 /** The door or the chest next to the hero. Free in a fight, like any small object interaction. */
@@ -1026,14 +1066,21 @@ function heroInteractRules(p: PlayState): TurnResult {
   return { events: [], refused: null };
 }
 
-/** A healing potion, with the game's own potionHealing and applyHealing. It takes the action in a fight. */
+const POTION_NOTATION = "2d4+2";
+/** The d4s the last potion rolled, for the dice tray. */
+let lastPotionDice: number[] = [];
+
+/** A healing potion, with the game's own Potion of Healing dice and applyHealing. It takes the action in a fight. */
 function drinkPotionRules(p: PlayState): TurnResult {
   if (p.hero.dead) return refusedWith(DOWN_NOTE);
   if (p.potions <= 0) return refusedWith("No potions left.");
   if (p.round && !heroActionReady(p)) return refusedWith(p.round && !isPlayersTurn(p.round) ? "Wait for your turn." : "You have already taken your action this turn.");
   if (!heroDown(p) && p.hero.currentHp >= p.hero.maxHp) return refusedWith("You are already at full health.");
   const before = p.hero.currentHp;
-  const outcome = applyHealing(p.hero, potionHealing());
+  // characters/health.ts potionHealing's own notation (SRD 5.1 Potion of Healing), rolled here so the tray can show each die.
+  const heal = rollDice(POTION_NOTATION);
+  lastPotionDice = heal.rolls;
+  const outcome = applyHealing(p.hero, heal.total);
   p.hero = outcome.sheet;
   p.potions--;
   if (p.round) p.round = spendActiveAction(p.round) ?? p.round;
@@ -1813,6 +1860,14 @@ function createPlayStage(host: PlayStageHost): PlayStage {
 
 /** The on-screen text treatment, shared across visits to the tab: the owner is comparing the two. */
 let textStyle: TextStyle = "pixel";
+/** The dice skin on the tray, and whether the player taps to roll their own dice (on) or the tray rolls for them. */
+let diceSkin = "bone";
+let rollMyself = true;
+/** Skins the player owns. Buying is not wired (a later product decision), so it is the free one. */
+const OWNED_SKINS: readonly string[] = DICE_SKINS.filter((s) => s.priceCredits === 0).map((s) => s.id);
+
+const signedNum = (n: number): string => (n >= 0 ? `+ ${n}` : `- ${-n}`);
+const dieOf = (sides: number): DieKind => `d${sides}` as DieKind;
 
 /** Things the goblin says, bench-only flavour (the game's DM has narration only). */
 const GOBLIN_BARKS = {
@@ -1887,6 +1942,15 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     overlay.setStyle(textStyle);
   };
   field("Text", textSelect);
+  const rollBox = el_("input");
+  rollBox.type = "checkbox";
+  rollBox.checked = rollMyself;
+  rollBox.onchange = () => {
+    rollMyself = rollBox.checked;
+  };
+  const rollField = el_("label", "bn-field");
+  rollField.append(rollBox, document.createTextNode(" I roll my own dice"));
+  controls.appendChild(rollField);
   // A chosen option must not keep the arrow keys: they walk the hero.
   el.addEventListener("change", (e) => {
     const t = e.target as HTMLElement | null;
@@ -1912,8 +1976,25 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   board.append(canvas, marks);
   viewport.appendChild(board);
   stageWrap.appendChild(viewport);
-  el.appendChild(stageWrap);
+  const arena = el_("div", "lt-arena");
+  const trayCol = el_("div", "lt-tray-col");
+  const trayHost = el_("div", "lt-dice-host");
+  const shop = el_("details", "lt-dice-shop");
+  shop.appendChild(el_("summary", undefined, "Dice skins"));
+  const shopHost = el_("div");
+  shop.appendChild(shopHost);
+  trayCol.append(trayHost, shop);
+  arena.append(stageWrap, trayCol);
+  el.appendChild(arena);
   const overlay: Overlay = createOverlay(stageWrap, textStyle);
+  const tray: DiceTray = createDiceTray(trayHost, diceSkin);
+  const picker = createSkinPicker(shopHost, tray, { owned: OWNED_SKINS, onTry: (id) => (diceSkin = id) });
+
+  /** Wait for the player's tap on the tray (unless the tray rolls for them), then throw. */
+  async function rollStep(prompt: string, dice: readonly { kind: DieKind; result: number }[], label: string, detail: string, tone: "good" | "bad" | "plain"): Promise<void> {
+    if (rollMyself) await tray.awaitRoll(prompt, dice.map((d) => d.kind));
+    await tray.roll({ dice, label, detail, tone });
+  }
 
   // ---- the action bar and the readout ----------------------------------------
 
@@ -2143,11 +2224,10 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     playClips(actor, ["walk"], now);
   }
 
-  /** Float an attack's outcome over the target's head, and the plate over the attacker's. */
-  function showAttack(events: readonly CombatEvent[], attacker: "hero" | "monster", target: "hero" | "monster", targetTile?: XY): void {
+  /** Float an attack's outcome over the target's head (the dice themselves are in the tray). */
+  function showAttack(events: readonly CombatEvent[], target: "hero" | "monster", targetTile?: XY): void {
     for (const ev of events) {
-      if (ev.kind === "attack") overlay.rollPlate(headOf(attacker), ev.readout);
-      else if (ev.kind === "damage") {
+      if (ev.kind === "damage") {
         if (ev.hpLost > 0) overlay.float(headOf(target, targetTile), ev.critical ? `-${ev.hpLost} CRIT!` : `-${ev.hpLost}`, ev.critical ? "crit" : "damage");
         else overlay.float(headOf(target, targetTile), "DEATH SAVE", "info");
       } else if (ev.kind === "miss") overlay.float(headOf(target, targetTile), "MISS", "miss");
@@ -2167,7 +2247,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     overlay.say({ speaker: "Goblin", text: bark(GOBLIN_BARKS.wake), tone: "bad" });
     flushLog();
     refreshAll();
-    await overlay.banner("ROLL INITIATIVE", "initiative");
+    void overlay.banner("ROLL INITIATIVE", "initiative");
+    // The hero's own initiative die: the total startCombat rolled, less the Dexterity it added.
+    // startFight just set the round (read it fresh: TypeScript still sees it as null from the check above).
+    const mine = st().round?.order.find((c) => c.id === HERO_ID);
+    if (mine) {
+      const d20 = mine.initiative - p.hero.modifiers.dex;
+      await rollStep("Tap to roll initiative", [{ kind: "d20", result: d20 }], `${d20} ${signedNum(p.hero.modifiers.dex)} = ${mine.initiative}`, "INITIATIVE", "plain");
+    }
     busy = false;
     await runHostiles();
   }
@@ -2203,12 +2290,23 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       // Then the swing, and the blow lands when it plays.
       const swing = turn.events.filter((e) => e.kind !== "move" && e.kind !== "turnStart");
       if (swing.length > 0 && p.monster) {
+        const atk = swing.find((e): e is Extract<CombatEvent, { kind: "attack" }> => e.kind === "attack");
+        const dmg = swing.find((e): e is Extract<CombatEvent, { kind: "damage" }> => e.kind === "damage");
+        if (atk) {
+          const r0 = atk.readout;
+          await tray.roll({
+            dice: [{ kind: "d20", result: r0.roll }],
+            label: `Goblin: ${r0.roll} ${signedNum(r0.modifier)} = ${r0.total} vs ${r0.target}`,
+            detail: dmg ? `${verdictWords({ hit: true, critical: dmg.critical, fumble: false })}, ${dmg.amount} DAMAGE` : verdictWords({ hit: false, critical: false, fumble: !!r0.fumble }),
+            tone: r0.hit ? "bad" : "good",
+          });
+        }
         p.monsterActor.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
         if (!REDUCED_MOTION) playClips(p.monsterActor, ["attack"], performance.now());
         await wait(320);
         const hpBefore = p.hero.currentHp;
         p.hero = turn.sheet;
-        showAttack(swing, "monster", "hero");
+        showAttack(swing, "hero");
         const now = performance.now();
         if (!REDUCED_MOTION && p.hero.currentHp < hpBefore) playClips(p.heroActor, [heroDown(p) ? "death" : "hit"], now);
         if (swing.some((e) => e.kind === "miss")) overlay.say({ speaker: "Goblin", text: "Grr! Hold still!", tone: "plain" });
@@ -2302,14 +2400,28 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
     const target = { ...p.monster.at };
     const r = heroAttackRules(p);
-    if (r.refused) return refuse(r.refused);
+    if (r.refused !== null) return refuse(r.refused);
     fightWasOn = true;
-    p.heroActor.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
     busy = true;
+    const d = r.dice;
+    // The attack roll: the engine has rolled it; the player throws the die and sees it land.
+    await rollStep("Tap to roll your attack", [{ kind: "d20", result: d.roll }], `${d.roll} ${signedNum(d.modifier)} = ${d.total} vs ${d.target}`, verdictWords(d), d.hit ? "good" : "bad");
+    p.heroActor.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
     if (!REDUCED_MOTION) playClips(p.heroActor, ["attack"], performance.now());
     await wait(300);
-    showAttack(r.events, "hero", "monster", target);
-    const hit = r.events.some((e) => e.kind === "damage");
+    if (d.damage) {
+      const dmg = d.damage;
+      await rollStep(
+        d.critical ? "Critical! Tap to roll double damage" : "Tap to roll damage",
+        dmg.rolls.map((v) => ({ kind: dieOf(dmg.sides), result: v })),
+        `${dmg.rolls.join(" + ")} ${signedNum(dmg.modifier)} = ${dmg.total}`,
+        d.critical ? "CRITICAL DAMAGE" : "DAMAGE",
+        "good",
+      );
+    }
+    const events = r.apply();
+    showAttack(events, "monster", target);
+    const hit = events.some((e) => e.kind === "damage");
     const now = performance.now();
     if (!REDUCED_MOTION) {
       if (!p.monster) playClips(p.monsterActor, ["death"], now);
@@ -2365,8 +2477,13 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const p = st();
     const r = drinkPotionRules(p);
     if (r.refused) return refuse(r.refused);
+    busy = true;
+    const heal = r.events.find((e): e is Extract<CombatEvent, { kind: "heal" }> => e.kind === "heal");
+    const rolls = lastPotionDice;
+    await rollStep("Tap to roll healing", rolls.map((v) => ({ kind: "d4" as DieKind, result: v })), `${rolls.join(" + ")} + 2 = ${rolls.reduce((a, b) => a + b, 2)}`, heal ? `+${heal.amount} HP` : "HEALED", "good");
+    busy = false;
     if (!REDUCED_MOTION) playClips(p.heroActor, ["cheer"], performance.now());
-    showAttack(r.events, "hero", "hero");
+    showAttack(r.events, "hero");
     await afterHeroAction();
   }
 
@@ -2394,6 +2511,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   viewport.addEventListener("click", (e) => {
     if (busy) {
       skipping = true;
+      tray.skip();
       return;
     }
     const t = tileAt(e.clientX, e.clientY);
@@ -2596,6 +2714,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     hover = null;
     said = 0;
     overlay.clear();
+    tray.clear();
     stage.snapCamera();
     renderAll();
   }
@@ -2612,8 +2731,10 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (target?.closest?.("button") && (key === " " || key === "enter")) return;
     if (target?.tagName === "SELECT" && !KEY_DIR[key]) return;
     if (key === " " || key === "escape") {
-      if (busy) skipping = true;
-      else {
+      if (busy) {
+        skipping = true;
+        tray.skip();
+      } else {
         walkQueue.length = 0;
         onArrive = null;
       }
@@ -2661,8 +2782,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   (globalThis as { __ltBenchPlay?: () => PlayState }).__ltBenchPlay = st;
 
   return () => {
+    diceSkin = tray.skin().id;
     stage.dispose();
     overlay.destroy();
+    picker.destroy();
+    tray.destroy();
     document.removeEventListener("keydown", onKey);
     window.removeEventListener("blur", onBlur);
   };
@@ -3411,7 +3535,12 @@ function injectPanelStyle(): void {
 #bench-root .lt-kk-rowhead span{color:var(--bn-muted);font-size:11.5px}
 #bench-root .lt-kk-cell{border:1px solid var(--bn-line);border-radius:6px;background:var(--bn-panel-alt)}
 @media (max-width:720px){#bench-root .lt-kk-grid{grid-template-columns:repeat(var(--kk-cols),auto)}#bench-root .lt-kk-grid>div:first-child{display:none}#bench-root .lt-kk-rowhead{grid-column:1 / -1}}
-#bench-root .lt-stage-wrap{position:relative;margin:4px 0 8px;width:fit-content;max-width:100%}
+#bench-root .lt-arena{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margin:4px 0 8px}
+#bench-root .lt-stage-wrap{position:relative;width:fit-content;max-width:100%}
+#bench-root .lt-tray-col{flex:0 0 320px;max-width:100%;display:flex;flex-direction:column;gap:8px}
+#bench-root .lt-dice-shop>summary{cursor:pointer;font-size:12.5px;color:var(--bn-muted)}
+@media (min-width:721px){#bench-root .lt-stage-wrap{max-width:calc(100% - 332px)}}
+@media (max-width:720px){#bench-root .lt-tray-col{flex:1 1 100%}}
 #bench-root .lt-viewport{overflow:auto;max-width:100%;max-height:min(66vh,620px);border:1px solid var(--bn-line);border-radius:8px;background:var(--bn-panel-alt);touch-action:manipulation}
 #bench-root .lt-board{position:relative;width:max-content}
 #bench-root .lt-marks{position:absolute;left:0;top:0;pointer-events:none;image-rendering:pixelated}

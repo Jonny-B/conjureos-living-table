@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-02, the bench Play tab is turn based (click to move, initiative, on-board text) and the bench is down to five tabs.
+Last updated: 2026-10-02, turn-based bench Play with a dice tray (tap to roll, skins as a shop preview).
 
 ## Where the move stands
 
@@ -56,7 +56,7 @@ clothing drab, and the skeleton is near white in Cel bands and Plain.
 ## Next
 
 - Bring the bench's turn-based play into the game (#5): the click layer, turn order, overlay text and floating numbers into LivingTable.tsx. The owner picks the text style first (Pixel or Storybook, on the Play tab).
-- Owner's call pending: a deliberate 1 px breathing bob for 16 px idles (they are now still).
+- Owner's calls pending: how dice skins are sold (#6); a deliberate 1 px breathing bob for 16 px idles (they are now still).
 - Publishing: add the five Actions secrets (see the publish workflow's header), then the first publish per project.
 - Owner picks: ground style, character style and size for the game. Then the game needs an animation system to use the cast (the bench's Actor in `scripts/asset-bench/cast.ts` is the model).
 - Authored campaigns (owner-written outlines plus a freestyle option) and real-cost pricing for campaign generation.
