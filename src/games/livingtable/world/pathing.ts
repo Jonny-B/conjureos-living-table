@@ -193,8 +193,11 @@ export function pathTo(field: MovementField, to: TileCoord): TileCoord[] | null 
  * ask "could I see the target from THERE" about squares nobody is standing on
  * yet. It runs the game's own Bresenham walk (perception.ts's
  * `visibleTilesFrom`) from a probe token, so it blocks on exactly what the
- * attack check blocks on: a wall does, and a closed door does not (the game
- * does not treat a door as blocking sight today, and this must not disagree).
+ * attack check blocks on. What blocks is the OPAQUE grid (world/visibility.ts),
+ * not the walkable one: a wall does, and so does a closed door (a prop, with
+ * its own sight flag), while a chest, a river or an open door does not. A ranged
+ * attack through a shut door is therefore refused, and this must never disagree
+ * with the fog the player sees, which is built from the same grid.
  */
 export function lineOfSightFor(layout: CellLayout, manifest: AssetManifest): (from: TileCoord, to: TileCoord) => boolean {
   const origin: CellCoord = { cx: 0, cy: 0 };

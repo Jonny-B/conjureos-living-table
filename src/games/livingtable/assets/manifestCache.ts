@@ -26,6 +26,7 @@ import type { AssetManifest } from "../world/cell";
 import type { RenderManifest, SpriteAsset } from "../render/canvasRenderer";
 import { isUsableSpriteSize } from "../render/spritePixels";
 import { isRenderOnlyAssetId } from "../render/wallProfiles";
+import { isOpaqueAssetId } from "../world/visibility";
 import type { AvailableAssetIds } from "../dm/promptBuilder";
 
 export interface LoadedManifest {
@@ -132,7 +133,10 @@ export function adaptManifest(wire: WireManifest): LoadedManifest {
       continue;
     }
     if (asset.kind === "tile") {
-      world.tiles[asset.assetId] = { walkable: asset.walkable };
+      // `opaque` is the sight flag, apart from walking (world/visibility.ts):
+      // the backend does not send one yet, so it is stamped from the asset id,
+      // which is why water is see-through here and a wall is not.
+      world.tiles[asset.assetId] = { walkable: asset.walkable, opaque: isOpaqueAssetId("tile", asset.assetId, asset.walkable) };
       render.tiles[asset.assetId] = sprite;
       availableAssetIds.tiles.push(asset.assetId);
     } else if (asset.kind === "token") {
@@ -154,7 +158,9 @@ export function adaptManifest(wire: WireManifest): LoadedManifest {
       // door_closed, tree and chest walkable:false, door_open and torch
       // true); without this line the flag was never set in the running game
       // and `setDoorState` changed a picture and nothing else.
-      world.props[asset.assetId] = { blocks: asset.walkable === false };
+      // `opaque` is separate from `blocks`: a chest blocks walking, not sight;
+      // a closed door blocks both.
+      world.props[asset.assetId] = { blocks: asset.walkable === false, opaque: isOpaqueAssetId("prop", asset.assetId, asset.walkable) };
       render.props[asset.assetId] = sprite;
       availableAssetIds.props.push(asset.assetId);
     }

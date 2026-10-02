@@ -578,8 +578,8 @@ test("adaptManifest: groups the flat wire assets array by kind into world + rend
   };
   const adapted = adaptManifest(wire);
   assert.equal(adapted.template, "fantasy");
-  assert.deepEqual(adapted.world.tiles.floor_grass, { walkable: true });
-  assert.deepEqual(adapted.world.tiles.wall_stone, { walkable: false });
+  assert.deepEqual(adapted.world.tiles.floor_grass, { walkable: true, opaque: false });
+  assert.deepEqual(adapted.world.tiles.wall_stone, { walkable: false, opaque: true });
   assert.ok("token_knight" in adapted.world.tokens);
   assert.ok("chest" in adapted.world.props);
   assert.deepEqual(adapted.render.tiles.floor_grass, { pixels: [[0]] });
@@ -936,9 +936,9 @@ test("adaptManifest: a walkable:false prop becomes a BLOCKING prop, which is wha
     ],
   };
   const adapted = adaptManifest(wire);
-  assert.deepEqual(adapted.world.props.door_closed, { blocks: true });
-  assert.deepEqual(adapted.world.props.door_open, { blocks: false }, "an open door must not block, or opening it changes nothing");
-  assert.deepEqual(adapted.world.props.torch, { blocks: false });
+  assert.deepEqual(adapted.world.props.door_closed, { blocks: true, opaque: true });
+  assert.deepEqual(adapted.world.props.door_open, { blocks: false, opaque: false }, "an open door must not block, or opening it changes nothing");
+  assert.deepEqual(adapted.world.props.torch, { blocks: false, opaque: false });
 });
 
 test("a closed door adapted off the wire actually stops a token, and opening it lets one through", () => {
@@ -1022,8 +1022,8 @@ test("adaptManifest puts the render-only wall-profile ids in render but not in w
   assert.deepEqual(adapted.availableAssetIds, { tiles: ["floor_stone", "wall_stone"], tokens: ["token_goblin"], props: ["door_closed", "door_open"] });
 
   // And the ordinary ids around them are adapted exactly as before.
-  assert.deepEqual(adapted.world.tiles.wall_stone, { walkable: false });
-  assert.deepEqual(adapted.world.props.door_closed, { blocks: true });
+  assert.deepEqual(adapted.world.tiles.wall_stone, { walkable: false, opaque: true });
+  assert.deepEqual(adapted.world.props.door_closed, { blocks: true, opaque: true });
   assert.ok("wall_stone" in adapted.render.tiles && "door_closed" in adapted.render.props);
 });
 

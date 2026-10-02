@@ -647,6 +647,7 @@ function samplePlayspace(): Playspace {
     cell: { cx: 0, cy: 0 },
     tiles: blankTiles(),
     walkable: Array.from({ length: CELL_HEIGHT }, () => Array.from({ length: CELL_WIDTH }, () => true)),
+    opaque: Array.from({ length: CELL_HEIGHT }, () => Array.from({ length: CELL_WIDTH }, () => false)),
     props: [{ id: "chest-1", assetId: "chest", x: 4, y: 4 }],
     tokens: [{ id: "pc-kira", assetId: "knight", x: 2, y: 2, kind: "pc" }],
     exits: [{ at: { x: CELL_WIDTH - 1, y: 5 }, edge: "E", toCell: { cx: 1, cy: 0 } }],
