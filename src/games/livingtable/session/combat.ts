@@ -409,7 +409,10 @@ export function effectiveSpeedFt(sheet: CharacterSheet): number {
  * instead would double-count a pair that is already worn (60 becomes 120).
  */
 export function speedBeforeBootsFt(sheet: CharacterSheet): number {
-  return Math.max(0, DEFAULT_SPEED_FT - armorSpeedPenaltyFt(sheet));
+  // An ancestry's own base speed (25 for a dwarf, halfling or gnome) when the
+  // sheet carries one; the armour penalty then applies on top of it as ever.
+  const base = typeof sheet.speedFt === "number" && Number.isFinite(sheet.speedFt) && sheet.speedFt > 0 ? sheet.speedFt : DEFAULT_SPEED_FT;
+  return Math.max(0, base - armorSpeedPenaltyFt(sheet));
 }
 
 /** A legendary weapon's extra damage, rolled and typed, or null when the weapon slot is not legendary. */

@@ -123,6 +123,41 @@ const SAVES_BY_CHASSIS: Record<Chassis, (keyof AbilityScores)[]> = {
   wizard: ["int", "wis"],
 };
 
+/**
+ * SRD 5.1's class skill lists: how many skills each class picks at level 1 and
+ * the list it picks them from. A class-table fact, so it is keyed by chassis
+ * like SAVES_BY_CHASSIS above (both reskins of one chassis share it).
+ *
+ * Every archetype's own starting skills in ARCHETYPES below are drawn from its
+ * chassis's list, which a test pins, so "keep the archetype's skills" is always
+ * a legal pick. The Rogue's count is 4 in the SRD while the three Rogue
+ * archetypes ship with 3; creation fills the gap from this list.
+ */
+export const CLASS_SKILL_CHOICES: Readonly<Record<Chassis, { count: number; from: string[] }>> = Object.freeze({
+  fighter: {
+    count: 2,
+    from: ["Acrobatics", "Animal Handling", "Athletics", "History", "Insight", "Intimidation", "Perception", "Survival"],
+  },
+  rogue: {
+    count: 4,
+    from: [
+      "Acrobatics",
+      "Athletics",
+      "Deception",
+      "Insight",
+      "Intimidation",
+      "Investigation",
+      "Perception",
+      "Performance",
+      "Persuasion",
+      "Sleight of Hand",
+      "Stealth",
+    ],
+  },
+  wizard: { count: 2, from: ["Arcana", "History", "Insight", "Investigation", "Medicine", "Religion"] },
+  cleric: { count: 2, from: ["History", "Insight", "Medicine", "Persuasion", "Religion"] },
+});
+
 function proficiencies(skills: string[], chassis: Chassis): ArchetypeProficiencies {
   return { skills, saves: SAVES_BY_CHASSIS[chassis] };
 }

@@ -21,7 +21,8 @@
 import { abilityModifier, computeAC, proficiencyBonus, spellSlotsForLevel } from "../rules";
 import type { AbilityScores, ArmorCategory, CasterClass, LevelUpChange, SpellSlots } from "../rules";
 import { normalizeBag } from "../rules/inventory";
-import { getArchetype, type Archetype, type Chassis, type Consumable, type TemplateGenre } from "./templates";
+import { CLASS_SKILL_CHOICES, getArchetype, type Archetype, type Chassis, type Consumable, type TemplateGenre } from "./templates";
+import { ANCESTRIES, getAncestry, type Ancestry, type AncestryTrait } from "./ancestries";
 import { normalizeEquipment } from "./equipment";
 import {
   GEAR_ROLES,
@@ -217,11 +218,11 @@ function fightingStyleOptionsFor(archetype: Archetype): ChoiceOption[] {
   return FIGHTING_STYLE_OPTIONS.filter((option) => viable.includes(option.id));
 }
 
-function expertiseChoiceFor(archetype: Archetype): CreationChoice {
+function expertiseChoiceFor(skills: readonly string[]): CreationChoice {
   return {
     id: "expertiseSkill",
     prompt: "Pick one of your skills to be exceptional at.",
-    options: archetype.startingProficiencies.skills.map((skill) => ({
+    options: skills.map((skill) => ({
       id: skill,
       label: skill,
       technical: `Expertise in ${skill}: your proficiency bonus counts twice on ${skill} checks.`,
@@ -255,14 +256,21 @@ export function appliedEffectFor(option: ChoiceOption, prefix = ""): LevelUpChan
   };
 }
 
-/** What DESIGN.md calls "one or two flavour choices": empty for Cleric/Wizard chassis, one real branch point for Fighter/Rogue. */
-export function creationChoicesFor(archetypeId: string): CreationChoice[] {
+/**
+ * What DESIGN.md calls "one or two flavour choices": empty for Cleric/Wizard chassis, one real branch point for Fighter/Rogue.
+ *
+ * `skills` is the character's final skill list when the creator has changed it
+ * (custom class, background or ancestry skills): a Rogue's Expertise picks from
+ * the skills they actually have. Omitted, it is the archetype's own list, which
+ * is what every caller before the creator existed got.
+ */
+export function creationChoicesFor(archetypeId: string, skills?: readonly string[]): CreationChoice[] {
   const archetype = getArchetype(archetypeId);
   if (archetype.chassis === "fighter") {
     return [{ id: "fightingStyle", prompt: "Pick a fighting style.", options: fightingStyleOptionsFor(archetype) }];
   }
   if (archetype.chassis === "rogue") {
-    return [expertiseChoiceFor(archetype)];
+    return [expertiseChoiceFor(skills ?? archetype.startingProficiencies.skills)];
   }
   return [];
 }
@@ -275,6 +283,48 @@ export interface CreateCharacterInput {
   appearanceAssetId: string;
   /** choiceId -> optionId, matching creationChoicesFor's shape. Missing entries fall back to the first option, so creation never blocks on an unmade choice. */
   choices?: Record<string, string>;
+  /**
+   * How the six base scores were made. Omitted reads as "archetype": the
+   * archetype's own standard-array allocation, which is every character before
+   * the creator existed. The scores below are BEFORE the ancestry's increases.
+   */
+  abilityMethod?: AbilityMethod;
+  /** The six base scores for "standard", "pointBuy" or "rolled". Omitted, the archetype's allocation is used (a valid standard array, and exactly 27 point-buy points). For "archetype" it is ignored. */
+  baseScores?: AbilityScores;
+  /** The six totals a "rolled" character rolled (from rollAbilitySet or scoresFromDice). baseScores must be those six numbers, each used once. */
+  rolledScores?: number[];
+  /** One of ANCESTRIES' ids. Omitted, there is no ancestry (and no speed, language or trait fields on the sheet). */
+  ancestryId?: string;
+  /** The abilities a free-increase ancestry (Half-Elf) adds its bonus to. Omitted, the archetype's two best abilities are used. */
+  ancestryIncreases?: (keyof AbilityScores)[];
+  /** The skills a free-skill ancestry (Half-Elf) picks. Omitted, the first skills not already taken are used. */
+  ancestrySkills?: string[];
+  /** Exactly CLASS_SKILL_CHOICES[chassis].count skills from the class list. Omitted, the archetype's own skills. */
+  classSkills?: string[];
+  background?: Background;
+  alignment?: string;
+  backstory?: string;
+}
+
+export type { Ancestry, AncestryTrait } from "./ancestries";
+export { ANCESTRIES } from "./ancestries";
+export { CLASS_SKILL_CHOICES } from "./templates";
+
+export type AbilityMethod = "archetype" | "standard" | "pointBuy" | "rolled";
+
+/** A custom background: any two skills plus the four SRD personality prompts, all in the player's own words. */
+export interface Background {
+  name: string;
+  skills: [string, string];
+  personalityTrait?: string;
+  ideal?: string;
+  bond?: string;
+  flaw?: string;
+}
+
+/** An ancestry trait as it sits on a finished sheet, with where it came from. */
+export interface SheetTrait extends AncestryTrait {
+  source: string;
 }
 
 /**
@@ -391,6 +441,24 @@ export interface CharacterSheet {
   /** technical+plain, one per resolved choice, ready for a character-sheet UI to render as-is. */
   appliedEffects: LevelUpChange[];
   kitDescription: string;
+  /**
+   * The creator's fields, all optional and all ABSENT on a character made the
+   * old way (and on every stored sheet that predates them). `normalizeSheet`
+   * sanitises them and never invents one.
+   */
+  ancestryId?: string;
+  ancestryName?: string;
+  /** The six scores before the ancestry's increases; `abilities` is the final figure. */
+  baseScores?: AbilityScores;
+  abilityMethod?: AbilityMethod;
+  /** Base walking speed in feet; absent reads as session/combat.ts's DEFAULT_SPEED_FT (30). */
+  speedFt?: number;
+  languages?: string[];
+  darkvisionFt?: number;
+  traits?: SheetTrait[];
+  background?: Background;
+  alignment?: string;
+  backstory?: string;
 }
 
 /**
@@ -401,16 +469,400 @@ export interface CharacterSheet {
  * sheet.
  */
 export function createCharacter(input: CreateCharacterInput): CharacterSheet {
-  const archetype = getArchetype(input.archetypeId);
+  const resolved = resolveCreation(input);
+  if (!resolved.plan) throw new Error(resolved.errors[0] ?? "this character cannot be created");
+  return buildSheet(resolved.plan);
+}
 
-  const name = input.name.trim();
-  if (!name) throw new Error("a character needs a name");
-  const appearanceAssetId = input.appearanceAssetId.trim();
-  if (!appearanceAssetId) throw new Error("a character needs an appearance");
+// ── ability scores: the four ways to make six numbers ──────────────────
+
+export const ABILITY_KEYS: readonly (keyof AbilityScores)[] = Object.freeze(["str", "dex", "con", "int", "wis", "cha"] as const);
+
+/** SRD 5.1's standard array: each of these six numbers, once, in any order. */
+export const STANDARD_ARRAY: readonly number[] = Object.freeze([15, 14, 13, 12, 10, 8]);
+
+/** SRD 5.1 point buy: 27 points, every score starts at 8 and may be bought up to 15. */
+export const POINT_BUY_BUDGET = 27;
+const POINT_BUY_COST: Readonly<Record<number, number>> = Object.freeze({ 8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9 });
+
+/** The SRD's ceiling for an ability score at creation, after the ancestry's increases. */
+export const ABILITY_SCORE_CAP = 20;
+
+/** Total point-buy cost of six scores, or null when any score is not a whole number from 8 to 15. */
+export function pointBuyCost(scores: AbilityScores): number | null {
+  let total = 0;
+  for (const key of ABILITY_KEYS) {
+    const value = scores?.[key];
+    if (typeof value !== "number" || !Number.isInteger(value)) return null;
+    const cost = POINT_BUY_COST[value];
+    if (cost === undefined) return null;
+    total += cost;
+  }
+  return total;
+}
+
+/** Six groups of four d6 as rolled, and each group's best three summed. `scores[i]` belongs to `dice[i]`. */
+export interface RolledSet {
+  dice: number[][];
+  scores: number[];
+}
+
+function rollD6(rng: () => number): number {
+  return Math.min(6, 1 + Math.floor(rng() * 6));
+}
+
+/** Roll 4d6 six times and keep each group's best three. `rng` returns [0, 1), as Math.random does. */
+export function rollAbilitySet(rng: () => number = Math.random): RolledSet {
+  const dice: number[][] = [];
+  for (let i = 0; i < 6; i++) dice.push([rollD6(rng), rollD6(rng), rollD6(rng), rollD6(rng)]);
+  return { dice, scores: scoresFromDice(dice) };
+}
+
+/** The six totals for six groups of four d6 (drop the lowest die of each group). For when the dice tray rolled the dice. Throws on anything that is not six groups of four faces from 1 to 6. */
+export function scoresFromDice(dice: number[][]): number[] {
+  if (!Array.isArray(dice) || dice.length !== 6) throw new Error("rolling ability scores takes six groups of four dice");
+  return dice.map((group) => {
+    if (!Array.isArray(group) || group.length !== 4 || group.some((d) => !Number.isInteger(d) || d < 1 || d > 6)) {
+      throw new Error("each ability score is four six-sided dice");
+    }
+    const sorted = [...group].sort((a, b) => a - b);
+    return sorted[1]! + sorted[2]! + sorted[3]!;
+  });
+}
+
+function sameMultiset(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  const x = [...a].sort((p, q) => p - q);
+  const y = [...b].sort((p, q) => p - q);
+  return x.every((v, i) => v === y[i]);
+}
+
+/**
+ * Whether six base scores (before any ancestry increase) are legal for a
+ * method, as a plain sentence a player can act on, or null when they are fine.
+ * "archetype" is the archetype's own allocation, which is a standard-array one.
+ * For "rolled", `rolled` is the six totals that were rolled.
+ */
+export function validateBaseScores(method: AbilityMethod, scores: AbilityScores, rolled?: readonly number[]): string | null {
+  const values: number[] = [];
+  for (const key of ABILITY_KEYS) {
+    const v = scores?.[key];
+    if (typeof v !== "number" || !Number.isInteger(v)) return "Every ability score has to be a whole number.";
+    values.push(v);
+  }
+  switch (method) {
+    case "archetype":
+    case "standard":
+      return sameMultiset(values, STANDARD_ARRAY) ? null : "The standard array is 15, 14, 13, 12, 10 and 8, each used once.";
+    case "pointBuy": {
+      const cost = pointBuyCost(scores);
+      if (cost === null) return "Point buy scores run from 8 to 15 before your ancestry's bonus.";
+      if (cost > POINT_BUY_BUDGET) return `That costs ${cost} points and you only have ${POINT_BUY_BUDGET}.`;
+      return null;
+    }
+    case "rolled": {
+      if (!rolled || rolled.length !== 6) return "Roll your six ability scores first.";
+      if (rolled.some((r) => !Number.isInteger(r) || r < 3 || r > 18)) return "A rolled ability score is a whole number from 3 to 18.";
+      return sameMultiset(values, rolled) ? null : "Your scores must be the six numbers you rolled, each used once.";
+    }
+    default:
+      return `"${String(method)}" is not a way to make ability scores.`;
+  }
+}
+
+/** Hand six values out to the abilities in the archetype's own priority order (its highest base score first). */
+function assignByArchetypePriority(archetype: Archetype, values: readonly number[]): AbilityScores {
+  const order = [...ABILITY_KEYS].sort((a, b) => archetype.baseAbilityScores[b] - archetype.baseAbilityScores[a]);
+  const sorted = [...values].sort((a, b) => b - a);
+  const out = { ...archetype.baseAbilityScores };
+  order.forEach((key, i) => {
+    out[key] = sorted[i] ?? 8;
+  });
+  return out;
+}
+
+// ── alignment, background, backstory ───────────────────────────────────
+
+/** SRD 5.1's nine alignments, plus "Unaligned" for the creatures and characters that choose not to say. */
+export const ALIGNMENTS: readonly string[] = Object.freeze([
+  "Lawful Good",
+  "Neutral Good",
+  "Chaotic Good",
+  "Lawful Neutral",
+  "Neutral",
+  "Chaotic Neutral",
+  "Lawful Evil",
+  "Neutral Evil",
+  "Chaotic Evil",
+  "Unaligned",
+]);
+
+export const BACKSTORY_MAX = 2000;
+export const BACKGROUND_NAME_MAX = 60;
+export const BACKGROUND_TEXT_MAX = 400;
+const NAME_MAX = 60;
+
+function cleanText(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, max) : undefined;
+}
+
+// ── the creator's resolved plan ────────────────────────────────────────
+
+interface CreationPlan {
+  archetype: Archetype;
+  name: string;
+  appearanceAssetId: string;
+  fightingStyle?: ChoiceOption;
+  expertise?: ChoiceOption;
+  skillNames: string[];
+  abilities: AbilityScores;
+  /** Set when any of the creator's inputs was given; absent for a character made the old way. */
+  creator?: {
+    method: AbilityMethod;
+    baseScores: AbilityScores;
+    ancestry?: Ancestry;
+    background?: Background;
+    alignment?: string;
+    backstory?: string;
+  };
+}
+
+/** Every legal skill name, own properties only (a skill called "constructor" must not pass). */
+function isSkill(name: unknown): name is string {
+  return typeof name === "string" && Object.hasOwn(SKILL_ABILITY, name);
+}
+
+function isAbilityKey(key: unknown): key is keyof AbilityScores {
+  return typeof key === "string" && (ABILITY_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * Check an input and either produce the plan createCharacter builds from, or
+ * every reason it cannot. Collects rather than throws so the wizard can show
+ * all of them at once, and so createCharacter and previewCharacter can never
+ * disagree about what is valid. The old three errors come first and keep
+ * their old words.
+ */
+function resolveCreation(input: CreateCharacterInput): { plan?: CreationPlan; errors: string[] } {
+  const errors: string[] = [];
+  let archetype: Archetype;
+  try {
+    archetype = getArchetype(String(input?.archetypeId));
+  } catch (e) {
+    return { errors: [e instanceof Error ? e.message : "unknown archetype"] };
+  }
+
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  if (!name) errors.push("a character needs a name");
+  else if (name.length > NAME_MAX) errors.push(`a character's name is at most ${NAME_MAX} letters`);
+  const appearanceAssetId = typeof input.appearanceAssetId === "string" ? input.appearanceAssetId.trim() : "";
+  if (!appearanceAssetId) errors.push("a character needs an appearance");
 
   const chosen = input.choices ?? {};
+  const classRule = CLASS_SKILL_CHOICES[archetype.chassis];
+
+  // ── ancestry ──
+  let ancestry: Ancestry | undefined;
+  if (input.ancestryId !== undefined) {
+    ancestry = getAncestry(input.ancestryId);
+    if (!ancestry) errors.push(`"${String(input.ancestryId)}" is not an ancestry in this game`);
+  }
+
+  // ── base scores ──
+  const method: AbilityMethod = input.abilityMethod ?? "archetype";
+  let baseScores: AbilityScores = { ...archetype.baseAbilityScores };
+  if (method === "archetype") {
+    // The archetype's own allocation; baseScores is ignored on purpose, so a
+    // stale field from an earlier method cannot sneak into an "archetype" sheet.
+  } else if (method === "standard" || method === "pointBuy" || method === "rolled") {
+    if (method === "rolled" && !input.baseScores && Array.isArray(input.rolledScores) && input.rolledScores.length === 6) {
+      baseScores = assignByArchetypePriority(archetype, input.rolledScores);
+    } else if (input.baseScores) {
+      baseScores = { ...input.baseScores };
+    }
+    const problem = validateBaseScores(method, baseScores, input.rolledScores);
+    if (problem) errors.push(problem);
+  } else {
+    errors.push(`"${String(method)}" is not a way to make ability scores`);
+  }
+
+  // ── ancestry ability increases ──
+  const increases: Partial<Record<keyof AbilityScores, number>> = { ...(ancestry?.abilityIncreases ?? {}) };
+  if (ancestry?.chooseIncreases) {
+    const rule = ancestry.chooseIncreases;
+    let picks: (keyof AbilityScores)[];
+    if (input.ancestryIncreases === undefined) {
+      picks = [...ABILITY_KEYS]
+        .filter((k) => !rule.exclude.includes(k))
+        .sort((a, b) => baseScores[b] - baseScores[a])
+        .slice(0, rule.count);
+    } else {
+      picks = input.ancestryIncreases;
+      const valid = Array.isArray(picks) && picks.every((k) => isAbilityKey(k));
+      if (!valid || picks.length !== rule.count || new Set(picks).size !== picks.length) {
+        errors.push(`${ancestry.name} adds +${rule.amount} to ${rule.count} different abilities of your choice.`);
+      } else if (picks.some((k) => rule.exclude.includes(k))) {
+        errors.push(`${ancestry.name}'s free bonus has to go to an ability other than ${rule.exclude.join(", ")}.`);
+      }
+    }
+    if (Array.isArray(picks)) {
+      for (const k of picks) if (isAbilityKey(k)) increases[k] = (increases[k] ?? 0) + rule.amount;
+    }
+  } else if (input.ancestryIncreases !== undefined && input.ancestryIncreases.length > 0) {
+    errors.push(ancestry ? `${ancestry.name} has no free ability bonus to place.` : "Pick an ancestry before placing its ability bonus.");
+  }
+
+  const abilities = { ...baseScores };
+  for (const key of ABILITY_KEYS) abilities[key] = Math.min(ABILITY_SCORE_CAP, baseScores[key] + (increases[key] ?? 0));
+
+  // ── skills: class, background, ancestry, no repeats ──
+  const taken = new Map<string, string>(); // skill -> where it came from
+  const claim = (skill: string, source: string): void => {
+    const prior = taken.get(skill);
+    if (prior && prior !== source) errors.push(`${skill} comes from both your ${prior} and your ${source}. Pick another.`);
+    else if (prior) errors.push(`${skill} is picked twice. Pick another.`);
+    else taken.set(skill, source);
+  };
+
+  let background: Background | undefined;
+  if (input.background !== undefined) {
+    const bg = input.background;
+    const bgName = cleanText(bg?.name, BACKGROUND_NAME_MAX);
+    const pair = Array.isArray(bg?.skills) ? bg.skills : [];
+    if (!bgName) errors.push("A background needs a name.");
+    if (pair.length !== 2 || !pair.every(isSkill)) errors.push("A background trains exactly two skills.");
+    else {
+      background = {
+        name: bgName ?? "Background",
+        skills: [pair[0]!, pair[1]!],
+        ...optionalText("personalityTrait", bg.personalityTrait),
+        ...optionalText("ideal", bg.ideal),
+        ...optionalText("bond", bg.bond),
+        ...optionalText("flaw", bg.flaw),
+      };
+    }
+  }
+
+  // Ancestry grants that are fixed are claimed first, so a defaulted class
+  // list can step around them while an explicit pick that collides is refused.
+  const fixedAncestry = ancestry?.skills ?? [];
+  const classExplicit = input.classSkills !== undefined;
+  let classSkills: string[];
+  if (classExplicit) {
+    classSkills = Array.isArray(input.classSkills) ? [...input.classSkills] : [];
+    const bad = classSkills.find((s) => !classRule.from.includes(s));
+    if (classSkills.length !== classRule.count) errors.push(`Pick exactly ${classRule.count} class skills.`);
+    else if (bad !== undefined) errors.push(`${String(bad)} is not on this class's skill list.`);
+  } else {
+    classSkills = [...archetype.startingProficiencies.skills];
+    // The old way: keep the archetype's own skills. They only move when the new
+    // ancestry or background already trains one, and then to the next free skill
+    // on the class list, so a default never fails on a collision the player
+    // has not even seen.
+    const others = new Set<string>([...fixedAncestry, ...(background?.skills ?? [])]);
+    classSkills = classSkills.map((skill) => {
+      if (!others.has(skill)) return skill;
+      const swap = classRule.from.find((s) => !others.has(s) && !classSkills.includes(s));
+      return swap ?? skill;
+    });
+  }
+  for (const s of classSkills) claim(s, "class");
+  if (background) for (const s of background.skills) claim(s, "background");
+  for (const s of fixedAncestry) claim(s, "ancestry");
+
+  let ancestryPicked: string[] = [];
+  if (ancestry?.chooseSkills) {
+    if (input.ancestrySkills === undefined) {
+      ancestryPicked = Object.keys(SKILL_ABILITY)
+        .filter((s) => !taken.has(s))
+        .slice(0, ancestry.chooseSkills);
+    } else {
+      ancestryPicked = Array.isArray(input.ancestrySkills) ? [...input.ancestrySkills] : [];
+      if (ancestryPicked.length !== ancestry.chooseSkills || !ancestryPicked.every(isSkill)) {
+        errors.push(`${ancestry.name} trains exactly ${ancestry.chooseSkills} skills of your choice.`);
+        ancestryPicked = [];
+      }
+    }
+    for (const s of ancestryPicked) claim(s, "ancestry");
+  } else if (input.ancestrySkills !== undefined && input.ancestrySkills.length > 0) {
+    errors.push(ancestry ? `${ancestry.name} has no free skills to pick.` : "Pick an ancestry before choosing its skills.");
+  }
+
+  const skillNames = [...classSkills, ...(background?.skills ?? []), ...fixedAncestry, ...ancestryPicked];
+  // A skill nobody taught SKILL_ABILITY about is a bug in templates.ts, not a
+  // bad pick, so it still throws loudly (the old behavior), via buildSheet.
+
+  // ── class choices ──
+  let fightingStyle: ChoiceOption | undefined;
+  let expertise: ChoiceOption | undefined;
+  if (archetype.chassis === "fighter") {
+    const viableOptions = fightingStyleOptionsFor(archetype);
+    const optionId = chosen.fightingStyle ?? viableOptions[0]!.id;
+    fightingStyle = viableOptions.find((o) => o.id === optionId);
+    if (!fightingStyle) errors.push(`"${optionId}" is not a fighting style option for this archetype's kit`);
+  }
+  if (archetype.chassis === "rogue") {
+    const viableOptions = expertiseChoiceFor(skillNames).options;
+    const optionId = chosen.expertiseSkill ?? viableOptions[0]!.id;
+    expertise = viableOptions.find((o) => o.id === optionId);
+    if (!expertise) {
+      const custom = classExplicit || background !== undefined || ancestry !== undefined;
+      errors.push(`"${optionId}" is not one of this ${custom ? "character's" : "archetype's starting"} skills`);
+    }
+  }
+
+  // ── alignment, backstory ──
+  let alignment: string | undefined;
+  if (input.alignment !== undefined) {
+    alignment = typeof input.alignment === "string" ? input.alignment.trim() : "";
+    if (!ALIGNMENTS.includes(alignment)) {
+      errors.push(`"${String(input.alignment)}" is not an alignment. Pick one of the nine, or Unaligned.`);
+      alignment = undefined;
+    }
+  }
+  let backstory: string | undefined;
+  if (input.backstory !== undefined) {
+    const text = typeof input.backstory === "string" ? input.backstory.trim() : "";
+    if (text.length > BACKSTORY_MAX) errors.push(`A backstory is at most ${BACKSTORY_MAX} letters; yours is ${text.length}.`);
+    else if (text) backstory = text;
+  }
+
+  if (errors.length > 0) return { errors };
+
+  const usedCreator =
+    input.abilityMethod !== undefined ||
+    input.baseScores !== undefined ||
+    input.rolledScores !== undefined ||
+    ancestry !== undefined ||
+    background !== undefined ||
+    alignment !== undefined ||
+    backstory !== undefined;
+
+  return {
+    errors,
+    plan: {
+      archetype,
+      name,
+      appearanceAssetId,
+      fightingStyle,
+      expertise,
+      skillNames,
+      abilities,
+      creator: usedCreator ? { method, baseScores, ancestry, background, alignment, backstory } : undefined,
+    },
+  };
+}
+
+function optionalText<K extends "personalityTrait" | "ideal" | "bond" | "flaw">(key: K, value: unknown): Partial<Record<K, string>> {
+  const text = cleanText(value, BACKGROUND_TEXT_MAX);
+  return text === undefined ? {} : ({ [key]: text } as Partial<Record<K, string>>);
+}
+
+function buildSheet(plan: CreationPlan): CharacterSheet {
+  const { archetype, name, appearanceAssetId, abilities, creator } = plan;
   const level = 1;
-  const abilities = archetype.baseAbilityScores;
   const modifiers = abilityModifiers(abilities);
   const profBonus = proficiencyBonus(level);
 
@@ -420,31 +872,23 @@ export function createCharacter(input: CreateCharacterInput): CharacterSheet {
   const resolvedChoices: Record<string, string> = {};
   const appliedEffects: LevelUpChange[] = [];
 
-  if (archetype.chassis === "fighter") {
-    const viableOptions = fightingStyleOptionsFor(archetype);
-    const optionId = chosen.fightingStyle ?? viableOptions[0]!.id;
-    const option = viableOptions.find((o) => o.id === optionId);
-    if (!option) throw new Error(`"${optionId}" is not a fighting style option for this archetype's kit`);
-    resolvedChoices.fightingStyle = option.id;
-    appliedEffects.push(appliedEffectFor(option));
+  if (plan.fightingStyle) {
+    resolvedChoices.fightingStyle = plan.fightingStyle.id;
+    appliedEffects.push(appliedEffectFor(plan.fightingStyle));
     // Defense is the one style with an always-on numeric effect; Dueling and
     // Archery are conditional on weapon choice mid-combat, which is the
     // combat resolver's call at attack time, not something to bake into a
     // flat sheet number that would misrepresent it as unconditional.
-    if (option.id === "defense") armorClass += 1;
+    if (plan.fightingStyle.id === "defense") armorClass += 1;
   }
 
-  if (archetype.chassis === "rogue") {
-    const viableOptions = expertiseChoiceFor(archetype).options;
-    const optionId = chosen.expertiseSkill ?? viableOptions[0]!.id;
-    const option = viableOptions.find((o) => o.id === optionId);
-    if (!option) throw new Error(`"${optionId}" is not one of this archetype's starting skills`);
-    resolvedChoices.expertiseSkill = option.id;
-    appliedEffects.push(appliedEffectFor(option));
+  if (plan.expertise) {
+    resolvedChoices.expertiseSkill = plan.expertise.id;
+    appliedEffects.push(appliedEffectFor(plan.expertise));
   }
 
   const expertiseSkill = resolvedChoices.expertiseSkill;
-  const skills: SkillProficiency[] = archetype.startingProficiencies.skills.map((skill) => {
+  const skills: SkillProficiency[] = plan.skillNames.map((skill) => {
     const ability = SKILL_ABILITY[skill];
     if (!ability) throw new Error(`unknown skill "${skill}" - add it to SKILL_ABILITY in creation.ts`);
     const expertise = skill === expertiseSkill;
@@ -461,14 +905,16 @@ export function createCharacter(input: CreateCharacterInput): CharacterSheet {
   // floored at 1 (a very low CON can't make a level-1 character start at 0
   // or negative HP). This is deliberately not rules/leveling.ts's
   // averageHitDieValue -- that formula is correct from level 2 onward, not
-  // for the character you're rolling up right now.
-  const maxHp = Math.max(1, archetype.startingHitDie + modifiers.con);
+  // for the character you're rolling up right now. The CON here is the FINAL
+  // one (after the ancestry's increase), and Hill Dwarf adds its point per level.
+  const ancestry = creator?.ancestry;
+  const maxHp = Math.max(1, archetype.startingHitDie + modifiers.con + (ancestry?.hpPerLevel ?? 0) * level);
 
   const spellSlots: SpellSlots | null = isCasterChassis(archetype.chassis)
     ? spellSlotsForLevel(archetype.chassis, level)
     : null;
 
-  return {
+  const sheet: CharacterSheet = {
     archetypeId: archetype.id,
     template: archetype.template,
     chassis: archetype.chassis,
@@ -506,6 +952,83 @@ export function createCharacter(input: CreateCharacterInput): CharacterSheet {
     appliedEffects,
     kitDescription: archetype.kitDescription,
   };
+
+  if (creator) {
+    sheet.abilityMethod = creator.method;
+    sheet.baseScores = { ...creator.baseScores };
+    if (ancestry) {
+      sheet.ancestryId = ancestry.id;
+      sheet.ancestryName = ancestry.name;
+      sheet.speedFt = ancestry.speedFt;
+      sheet.languages = [...ancestry.languages];
+      if (ancestry.darkvisionFt !== undefined) sheet.darkvisionFt = ancestry.darkvisionFt;
+      sheet.traits = ancestry.traits.map((t) => ({ ...t, source: ancestry.name }));
+    }
+    if (creator.background) sheet.background = { ...creator.background, skills: [...creator.background.skills] };
+    if (creator.alignment) sheet.alignment = creator.alignment;
+    if (creator.backstory) sheet.backstory = creator.backstory;
+  }
+
+  return sheet;
+}
+
+// ── the wizard's two entry points ──────────────────────────────────────
+
+/** The archetype's own skills, padded from its class list up to the SRD count (a Rogue picks 4; the archetypes ship with 3). */
+function defaultClassSkills(archetype: Archetype): string[] {
+  const rule = CLASS_SKILL_CHOICES[archetype.chassis];
+  const out = [...archetype.startingProficiencies.skills];
+  for (const skill of rule.from) {
+    if (out.length >= rule.count) break;
+    if (!out.includes(skill)) out.push(skill);
+  }
+  return out.slice(0, rule.count);
+}
+
+/**
+ * Everything the creation wizard offers for one archetype, with a COMPLETE
+ * default input (the archetype's own scores, Human, its own skills, the first
+ * option of every class choice) so "Begin" works from any step. Throws on an
+ * unknown archetype, as creationChoicesFor does.
+ */
+export function creationOptions(archetypeId: string): {
+  classSkills: { count: number; from: string[] };
+  ancestries: readonly Ancestry[];
+  choices: CreationChoice[];
+  defaults: CreateCharacterInput;
+} {
+  const archetype = getArchetype(archetypeId);
+  const rule = CLASS_SKILL_CHOICES[archetype.chassis];
+  const classSkills = defaultClassSkills(archetype);
+  const choices = creationChoicesFor(archetypeId, classSkills);
+  const defaultChoices: Record<string, string> = {};
+  for (const choice of choices) defaultChoices[choice.id] = choice.options[0]!.id;
+  return {
+    classSkills: { count: rule.count, from: [...rule.from] },
+    ancestries: ANCESTRIES,
+    choices,
+    defaults: {
+      archetypeId: archetype.id,
+      name: "Adventurer",
+      appearanceAssetId: `token_${archetype.id.replace(/-/g, "_")}`,
+      choices: defaultChoices,
+      abilityMethod: "archetype",
+      baseScores: { ...archetype.baseAbilityScores },
+      ancestryId: "human",
+      classSkills,
+    },
+  };
+}
+
+/** Build the sheet an input would make, or say why it cannot. Never throws: the wizard calls it on every change. */
+export function previewCharacter(input: CreateCharacterInput): { sheet: CharacterSheet | null; errors: string[] } {
+  try {
+    const resolved = resolveCreation(input);
+    if (!resolved.plan) return { sheet: null, errors: resolved.errors.length ? resolved.errors : ["this character cannot be created"] };
+    return { sheet: buildSheet(resolved.plan), errors: [] };
+  } catch (e) {
+    return { sheet: null, errors: [e instanceof Error ? e.message : "this character cannot be created"] };
+  }
 }
 
 /**
@@ -523,7 +1046,7 @@ export function createCharacter(input: CreateCharacterInput): CharacterSheet {
 export function normalizeSheet(sheet: CharacterSheet): CharacterSheet {
   const equipment = sheet.equipment ? normalizeEquipment(sheet.equipment) : { ...STARTING_LOADOUT };
   const level = typeof sheet.level === "number" && sheet.level > 0 ? sheet.level : 1;
-  return {
+  const normalized: CharacterSheet = {
     ...sheet,
     level,
     hitDiceRemaining: typeof sheet.hitDiceRemaining === "number" ? sheet.hitDiceRemaining : level,
@@ -564,6 +1087,88 @@ export function normalizeSheet(sheet: CharacterSheet): CharacterSheet {
     inventory: Array.isArray(sheet.inventory) ? sheet.inventory : [],
     consumables: Array.isArray(sheet.consumables) ? sheet.consumables : [],
   };
+  // The creator's optional fields: kept when they are well-formed, dropped when
+  // not, and never invented. An old sheet comes back with none of them.
+  for (const key of CREATOR_SHEET_KEYS) delete normalized[key];
+  Object.assign(normalized, sanitiseCreatorFields(sheet));
+  return normalized;
+}
+
+const CREATOR_SHEET_KEYS = [
+  "ancestryId",
+  "ancestryName",
+  "baseScores",
+  "abilityMethod",
+  "speedFt",
+  "languages",
+  "darkvisionFt",
+  "traits",
+  "background",
+  "alignment",
+  "backstory",
+] as const satisfies readonly (keyof CharacterSheet)[];
+
+function sanitiseScores(value: unknown): AbilityScores | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const rec = value as Record<string, unknown>;
+  const out = {} as AbilityScores;
+  for (const key of ABILITY_KEYS) {
+    const v = rec[key];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 30) return undefined;
+    out[key] = v;
+  }
+  return out;
+}
+
+function sanitiseCreatorFields(sheet: CharacterSheet): Partial<CharacterSheet> {
+  const out: Partial<CharacterSheet> = {};
+  const ancestryId = cleanText(sheet.ancestryId, 40);
+  if (ancestryId) out.ancestryId = ancestryId;
+  const ancestryName = cleanText(sheet.ancestryName, 60);
+  if (ancestryName) out.ancestryName = ancestryName;
+  const baseScores = sanitiseScores(sheet.baseScores);
+  if (baseScores) out.baseScores = baseScores;
+  if (sheet.abilityMethod === "archetype" || sheet.abilityMethod === "standard" || sheet.abilityMethod === "pointBuy" || sheet.abilityMethod === "rolled") {
+    out.abilityMethod = sheet.abilityMethod;
+  }
+  if (typeof sheet.speedFt === "number" && Number.isFinite(sheet.speedFt) && sheet.speedFt >= 5 && sheet.speedFt <= 120) out.speedFt = sheet.speedFt;
+  if (Array.isArray(sheet.languages)) {
+    const languages = sheet.languages.map((l) => cleanText(l, 80)).filter((l): l is string => l !== undefined).slice(0, 12);
+    if (languages.length > 0) out.languages = languages;
+  }
+  if (typeof sheet.darkvisionFt === "number" && Number.isFinite(sheet.darkvisionFt) && sheet.darkvisionFt > 0 && sheet.darkvisionFt <= 300) {
+    out.darkvisionFt = sheet.darkvisionFt;
+  }
+  if (Array.isArray(sheet.traits)) {
+    const traits: SheetTrait[] = [];
+    for (const t of sheet.traits.slice(0, 40)) {
+      const name = cleanText(t?.name, 80);
+      const text = cleanText(t?.text, 600);
+      if (!name || !text || typeof t.applied !== "boolean") continue;
+      traits.push({ name, text, applied: t.applied, source: cleanText(t.source, 60) ?? "" });
+    }
+    if (traits.length > 0) out.traits = traits;
+  }
+  const bg = sheet.background;
+  if (bg && typeof bg === "object") {
+    const name = cleanText(bg.name, BACKGROUND_NAME_MAX);
+    const pair = Array.isArray(bg.skills) ? bg.skills : [];
+    if (name && pair.length === 2 && pair.every(isSkill)) {
+      out.background = {
+        name,
+        skills: [pair[0]!, pair[1]!],
+        ...optionalText("personalityTrait", bg.personalityTrait),
+        ...optionalText("ideal", bg.ideal),
+        ...optionalText("bond", bg.bond),
+        ...optionalText("flaw", bg.flaw),
+      };
+    }
+  }
+  const alignment = cleanText(sheet.alignment, 40);
+  if (alignment) out.alignment = alignment;
+  const backstory = cleanText(sheet.backstory, BACKSTORY_MAX);
+  if (backstory) out.backstory = backstory;
+  return out;
 }
 
 /**
