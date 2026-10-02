@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-02, line of sight, fog of war and a DM that knows everything on the bench (0.5.0).
+Last updated: 2026-10-02, D&D character sheet and creation, rulebook and bestiary on the bench (0.6.0).
 
 ## Where the move stands
 
@@ -55,8 +55,11 @@ clothing drab, and the skeleton is near white in Cel bands and Plain.
 
 **0.5.0 (2026-10-02), line of sight, fog of war and the DM (#7):** closed doors, walls, trees and buildings block sight in the game's own engine (`world/visibility.ts`, its own `opaque` flag apart from walking; symmetric, corner gaps closed), so a ranged attack through a shut door is now refused in the game too. `render/shroud.ts` draws a three-level fog of war (never seen, remembered, in sight) as drifting pixel mist. On the bench: the fog over the board, the goblin hidden and untargetable until seen, and a DM (`scripts/asset-bench/dm.ts`) that is told the whole room, every secret, the goblin's numbers, the sheet and pack and what you can see. You type anything into "What do you do?" or right-click/long-press to look closer; it can give and take items, potions, engine-rolled loot, heal or harm (harm only on a failed check), place/alter/remove props, change tiles, lock doors and wake, calm, spawn or scare off the goblin. Checks carry both outcomes and roll in the dice tray; chests stay engine RNG. A Pack view sits in the game window (I). On the bench the DM runs on the viewer's own Claude account (the artifact sample capability, asks permission once).
 
+**0.6.0 (2026-10-02), character sheet and creation, rules, bestiary (#8, #9):** SRD 5.1 creation in the engine (standard array, point buy, 4d6 drop lowest; nine ancestries; class skills; custom background; alignment; backstory; old inputs build the old sheet exactly), `inventory/itemInfo.ts` (what every item is and does), `rules/rulebook.ts` (checked against the engine) and `rules/bestiary.ts` (40 SRD creatures, checked against the SRD). On the bench: Sheet (C) and New character inside the game window with hover help on every number and item, the 4d6 thrown in the dice tray, Rules and Bestiary tabs, dice numerals in every state.
+
 ## Next
 
+- Next on the bench (owner, 2026-10-02): calmer board text (story fades, numbers move to the HUD, a Log), context-aware buttons with the DM suggesting next moves, and save points (Rest = long rest saves; checkpoints per scene; Load last save on death).
 - Bring the bench's DM powers, fog of war and freehand into the game (#7): the game's DM schema needs the new powers (contract 11.6 and 11.7), explored memory saved per room in the stats blob, and the dice tray. Owner calls on #7: narration stacking, spells and sight, the '1 credit' badge.
 - Bring the bench's turn-based play into the game (#5): the click layer, turn order, overlay text and floating numbers into LivingTable.tsx. The owner picks the text style first (Pixel or Storybook, on the Play tab).
 - Owner's calls pending: how dice skins are sold (#6); a deliberate 1 px breathing bob for 16 px idles (they are now still).
