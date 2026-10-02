@@ -828,6 +828,9 @@ const HEAL_NOTATION = "2d4+2";
 const HEAL_MIN = 4;
 const HEAL_MAX = 10;
 
+/** The healing dice a consumable rolls, as notation, for callers that print it (inventory/itemActions.ts). */
+export const CONSUMABLE_HEAL_NOTATION = HEAL_NOTATION;
+
 /** What one stack of a consumable is, with the uses it has left. */
 export function describeConsumable(c: Consumable, usesLeft: number = c.uses): ItemInfo {
   const left = Math.max(0, Math.floor(usesLeft));
