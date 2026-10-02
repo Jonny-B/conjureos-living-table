@@ -44,10 +44,12 @@ import {
   narrationHoldMs,
   newPackItems,
   overlayDemo,
+  packItemText,
   sizeTier,
   verdictWords,
   type RecentFloat,
 } from "../scripts/asset-bench/overlay";
+import { TIP_GAP, TIP_MARGIN, TIP_MAX_WIDTH, attachTip, intersectBoxes, placeTip, tipMaxWidth, tipTone, type Box } from "../scripts/asset-bench/tip";
 
 const PRINTABLE = Array.from({ length: LAST_CODE - FIRST_CODE + 1 }, (_, i) => String.fromCharCode(FIRST_CODE + i));
 const code = (n: number) => String.fromCodePoint(n);
@@ -481,14 +483,147 @@ test("newPackItems: new by text, nothing new on the first look", () => {
   assert.equal(newPackItems(before, before).size, 0);
 });
 
+test("newPackItems and packItemText: an item with a tip counts by its text", () => {
+  const tip = { title: "Rope", lines: ["Fifty feet of hempen rope."] };
+  const before = [{ label: "Bag", items: ["Torch", { text: "Rope", tip }] }];
+  const after = [{ label: "Bag", items: ["Torch", { text: "Rope", tip }, { text: "Rusty key", tip: { title: "Rusty key", lines: ["Opens something."] } }, "Flint"] }];
+  assert.deepEqual([...newPackItems(before, after)].sort(), ["Flint", "Rusty key"]);
+  assert.equal(newPackItems(before, before).size, 0);
+  assert.equal(packItemText("Torch"), "Torch");
+  assert.equal(packItemText({ text: "Rope", tip }), "Rope");
+  assert.equal(packItemText({ text: "Plain" }), "Plain");
+});
+
+// ---- hover help: where the tip stands ---------------------------------------
+
+const VIEW: Box = { left: 0, top: 0, width: 1280, height: 800 };
+const within = (p: { left: number; top: number }, size: { width: number; height: number }, b: Box, margin = TIP_MARGIN) => {
+  assert.ok(p.left >= b.left + margin - 1e-9, `left ${p.left} under ${b.left + margin}`);
+  assert.ok(p.top >= b.top + margin - 1e-9, `top ${p.top} under ${b.top + margin}`);
+  assert.ok(p.left + size.width <= b.left + b.width - margin + 1e-9, `right edge ${p.left + size.width}`);
+  assert.ok(p.top + size.height <= b.top + b.height - margin + 1e-9, `bottom edge ${p.top + size.height}`);
+};
+
+test("placeTip: beside the element, on the right when there is room", () => {
+  const anchor: Box = { left: 100, top: 300, width: 120, height: 24 };
+  const size = { width: 260, height: 90 };
+  const p = placeTip(anchor, size, VIEW);
+  assert.equal(p.side, "right");
+  assert.equal(p.fits, true);
+  assert.equal(p.left, 100 + 120 + TIP_GAP);
+  within(p, size, VIEW);
+});
+
+test("placeTip: flips to the left when the right is cut off, below when neither side has room", () => {
+  const size = { width: 260, height: 90 };
+  const nearRight: Box = { left: 1100, top: 300, width: 120, height: 24 };
+  const l = placeTip(nearRight, size, VIEW);
+  assert.equal(l.side, "left");
+  assert.equal(l.left, 1100 - TIP_GAP - 260);
+  within(l, size, VIEW);
+  // A phone: 390 wide, the element spans the column, neither side has room.
+  const phone: Box = { left: 0, top: 0, width: 390, height: 844 };
+  const row: Box = { left: 16, top: 400, width: 358, height: 22 };
+  const b = placeTip(row, size, phone);
+  assert.equal(b.side, "below");
+  assert.equal(b.top, 400 + 22 + TIP_GAP);
+  within(b, size, phone);
+});
+
+test("placeTip: above when there is no room below", () => {
+  const phone: Box = { left: 0, top: 0, width: 390, height: 600 };
+  const row: Box = { left: 16, top: 560, width: 358, height: 22 };
+  const size = { width: 260, height: 90 };
+  const p = placeTip(row, size, phone);
+  assert.equal(p.side, "above");
+  assert.equal(p.top, 560 - TIP_GAP - 90);
+  assert.equal(p.fits, true);
+  within(p, size, phone);
+});
+
+test("placeTip: clamps across the other axis so the tip never leaves the bounds", () => {
+  const size = { width: 260, height: 160 };
+  // Beside an element at the very top and the very bottom of the bounds.
+  const top = placeTip({ left: 100, top: 0, width: 80, height: 20 }, size, VIEW);
+  assert.equal(top.side, "right");
+  within(top, size, VIEW);
+  const bottom = placeTip({ left: 100, top: 790, width: 80, height: 10 }, size, VIEW);
+  within(bottom, size, VIEW);
+  assert.equal(bottom.top, 800 - TIP_MARGIN - 160);
+  // Below a small element hanging off the left edge: the tip does not start off screen.
+  const narrow: Box = { left: 0, top: 0, width: 300, height: 700 };
+  const e = placeTip({ left: -20, top: 100, width: 40, height: 20 }, { width: 200, height: 60 }, narrow);
+  within(e, { width: 200, height: 60 }, narrow);
+});
+
+test("placeTip: a wide element prefers below or above to the sides", () => {
+  const bounds: Box = { left: 0, top: 0, width: 800, height: 600 };
+  const wide: Box = { left: 20, top: 200, width: 600, height: 24 };
+  const p = placeTip(wide, { width: 200, height: 50 }, bounds);
+  assert.equal(p.side, "below");
+  assert.equal(p.left, 20);
+});
+
+test("placeTip: with no room anywhere it takes the roomiest side and still stays inside the bounds", () => {
+  const bounds: Box = { left: 0, top: 0, width: 300, height: 120 };
+  const anchor: Box = { left: 10, top: 40, width: 280, height: 40 };
+  const size = { width: 280, height: 100 };
+  const p = placeTip(anchor, size, bounds);
+  assert.equal(p.fits, false);
+  within(p, size, bounds);
+});
+
+test("placeTip: a tip bigger than the bounds pins to their top left", () => {
+  const bounds: Box = { left: 50, top: 60, width: 100, height: 40 };
+  const p = placeTip({ left: 60, top: 70, width: 20, height: 10 }, { width: 280, height: 90 }, bounds);
+  assert.equal(p.left, 50 + TIP_MARGIN);
+  assert.equal(p.top, 60 + TIP_MARGIN);
+});
+
+test("placeTip: bounds that do not start at the origin (a game window inside the page)", () => {
+  const game: Box = { left: 300, top: 200, width: 700, height: 500 };
+  const size = { width: 260, height: 90 };
+  for (const anchor of [{ left: 310, top: 210, width: 100, height: 20 }, { left: 900, top: 650, width: 90, height: 40 }, { left: 600, top: 400, width: 80, height: 20 }]) {
+    within(placeTip(anchor, size, game), size, game);
+  }
+});
+
+test("placeTip: stays inside the bounds across a sweep of positions and sizes", () => {
+  const bounds: Box = { left: 40, top: 30, width: 520, height: 380 };
+  for (let ax = 40; ax <= 560; ax += 60) {
+    for (let ay = 30; ay <= 410; ay += 50) {
+      for (const size of [{ width: 120, height: 40 }, { width: 280, height: 200 }, { width: 200, height: 330 }]) {
+        within(placeTip({ left: ax, top: ay, width: 70, height: 22 }, size, bounds), size, bounds);
+      }
+    }
+  }
+});
+
+test("intersectBoxes and tipMaxWidth", () => {
+  assert.deepEqual(intersectBoxes({ left: 0, top: 0, width: 100, height: 100 }, { left: 50, top: 60, width: 100, height: 100 }), { left: 50, top: 60, width: 50, height: 40 });
+  assert.equal(intersectBoxes({ left: 0, top: 0, width: 10, height: 10 }, { left: 10, top: 0, width: 10, height: 10 }), null);
+  assert.equal(tipMaxWidth(VIEW), TIP_MAX_WIDTH);
+  assert.equal(tipMaxWidth({ left: 0, top: 0, width: 320, height: 600 }), TIP_MAX_WIDTH);
+  assert.equal(tipMaxWidth({ left: 0, top: 0, width: 200, height: 600 }), 200 - TIP_MARGIN * 2);
+  assert.equal(tipMaxWidth({ left: 0, top: 0, width: 20, height: 600 }), 60);
+});
+
+test("tipTone defaults to plain; attachTip is inert without a DOM", () => {
+  assert.equal(tipTone({}), "plain");
+  assert.equal(tipTone({ tone: "magic" }), "magic");
+  assert.equal(typeof attachTip({} as HTMLElement, { title: "x", lines: [] }), "function");
+});
+
 // ---- hygiene ----------------------------------------------------------------
 
 test("the new bench files hold no em or en dash, and the overlay imports src for types only", () => {
-  for (const file of ["pixelFont.ts", "overlay.ts"]) {
+  for (const file of ["pixelFont.ts", "overlay.ts", "tip.ts"]) {
     const text = readFileSync(new URL(`../scripts/asset-bench/${file}`, import.meta.url), "utf8");
     assert.equal(text.includes(code(0x2014)), false, `${file} has an em dash`);
     assert.equal(text.includes(code(0x2013)), false, `${file} has an en dash`);
   }
   const overlay = readFileSync(new URL("../scripts/asset-bench/overlay.ts", import.meta.url), "utf8");
   assert.equal(/^import (?!type\b)[^\n]*"\.\.\/\.\.\/src\//m.test(overlay), false, "overlay.ts must not pull src/ into the bench at runtime");
+  const tip = readFileSync(new URL("../scripts/asset-bench/tip.ts", import.meta.url), "utf8");
+  assert.equal(/^import [^\n]*"\.\.\/\.\.\/src\//m.test(tip), false, "tip.ts must not import from src/");
 });

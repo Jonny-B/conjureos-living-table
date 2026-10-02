@@ -44,6 +44,9 @@
  */
 import type { RollReadout } from "../../src/games/livingtable/render/canvasRenderer";
 import { CELL_H, LINE_GAP, cssScale, deviceScale, fitScale, pixelText, textWidth, wrapWidth, type PixelColor, type PixelRun, type PixelTextOptions } from "./pixelFont";
+import { attachTip, type TipContent } from "./tip";
+
+export type { TipContent } from "./tip";
 
 // ---- the public contract ----------------------------------------------------
 
@@ -265,9 +268,14 @@ export function newPackItems(prev: readonly PackSection[] | null | undefined, ne
   const fresh = new Set<string>();
   if (!prev || !next) return fresh;
   const had = new Set<string>();
-  for (const sec of prev) for (const it of sec.items) had.add(it);
-  for (const sec of next) for (const it of sec.items) if (!had.has(it)) fresh.add(it);
+  for (const sec of prev) for (const it of sec.items) had.add(packItemText(it));
+  for (const sec of next) for (const it of sec.items) if (!had.has(packItemText(it))) fresh.add(packItemText(it));
   return fresh;
+}
+
+/** The words a pack item shows: the item itself when it is a string, its `text` otherwise. */
+export function packItemText(item: PackItem): string {
+  return typeof item === "string" ? item : item.text;
 }
 
 function signed(n: number): string {
@@ -1582,8 +1590,13 @@ export interface HudBar {
 /** One heading in the pack view and what is under it ("Worn", "Bag", "Carried", "Potions"). */
 export interface PackSection {
   label: string;
-  items: readonly string[];
+  items: readonly PackItem[];
 }
+/**
+ * One thing in the pack: its line, and optionally the hover help that says exactly what it is (shown on hover, keyboard
+ * focus or a tap, in the HUD's current text style, inside the game window). A plain string has no help.
+ */
+export type PackItem = string | { text: string; tip?: TipContent };
 export interface HudState {
   /** One line on top: "Round 2, your turn", "Exploring". */
   title: string;
@@ -1628,6 +1641,12 @@ const HUD_CSS = `
 .lto-hud-sec{display:flex;flex-direction:column;gap:2px;min-width:0}
 .lto-hud-row{min-width:0;padding:1px 4px;overflow-wrap:anywhere}
 .lto-hud-seclabel,.lto-hud-item{display:block;min-width:0}
+.lto-hud-row[data-lt-tip]{cursor:help;border-radius:3px}
+.lto-px .lto-hud-row[data-lt-tip]{box-shadow:inset 0 -1px 0 rgb(152 165 216/.28)}
+.lto-sb .lto-hud-row[data-lt-tip]{box-shadow:inset 0 -1px 0 rgb(var(--sb-shade)/.18)}
+.lto-px .lto-hud-row[data-lt-tip]:hover,.lto-px .lto-hud-row[data-lt-tip]:focus-visible{background:rgb(77 93 166/.3)}
+.lto-sb .lto-hud-row[data-lt-tip]:hover,.lto-sb .lto-hud-row[data-lt-tip]:focus-visible{background:rgb(var(--sb-shade)/.1)}
+.lto-hud-row[data-lt-tip]:focus-visible{outline:2px solid var(--sb-focus);outline-offset:1px}
 .lto-hud-row.is-new{animation:lto-hud-new 1.8s ease-out}
 @keyframes lto-hud-new{0%,35%{background:rgb(255 205 70/.55);box-shadow:inset 3px 0 0 #ffc72a}100%{background:rgb(255 205 70/0);box-shadow:inset 3px 0 0 rgb(255 199 42/0)}}
 @media (prefers-reduced-motion: reduce){.lto-hud-row.is-new{background:rgb(255 205 70/.28);box-shadow:inset 3px 0 0 #ffc72a}}
@@ -1730,10 +1749,25 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
   host.appendChild(root);
 
   const isPixel = (): boolean => style === "pixel";
+  /** The pack's hover helps, detached whenever the panel is rebuilt (their rows are replaced). */
+  let tipOff: Array<() => void> = [];
+  /** What a tip stays inside: the game window the HUD sits in, or the HUD itself. */
+  const tipBoundary = (): HTMLElement => host.closest<HTMLElement>(".lt-game") ?? root;
   const px = (text: string, o: PixelTextOptions): HTMLCanvasElement => {
     const c = pixelText(text, { dpr: deviceRatio(), ...o });
     c.setAttribute("aria-hidden", "true");
     return c;
+  };
+  /**
+   * A name that has to fit on one line of the pixel bar: cut with ".." when it would run into the meter
+   * (a made character's name can be 60 characters long). The screen reader text keeps the whole name.
+   */
+  const fitName = (words: string): string => {
+    const room = Math.max(60, (root.clientWidth || 300) - 44 - 128);
+    if (textWidth(words) * 2 <= room) return words;
+    let cut = words.length;
+    while (cut > 1 && textWidth(`${words.slice(0, cut).trimEnd()}..`) * 2 > room) cut--;
+    return `${words.slice(0, cut).trimEnd()}..`;
   };
   /** A line of HUD text in the current treatment, with the words kept for screen readers. */
   const text = (words: string, kind: "title" | "line" | "name" | "num" | "seclabel" | "item", inset = 0): HTMLElement => {
@@ -1743,7 +1777,7 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       const colour = gold ? PX.gold : kind === "line" ? PX.muted : PX.ink;
       // Titles, lines and pack items wrap to the panel (font pixels are 2 CSS px); names and numbers stay on one line.
       const wrap = kind === "name" || kind === "num" ? undefined : Math.max(40, Math.floor(((root.clientWidth || 300) - 44 - inset) / 2));
-      node.append(px(words, { scale: 2, weight: gold || kind === "num" ? "bold" : "regular", color: colour, outline: PX.dark, maxWidth: wrap }), el("span", "lto-sr", words));
+      node.append(px(kind === "name" ? fitName(words) : words, { scale: 2, weight: gold || kind === "num" ? "bold" : "regular", color: colour, outline: PX.dark, maxWidth: wrap }), el("span", "lto-sr", words));
     } else {
       node.textContent = words;
     }
@@ -1757,6 +1791,8 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     root.classList.toggle("lto-sb", !isPixel());
     // The pack list scrolls inside the panel, which is rebuilt below: note where the reader was.
     const packScroll = panel.querySelector<HTMLElement>(".lto-hud-pack-list")?.scrollTop ?? 0;
+    for (const off of tipOff) off();
+    tipOff = [];
     panel.className = "lto-hud-panel";
     if (isPixel()) panel.classList.add("lto-fr", "fr-win");
     else panel.classList.add("lto-plate");
@@ -1848,7 +1884,8 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
         none.append(text("Nothing", "line", 18));
         box.append(none);
       }
-      for (const item of sec.items) {
+      for (const it of sec.items) {
+        const item = packItemText(it);
         const row = el("div", "lto-hud-row");
         row.dataset.item = item;
         if (fresh.has(item)) {
@@ -1857,6 +1894,10 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
           firstFresh ??= row;
         }
         row.append(text(item, "item", 18));
+        // Hover help: on the row, in the HUD's own style, kept inside the game window.
+        if (typeof it !== "string" && it.tip) {
+          tipOff.push(attachTip(row, it.tip, { boundary: tipBoundary(), style: () => (isPixel() ? "pixel" : "storybook") }));
+        }
         box.append(row);
       }
       list.append(box);
@@ -1881,8 +1922,18 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     const at = document.activeElement as HTMLElement | null;
     const mine = at && actions.contains(at) ? at : null;
     const sel = mine ? (mine.dataset.action !== undefined ? `[data-action="${mine.dataset.action}"]` : mine.dataset.hudPack !== undefined ? "[data-hud-pack]" : "") : "";
+    // A pack item holding keyboard focus (for its hover help) keeps it across the rebuild, by its words.
+    const rowItem = at && panel.contains(at) && at.classList.contains("lto-hud-row") ? at.dataset.item : undefined;
     draw();
     if (sel) actions.querySelector<HTMLElement>(sel)?.focus();
+    else if (rowItem !== undefined) {
+      for (const r of panel.querySelectorAll<HTMLElement>(".lto-hud-row[data-item]")) {
+        if (r.dataset.item === rowItem) {
+          r.focus({ preventScroll: true });
+          break;
+        }
+      }
+    }
   }
 
   // ---- the freehand line
@@ -1976,6 +2027,8 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       return packOpen && !!last?.pack;
     },
     destroy(): void {
+      for (const off of tipOff) off();
+      tipOff = [];
       root.remove();
     },
   };

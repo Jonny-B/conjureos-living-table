@@ -67,6 +67,17 @@ export interface DmSceneView {
     carried: string[];
     potions: number;
     consumables: string[];
+    /** Who the character is (character creation). All optional: an old view without them renders as before. */
+    ancestry?: string;
+    background?: string;
+    alignment?: string;
+    personality?: { trait?: string; ideal?: string; bond?: string; flaw?: string };
+    backstory?: string;
+    /** Ancestry and class traits; applied false means the engine does nothing with it and the DM rules on it. */
+    traits?: { name: string; text: string; applied: boolean }[];
+    languages?: string[];
+    /** What each carried item is, one line each (the text the player reads when hovering it). */
+    items?: { name: string; what: string }[];
   };
   monsters: { id: string; name: string; hp: number; maxHp: number; ac: number; at: { x: number; y: number }; awake: boolean; seenByHero: boolean }[];
   fight: null | { round: number; whoseTurn: string; heroMovementFt: number; heroActionReady: boolean };
@@ -87,7 +98,8 @@ export type DmAsk = { kind: "freehand"; text: string } | { kind: "examine"; at: 
 export type DmCost = "free" | "object" | "action";
 
 export type DmEffect =
-  | { type: "give"; item: string }
+  /** desc: what the item is, shown to the player on hover (1 to 200 chars). */
+  | { type: "give"; item: string; desc?: string }
   | { type: "take"; item: string }
   | { type: "potion"; count: number }
   | { type: "loot" }
@@ -148,6 +160,11 @@ export const DM_LIMITS = Object.freeze({
   maxRememberChars: 120,
   maxNarrationChars: 800,
   maxItemChars: 60,
+  /** A given item's one-line description, which the player reads on hover. */
+  maxDescChars: 200,
+  /** The player's own character text, as it reaches the prompt. */
+  maxBackstoryChars: 600,
+  maxPersonalityChars: 160,
   maxLabelChars: 80,
   maxSecretChars: 200,
   maxWhyChars: 120,
@@ -451,11 +468,28 @@ function validateEffect(raw: unknown, ctx: DmValidationContext, where: string, a
     return s;
   };
 
+  // The optional one-line description of a given item (absent is fine; present must be sound).
+  const desc = (v: unknown): string | null | undefined => {
+    if (v === undefined || v === null) return undefined;
+    const s = str(v, 1, DM_LIMITS.maxDescChars);
+    if (s === null) {
+      errors.push(`${where}.desc must be 1 to ${DM_LIMITS.maxDescChars} characters`);
+      return null;
+    }
+    const magic = magicGearIn(s);
+    if (magic) {
+      errors.push(`${where}.desc "${s}" names magic gear ("${magic}"); the engine alone rolls gear, describe a plain mundane item`);
+      return null;
+    }
+    return s;
+  };
+
   let effect: DmEffect | null = null;
   switch (type) {
     case "give": {
       const it = item(raw.item);
-      if (it !== null) effect = { type, item: it };
+      const d = desc(raw.desc);
+      if (it !== null && d !== null) effect = d === undefined ? { type, item: it } : { type, item: it, desc: d };
       break;
     }
     case "take": {
@@ -750,7 +784,8 @@ HOW YOU RUN THE TABLE
 - Freehand: the player may try anything a person could try. You decide what happens. If an action is trivial or certain (walking over, looking around, opening an unlocked door, picking up a plain item, saying something), it just happens: no check. If it is impossible or against the world's logic, say so in the fiction and let it fail without a check. If the outcome is truly uncertain and the stakes matter, ask for exactly ONE check with a fair DC (5 very easy, 10 easy, 15 medium, 20 hard, 25 very hard) and write BOTH outcomes now: the engine rolls the dice and plays the branch the dice pick. Never narrate or hint at the dice result outside the branches. The top-level narration for a check describes the attempt at its tense moment, before the result.
 - Context aware: use the room, the features, the pack and the history. Looking into a drain grate, under a bed, behind a loose stone or inside a barrel may turn up something interesting at your discretion, often behind a Perception or Investigation check (try a give, a potion, a loot, or a place for a small find). Not every look pays out; most plain things hold nothing, and saying so is fine. Do not invent an out-of-place windfall.
 - Chests and loot: the ENGINE rolls the contents of chests when opened. Never invent what is inside a chest (you may describe the chest and its lock). When a hidden stash or a fallen foe should hold real gear, use {"type":"loot"} and let the engine roll it, rarely. You may give plain flavour items (a brass key, a letter, a coin purse, a rope) freely, never magic gear by name. A found healing potion is {"type":"potion","count":1}.
-- Inventory: you see everything the hero wears, packs and carries. Use it. When the player uses a carried item, honour it. When the story takes something (a bribe, a rope left tied to a ledge, a key that snaps), use take with the item's name. When the story gives something, use give.
+- Inventory: you see everything the hero wears, packs and carries. Use it. When the player uses a carried item, honour it. When the story takes something (a bribe, a rope left tied to a ledge, a key that snaps), use take with the item's name. When the story gives something, use give, and ALWAYS include a "desc" saying what the item is, roughly what it is worth and that it is mundane (real magic comes only from the engine's loot): the player hovers items to read exactly what they are, so they must never be left guessing.
+- The hero is a person: see THE HERO for ancestry, background, alignment, personality and backstory. They are hooks you can use (an old debt, a flaw that tempts, a bond that is tested), lightly and only when it fits; never let them override the world. Traits marked "the DM rules on this" are NOT applied by the engine: honour them yourself when you rule (a dwarf's darkvision in a dark room, a halfling's Lucky on a natural 1, an elf's trance). Traits marked "the engine applies this" are already in the numbers, so do not apply them twice.
 - Monsters: you control how they act around the hero (wake, calm, flee, spawn a reinforcement sparingly). The engine rolls their attacks. Do not narrate the hero's death or a hit the engine has not rolled. Do not move the hero and do not set their hit points; heal and harm are dice the engine rolls.
 - Fairness: a clever idea deserves a better DC or advantage. A foolish one deserves disadvantage or a plain no. Be generous with fun, strict with physics.
 - Narration: second person, present tense, 1 to 3 sentences, vivid, no game numbers (no DCs, HP, dice or modifiers), no meta talk. A speaking character gets a "speaker" name.
@@ -780,7 +815,7 @@ const FORMAT = `OUTPUT FORMAT. Reply with ONE JSON object and nothing else: no m
   "remember": [string]              // optional: at most 3 short facts worth keeping
 }
 Effect is one of (at most 6 per effects list, unknown fields ignored, unknown types rejected):
-  {"type":"give","item":string}                  a plain flavour item into the pack (1 to 60 chars, never magic gear)
+  {"type":"give","item":string,"desc":string}    a plain flavour item into the pack (item 1 to 60 chars, never magic gear; desc 1 to 200 chars: what it is, roughly what it is worth, that it is mundane; always give a desc)
   {"type":"take","item":string}                  remove a carried item by name
   {"type":"potion","count":1|2}                  healing potions
   {"type":"loot"}                                the engine rolls real loot
@@ -793,7 +828,7 @@ Effect is one of (at most 6 per effects list, unknown fields ignored, unknown ty
   {"type":"door","state":"open"|"closed"|"locked"|"unlocked"}
   {"type":"monster","id":monsterId,"act":"wake"|"calm"|"flee"}   or {"type":"monster","act":"spawn","asset":id,"x":n,"y":n}
 Coordinates are whole squares inside the room. Example of a freehand reply with a check:
-{"narration":"You kneel and work your fingers into the rusted grate, feeling for a catch.","cost":"action","effects":[],"check":{"skill":"Investigation","dc":13,"why":"search the drain grate","success":{"narration":"A hinge squeals and the grate lifts, a cloth bundle wedged beneath.","effects":[{"type":"give","item":"a waxed cloth bundle of dried figs"}]},"failure":{"narration":"The grate will not budge, and you only skin your knuckles on the rust.","effects":[]}},"remember":["the drain grate is loose"]}`;
+{"narration":"You kneel and work your fingers into the rusted grate, feeling for a catch.","cost":"action","effects":[],"check":{"skill":"Investigation","dc":13,"why":"search the drain grate","success":{"narration":"A hinge squeals and the grate lifts, a cloth bundle wedged beneath.","effects":[{"type":"give","item":"a waxed cloth bundle of dried figs","desc":"A bundle of dried figs wrapped in waxed cloth. Plain food, worth a few copper pieces; it keeps for weeks."}]},"failure":{"narration":"The grate will not budge, and you only skin your knuckles on the rust.","effects":[]}},"remember":["the drain grate is loose"]}`;
 
 function sq(p: { x: number; y: number }): string {
   return `(${p.x},${p.y})`;
@@ -805,6 +840,58 @@ function quote(s: string): string {
 
 function list(items: string[], none = "nothing"): string {
   return items.length ? items.join("; ") : none;
+}
+
+/**
+ * Player-written (or player-influenced) text on its way into the prompt: one
+ * line, capped, and stripped of the things that could forge the prompt's own
+ * structure (a triple quote, a "=== ... ===" section header). Quoted by the
+ * caller, like the freehand text.
+ */
+function playerLine(s: unknown, max: number): string {
+  if (typeof s !== "string") return "";
+  return s
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/"""/g, '"')
+    .replace(/={3,}/g, "=")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max)
+    .trim();
+}
+
+/** The hero's identity lines (ancestry to traits to items). Empty for a view that carries none of it. */
+function renderHeroIdentity(h: DmSceneView["hero"]): string[] {
+  const out: string[] = [];
+  const who: string[] = [];
+  const ancestry = playerLine(h.ancestry, DM_LIMITS.maxPersonalityChars);
+  if (ancestry) who.push(`Ancestry: ${quote(ancestry)}`);
+  const background = playerLine(h.background, DM_LIMITS.maxPersonalityChars);
+  if (background) who.push(`Background: ${quote(background)}`);
+  const alignment = playerLine(h.alignment, DM_LIMITS.maxPersonalityChars);
+  if (alignment) who.push(`Alignment: ${quote(alignment)}`);
+  const languages = (h.languages ?? []).map((l) => playerLine(l, 30)).filter(Boolean).slice(0, 8);
+  if (languages.length) who.push(`Languages: ${languages.join(", ")}`);
+  if (who.length) out.push(who.join(". ") + ".");
+  const p = h.personality;
+  if (p) {
+    const bits = (["trait", "ideal", "bond", "flaw"] as const)
+      .map((k) => [k, playerLine(p[k], DM_LIMITS.maxPersonalityChars)] as const)
+      .filter(([, v]) => v)
+      .map(([k, v]) => `${k} ${quote(v)}`);
+    if (bits.length) out.push(`Personality (the player's own words, hooks you can use): ${bits.join("; ")}.`);
+  }
+  const backstory = playerLine(h.backstory, DM_LIMITS.maxBackstoryChars);
+  if (backstory) out.push(`Backstory (the player's own words, a hook you can use): ${quote(backstory)}`);
+  const traits = (h.traits ?? []).slice(0, 16).filter((t) => t && typeof t.name === "string");
+  if (traits.length) {
+    out.push("Traits: " + traits.map((t) => `${playerLine(t.name, 40)} (${t.applied ? "the engine applies this" : "the DM rules on this: honour it"}): ${playerLine(t.text, 200)}`).join("; "));
+  }
+  const items = (h.items ?? []).slice(0, 30).filter((i) => i && typeof i.name === "string");
+  if (items.length) {
+    out.push("What each item is (the player reads this on hover): " + items.map((i) => `${playerLine(i.name, DM_LIMITS.maxItemChars)}: ${playerLine(i.what, DM_LIMITS.maxDescChars)}`).join("; "));
+  }
+  return out;
 }
 
 function renderGrid(view: DmSceneView): string {
@@ -843,6 +930,7 @@ function renderWorld(view: DmSceneView): string {
   out.push("");
   out.push("THE HERO");
   out.push(`${h.name}, level ${h.level} ${h.archetype}, at ${sq(h.at)}, hp ${h.hp}/${h.maxHp}, ac ${h.ac}, speed ${h.speedFt} ft.`);
+  out.push(...renderHeroIdentity(h));
   out.push("Abilities: " + (Object.entries(h.abilities).map(([k, v]) => `${k} ${v}`).join(", ")));
   const skills = Object.entries(h.skills).map(([k, v]) => `${k} ${v >= 0 ? "+" : ""}${v}`);
   out.push(`Skills (bonus): ${list(skills, "no trained skills")}. Any other skill uses the plain ability modifier.`);

@@ -15,6 +15,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { getGlyph } from "../scripts/asset-bench/pixelFont";
 import {
@@ -22,6 +23,7 @@ import {
   DIE_KINDS,
   DIE_SIDES,
   IDENTITY,
+  MIN_DIE_SIZE,
   ROLL_MS,
   WOBBLE_MAX_DEG,
   alignFace,
@@ -574,4 +576,100 @@ test("an out-of-range result is clamped into the die, so a die can never show a 
   assert.equal(plan.dice[1]?.result, 1);
   assert.equal(geometry("d6").faces[faceIndexOf("d6", 99)]?.number, 6);
   assert.equal(geometry("d20").faces[faceIndexOf("d20", -4)]?.number, 1);
+});
+
+// ---- numerals show wherever a digit can fit --------------------------------
+
+/** How many pixels a render's numerals changed: the render against the same render with numerals off. */
+function numeralPixels(kind: DieKind, rot: Mat3, skin: DiceSkin, size: number): number {
+  const on = renderDie(kind, rot, skin, size).data;
+  const off = renderDie(kind, rot, skin, size, { numerals: false }).data;
+  let n = 0;
+  for (let i = 0; i < size * size; i++) if (on[i * 4] !== off[i * 4] || on[i * 4 + 1] !== off[i * 4 + 1] || on[i * 4 + 2] !== off[i * 4 + 2]) n++;
+  return n;
+}
+
+/** The tray's smallest die, its starting size, and its biggest. */
+const TRAY_SIZES = [MIN_DIE_SIZE, 40, 56] as const;
+
+test("a waiting die shows numerals at every tray size: every kind, every result, the whole wobble", () => {
+  for (const kind of DIE_KINDS) {
+    for (const size of TRAY_SIZES) {
+      for (let result = 1; result <= DIE_SIDES[kind]; result++) {
+        const rest = restOrientation(kind, result);
+        for (const t of [0, 400, 900, 1700]) {
+          const { rot } = wobbleAt(rest, t, 1.3);
+          const s = renderDie(kind, rot, bone, size);
+          assert.equal(s.faces[0]?.number, result, `${kind} ${size} ${result} t=${t}: the wobble keeps the result in front`);
+          assert.equal(s.faces[0]?.shown, true, `${kind} ${size} ${result} t=${t}: the front numeral is drawn`);
+          assert.ok(numeralPixels(kind, rot, bone, size) >= 5, `${kind} ${size} ${result} t=${t}: numeral pixels on screen`);
+        }
+      }
+    }
+  }
+});
+
+test("a settled die shows its result at every tray size, in every skin", () => {
+  for (const kind of DIE_KINDS) {
+    for (const size of TRAY_SIZES) {
+      for (const skin of DICE_SKINS) {
+        for (let result = 1; result <= DIE_SIDES[kind]; result++) {
+          const s = renderDie(kind, restOrientation(kind, result), skin, size);
+          assert.equal(s.faces[0]?.number, result);
+          assert.equal(s.faces[0]?.shown, true, `${kind} ${size} ${skin.id} ${result}`);
+          assert.ok(numeralPixels(kind, restOrientation(kind, result), skin, size) >= 5, `${kind} ${size} ${skin.id} ${result}: numeral pixels`);
+        }
+      }
+    }
+  }
+});
+
+test("a tumbling die always carries a numeral on the face nearest you, at every size, in every frame", () => {
+  const layout: RollLayout = { bounds: { x0: 20, y0: 20, x1: 120, y1: 80 }, slots: [{ x: 70, y: 50 }], hop: 8 };
+  for (const kind of DIE_KINDS) {
+    for (const size of TRAY_SIZES) {
+      for (const seed of [3, 11, 29]) {
+        const plan = planRoll([{ kind, result: DIE_SIDES[kind] }], layout, seed);
+        const m = plan.dice[0] as (typeof plan.dice)[number];
+        for (let t = 0; t < ROLL_MS; t += 60) {
+          const { rot } = motionAt(m, t);
+          const s = renderDie(kind, rot, bone, size);
+          assert.equal(s.faces[0]?.shown, true, `${kind} ${size} seed ${seed} t=${t}`);
+          assert.ok(numeralPixels(kind, rot, bone, size) >= 4, `${kind} ${size} seed ${seed} t=${t}: numeral pixels`);
+        }
+      }
+    }
+  }
+});
+
+test("a small die swaps to the compact digits rather than clip the big ones: a d20 at the smallest size shows a 3 by 5 pair", () => {
+  for (const skin of [bone, obsidian]) {
+    const small = renderDie("d20", restOrientation("d20", 20), skin, MIN_DIE_SIZE);
+    const box = bbox(pixelsOf(small.data, MIN_DIE_SIZE, skin.numeral));
+    assert.ok(box.h <= 5, `d20 ${skin.id}: numeral ${box.h} rows tall`);
+    assert.ok(box.w >= 7 && box.w <= 9, `d20 ${skin.id}: two digits ${box.w} wide`);
+  }
+  // Where the big glyph fits it is still the big glyph.
+  const big = renderDie("d20", restOrientation("d20", 20), obsidian, 56);
+  assert.equal(bbox(pixelsOf(big.data, 56, obsidian.numeral)).h >= 7, true);
+  // The compact digits let a neighbouring face keep its number at the small size too.
+  let neighbours = 0;
+  for (const kind of DIE_KINDS) for (let r = 1; r <= DIE_SIDES[kind]; r++) neighbours += renderDie(kind, restOrientation(kind, r), bone, 40).faces.filter((f, i) => i > 0 && f.shown).length;
+  assert.ok(neighbours > 0, "some neighbouring faces show their numbers at the default size");
+});
+
+test("the skin picker's preview is a d20 showing its 20, in every skin", () => {
+  // createSkinPicker draws renderDie("d20", restOrientation("d20", 20), skin, 48).
+  for (const skin of DICE_SKINS) {
+    const s = renderDie("d20", restOrientation("d20", 20), skin, 48);
+    assert.equal(s.faces[0]?.number, 20);
+    assert.equal(s.faces[0]?.shown, true);
+    assert.ok(numeralPixels("d20", restOrientation("d20", 20), skin, 48) >= 8, `${skin.id}: the 20 is on screen`);
+  }
+});
+
+test("the tray never switches numerals off, and the only place the renderer can is an explicit option", () => {
+  const src = readFileSync(new URL("../scripts/asset-bench/dice.ts", import.meta.url), "utf8");
+  const code = src.split(/\r?\n/).filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//"));
+  assert.equal(code.some((l) => /numerals:\s*false/.test(l)), false, "no call in dice.ts passes numerals: false");
 });

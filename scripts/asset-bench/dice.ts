@@ -29,8 +29,12 @@
  *             along every edge between two faces. No gradients and no smoothing.
  *             Numerals are bitmap glyphs rotated in 90 degree steps to the
  *             face's projected up direction (never a free rotation, so they stay
- *             crisp) and drawn only on faces turned to you enough to read, and
- *             only where they fit inside the face.
+ *             crisp), in EVERY state (waiting, tumbling, settled, the skin
+ *             picker). Drawn on faces turned to you enough to read, and only
+ *             where they fit inside the face: the 5 by 7 pixelFont glyph first,
+ *             then a compact 3 by 5 digit set when the face is too small for it
+ *             (a d12 or d20 at the tray's smallest size), so a small die keeps
+ *             its numbers. The front face always carries its number.
  *   scaling   The whole tray (felt, rim, dice, text) is composed on ONE low
  *             resolution canvas at 1:1 and then drawn up to the screen at a whole
  *             number of device pixels per tray pixel (pickScale: about 2 CSS px
@@ -735,19 +739,57 @@ function rotateQuarter(src: Uint8Array, w: number, h: number): Uint8Array {
   return out;
 }
 
-/** The numeral as ink and halo planes, turned `steps` quarter turns clockwise. Underlined when it could be read upside down. */
-function numeralBitmap(text: string, underline: boolean, steps: number): NumeralBitmap {
-  const key = `${text}|${underline ? 1 : 0}|${steps}`;
+/**
+ * The compact digit set: 3 columns by 5 rows, for a face too small to hold the
+ * 5 by 7 pixelFont glyph (a d20 or a d12 at the tray's smallest size). A small
+ * die shows these rather than drop its numbers or clip the big glyph.
+ */
+const COMPACT_DIGITS: Readonly<Record<string, readonly string[]>> = {
+  "0": ["###", "#.#", "#.#", "#.#", "###"],
+  "1": [".#.", "##.", ".#.", ".#.", "###"],
+  "2": ["###", "..#", "###", "#..", "###"],
+  "3": ["###", "..#", "###", "..#", "###"],
+  "4": ["#.#", "#.#", "###", "..#", "..#"],
+  "5": ["###", "#..", "###", "..#", "###"],
+  "6": ["###", "#..", "###", "#.#", "###"],
+  "7": ["###", "..#", ".#.", ".#.", ".#."],
+  "8": ["###", "#.#", "###", "#.#", "###"],
+  "9": ["###", "#.#", "###", "..#", "###"],
+};
+const COMPACT_ROWS = 5;
+
+/** The ink of a compact numeral: rows of 1 and 0, digits one column apart. */
+function compactInk(text: string): { rows: Uint8Array[]; w: number } {
+  const rows = Array.from({ length: COMPACT_ROWS }, () => [] as number[]);
+  [...text].forEach((ch, i) => {
+    const g = COMPACT_DIGITS[ch] ?? COMPACT_DIGITS["0"] as readonly string[];
+    for (let y = 0; y < COMPACT_ROWS; y++) {
+      if (i > 0) (rows[y] as number[]).push(0);
+      for (const c of g[y] as string) (rows[y] as number[]).push(c === "#" ? 1 : 0);
+    }
+  });
+  return { rows: rows.map((r) => Uint8Array.from(r)), w: (rows[0] as number[]).length };
+}
+
+/** The numeral as ink and halo planes, turned `steps` quarter turns clockwise. Underlined when it could be read upside down. `compact` is the 3 by 5 set. */
+function numeralBitmap(text: string, underline: boolean, steps: number, compact = false): NumeralBitmap {
+  const key = `${text}|${underline ? 1 : 0}|${steps}|${compact ? "c" : "f"}`;
   const hit = numeralCache.get(key);
   if (hit) return hit;
-  const bmp: PixelBitmap = rasterize(text);
-  const capRows = 7;
-  const inkW = bmp.textW;
+  const bmp: PixelBitmap | null = compact ? null : rasterize(text);
+  const small = compact ? compactInk(text) : null;
+  const capRows = compact ? COMPACT_ROWS : 7;
+  const inkW = small ? small.w : (bmp as PixelBitmap).textW;
   const inkH = underline ? capRows + 2 : capRows;
   const w = inkW + 2;
   const h = inkH + 2;
   let ink: Uint8Array = new Uint8Array(w * h);
-  for (let y = 0; y < capRows; y++) for (let x = 0; x < inkW; x++) if (bmp.ink[(bmp.top + y) * bmp.w + bmp.left + x]) ink[(y + 1) * w + x + 1] = 1;
+  for (let y = 0; y < capRows; y++) {
+    for (let x = 0; x < inkW; x++) {
+      const on = small ? (small.rows[y] as Uint8Array)[x] : (bmp as PixelBitmap).ink[((bmp as PixelBitmap).top + y) * (bmp as PixelBitmap).w + (bmp as PixelBitmap).left + x];
+      if (on) ink[(y + 1) * w + x + 1] = 1;
+    }
+  }
   if (underline) for (let x = 0; x < inkW; x++) ink[(capRows + 2) * w + x + 1] = 1;
   let rim: Uint8Array = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
@@ -997,7 +1039,7 @@ export function renderDie(kind: DieKind, rot: Mat3, skin: DiceSkin, size: number
     // Which way the numeral's top points on screen, to the nearest quarter turn clockwise from straight up.
     const up = matVec(rot, f.up);
     const steps = (Math.round(Math.atan2(up[0], up[1]) / (Math.PI / 2)) + 4) % 4;
-    const bmp = numeralBitmap(String(f.number), needsUnderline(g.sides, f.number), steps);
+    const under = needsUnderline(g.sides, f.number);
     // Slide it a little to the spot where the least of it falls off the face. A neighbour's numeral is drawn only if it sits wholly inside its face with a pixel of air all round; the front one is always drawn, as well placed as it can be.
     const clear = (px: number, py: number): boolean => {
       for (let dy = -1; dy <= 1; dy++) {
@@ -1009,31 +1051,47 @@ export function renderDie(kind: DieKind, rot: Mat3, skin: DiceSkin, size: number
       }
       return true;
     };
-    let bestCost = Infinity;
-    let bx = 0;
-    let by = 0;
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const ox = Math.round(cx - bmp.w / 2) + dx;
-        const oy = Math.round(cy - bmp.h / 2) + dy;
-        let cost = 0;
-        for (let y = 0; y < bmp.h; y++) {
-          for (let x = 0; x < bmp.w; x++) {
-            const k = y * bmp.w + x;
-            if (!bmp.ink[k] && !bmp.rim[k]) continue;
-            const px = ox + x;
-            const py = oy + y;
-            const inside = px >= 0 && py >= 0 && px < size && py < size && ids[py * size + px] === fi && !line[py * size + px];
-            if (!inside) cost += bmp.ink[k] ? 4 : sk.numeralOutline ? 1 : 0;
-            else if (bmp.ink[k] && !clear(px, py)) cost += mustShow ? 0.5 : 4;
+    const fit = (bmp: NumeralBitmap): { cost: number; bx: number; by: number } => {
+      let bestCost = Infinity;
+      let bx = 0;
+      let by = 0;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const ox = Math.round(cx - bmp.w / 2) + dx;
+          const oy = Math.round(cy - bmp.h / 2) + dy;
+          let cost = 0;
+          for (let y = 0; y < bmp.h; y++) {
+            for (let x = 0; x < bmp.w; x++) {
+              const k = y * bmp.w + x;
+              if (!bmp.ink[k] && !bmp.rim[k]) continue;
+              const px = ox + x;
+              const py = oy + y;
+              const inside = px >= 0 && py >= 0 && px < size && py < size && ids[py * size + px] === fi && !line[py * size + px];
+              if (!inside) cost += bmp.ink[k] ? 4 : sk.numeralOutline ? 1 : 0;
+              else if (bmp.ink[k] && !clear(px, py)) cost += mustShow ? 0.5 : 4;
+            }
+          }
+          cost += (Math.abs(dx) + Math.abs(dy)) * 0.01;
+          if (cost < bestCost) {
+            bestCost = cost;
+            bx = ox;
+            by = oy;
           }
         }
-        cost += (Math.abs(dx) + Math.abs(dy)) * 0.01;
-        if (cost < bestCost) {
-          bestCost = cost;
-          bx = ox;
-          by = oy;
-        }
+      }
+      return { cost: bestCost, bx, by };
+    };
+    // The full glyph if it fits with air all round; else the compact one if that does; else (the front face only) whichever sits worst-off least.
+    const big = numeralBitmap(String(f.number), under, steps);
+    const small = numeralBitmap(String(f.number), under, steps, true);
+    const bigFit = fit(big);
+    let bmp = big;
+    let { cost: bestCost, bx, by } = bigFit;
+    if (bestCost >= 0.5) {
+      const smallFit = fit(small);
+      if (smallFit.cost < bestCost) {
+        bmp = small;
+        ({ cost: bestCost, bx, by } = smallFit);
       }
     }
     if (bestCost >= 0.5 && !mustShow) return false;
@@ -1358,6 +1416,8 @@ const TRAY_MIN_H = 160;
 const TRAY_MAX_H = 200;
 /** The biggest sprite for 1, 2, 3 and 4 dice. */
 const SPRITE_CAP: readonly number[] = [56, 56, 50, 44, 38];
+/** The smallest a die sprite is ever drawn, in tray pixels: four dice across the narrowest tray. */
+export const MIN_DIE_SIZE = 24;
 
 interface Layout {
   /** Device pixels per tray pixel. */
@@ -1508,7 +1568,7 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
     const zoneH = L.bandTop - zoneTop;
     const gap = 4;
     const count = Math.max(1, n);
-    const size = Math.max(24, Math.min(SPRITE_CAP[Math.min(4, count)] as number, Math.floor((innerW - gap * (count + 1)) / count), zoneH - 2));
+    const size = Math.max(MIN_DIE_SIZE, Math.min(SPRITE_CAP[Math.min(4, count)] as number, Math.floor((innerW - gap * (count + 1)) / count), zoneH - 2));
     const hop = Math.min(10, Math.round(size * 0.2));
     const total = count * size + (count - 1) * gap;
     const x0 = L.felt.x0 + size / 2 + 1;
@@ -1607,7 +1667,8 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
         bob = w.bob;
       }
       if (!spriteCtx) continue;
-      const s = renderDie(d.kind, rot, skin, size, waiting ? { numerals: false } : {});
+      // Numerals in every state: waiting, tumbling and settled. The wobble is under every die's headroom, so the front face never changes.
+      const s = renderDie(d.kind, rot, skin, size);
       spriteCtx.putImageData(new ImageData(s.data, size, size), 0, 0);
       c.drawImage(sprite, Math.round(d.x - size / 2), Math.round(d.y - d.z - size / 2 + bob));
     }

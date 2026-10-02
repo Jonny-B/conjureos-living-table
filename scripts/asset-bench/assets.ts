@@ -1,7 +1,10 @@
 /**
  * The Living Table asset bench registry.
  *
- * Five panels: Play (the game in miniature, turn based), Characters (the
+ * Seven panels: Play (the game in miniature, turn based; its Sheet button opens
+ * the character sheet and the character creator, sheet.ts, inside the game
+ * window), Rules and Bestiary (the books on the table, books.ts, built from
+ * src/games/livingtable/rules/rulebook.ts and bestiary.ts), Characters (the
  * animated cast), Pieces (every in-play sprite beside its KayKit version),
  * Gear (the paper doll and inventory icons) and Terrain (the autotiling).
  * The panels call the game's own render, rules and character functions BY
@@ -55,6 +58,7 @@ import {
 } from "../../src/games/livingtable/characters/equipmentTypes";
 import { PLAYABLE_ARCHETYPE_IDS, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
 import { createCharacter, type CharacterSheet } from "../../src/games/livingtable/characters/creation";
+import { packInfo } from "../../src/games/livingtable/inventory/itemInfo";
 import { applyDamage, applyHealing } from "../../src/games/livingtable/characters/health";
 import { parseDiceNotation, rollDice, rollDie } from "../../src/games/livingtable/rules/dice";
 import { packItems, renderPlanFor, slotLabelFor } from "../../src/games/livingtable/menu/equipment";
@@ -97,6 +101,8 @@ import { attackEvents, type CombatEvent } from "../../src/games/livingtable/sess
 import { createHud, createOverlay, verdictWords, type Hud, type HudAction, type HudBar, type InitiativeSide, type NarrationHandle, type Overlay, type OverlayPoint, type PackSection, type TextStyle } from "./overlay";
 import { askDm, normaliseSkill, validationContextFor, type DmAsk, type DmEffect, type DmReply, type DmSceneView, type SampleFn } from "./dm";
 import { createDiceTray, createSkinPicker, DICE_SKINS, type DiceTray, type DieKind } from "./dice";
+import { dropLowest, featureList, itemCount, itemTip, openCreation, openSheet, type CreationView, type SheetExtras, type SheetView } from "./sheet";
+import { mountBestiaryPanel, mountRulesPanel } from "./books";
 import { decodeLibrary, kaykitLibrary, partFile } from "./kaykit";
 import {
   CAST_CLIPS,
@@ -689,6 +695,10 @@ interface PlayState {
   archetypeId: ArchetypeId;
   floorId: TileId;
   hero: CharacterSheet;
+  /** The hero as it began (quick-picked or made in the creator): what Reset scene starts again from, hit points full. */
+  start: CharacterSheet;
+  /** What the DM said each thing it gave is (its `desc`), keyed by the item's name; the pack's hover tip reads it. Taking the item removes it. */
+  itemNotes: Record<string, string>;
   heroAt: XY;
   monster: { at: XY; hp: number; awake: boolean } | null;
   doorOpen: boolean;
@@ -744,15 +754,23 @@ function freshHero(archetypeId: ArchetypeId): CharacterSheet {
   return createCharacter({ archetypeId, name: ARCHETYPE_LABEL[archetypeId], appearanceAssetId: bodySpriteId(archetypeId) });
 }
 
-/** A new scene. `keepGearOf` carries worn gear and the pack over (Reset scene), while hit points, the loot ledger, the door, the container and the monster all start again. */
-function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: TileId, keepGearOf?: CharacterSheet): PlayState {
-  const fresh = freshHero(archetypeId);
+/**
+ * A new scene. `start` is the hero to begin as (a character made in the creator);
+ * without it, the archetype's ready-made one. `keepGearOf` carries worn gear and the
+ * pack over (Reset scene), while hit points, the loot ledger, the door, the
+ * container and the monster all start again. The picture and the animated figure
+ * follow the archetype either way.
+ */
+function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: TileId, keepGearOf?: CharacterSheet, start?: CharacterSheet): PlayState {
+  const fresh = start ?? freshHero(archetypeId);
   const hero = keepGearOf ? { ...fresh, equipment: keepGearOf.equipment, bag: keepGearOf.bag } : fresh;
   const p: PlayState = {
     template,
     archetypeId,
     floorId,
     hero,
+    start: fresh,
+    itemNotes: {},
     heroAt: { ...HERO_START },
     monster: { at: { ...MONSTER_START }, hp: statblockFor(SCENE_KIT[template].monster).maxHp, awake: false },
     doorOpen: false,
@@ -1427,6 +1445,40 @@ function dmFeatures(p: PlayState): DmSceneView["features"] {
   return out;
 }
 
+/**
+ * Who the hero is, for the DM (character creation): ancestry, background,
+ * alignment, personality, backstory, traits (with whether the engine applies
+ * each) and languages, plus what each thing carried is, in the same words the
+ * player reads on hover. Only what the sheet actually has: a quick-picked hero
+ * has no ancestry or background and adds nothing, so its prompt is unchanged
+ * except for the item lines.
+ */
+function heroIdentityFor(p: PlayState): Partial<DmSceneView["hero"]> {
+  const h = p.hero;
+  const out: Partial<DmSceneView["hero"]> = {};
+  if (h.ancestryName) out.ancestry = h.ancestryName;
+  if (h.background?.name) out.background = h.background.name;
+  if (h.alignment) out.alignment = h.alignment;
+  if (h.background) {
+    const personality: NonNullable<DmSceneView["hero"]["personality"]> = {};
+    if (h.background.personalityTrait) personality.trait = h.background.personalityTrait;
+    if (h.background.ideal) personality.ideal = h.background.ideal;
+    if (h.background.bond) personality.bond = h.background.bond;
+    if (h.background.flaw) personality.flaw = h.background.flaw;
+    if (Object.keys(personality).length > 0) out.personality = personality;
+  }
+  if (h.backstory) out.backstory = h.backstory;
+  const traits = featureList(h).map((f) => ({ name: f.name, text: f.text, applied: f.applied }));
+  if (traits.length > 0) out.traits = traits;
+  if (h.languages && h.languages.length > 0) out.languages = [...h.languages];
+  const items: { name: string; what: string }[] = [];
+  for (const section of packInfo(h, { potions: p.potions, notes: p.itemNotes })) {
+    for (const info of section.items) items.push({ name: info.name, what: info.summary });
+  }
+  if (items.length > 0) out.items = items;
+  return out;
+}
+
 /** The whole scene for one DM call, rebuilt from the state every time. */
 function dmViewFor(p: PlayState): DmSceneView {
   const kit = SCENE_KIT[p.template];
@@ -1511,6 +1563,7 @@ function dmViewFor(p: PlayState): DmSceneView {
       carried: [...packItems(h)],
       potions,
       consumables: (h.consumables ?? []).filter((x) => !/potion/i.test(x.name)).map((x) => `${x.name} x${x.uses}`),
+      ...heroIdentityFor(p),
     },
     monsters: p.monster
       ? [
@@ -1573,6 +1626,8 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
     case "give": {
       if (p.hero.inventory.length >= DM_INVENTORY_MAX) return fail("the pack is full");
       p.hero = { ...p.hero, inventory: [...p.hero.inventory, e.item] };
+      // What the DM says it is: the pack's hover tip shows it (and says the game does not use it by itself).
+      if (typeof e.desc === "string" && e.desc.trim()) p.itemNotes[e.item] = e.desc.trim();
       return { ok: true, line: { text: `You now carry ${e.item}.`, tone: "good" } };
     }
     case "take": {
@@ -1582,6 +1637,7 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       if (!want || at < 0) return fail(`the hero is not carrying "${e.item}" (only carried items can be taken)`);
       const gone = p.hero.inventory[at]!;
       p.hero = { ...p.hero, inventory: p.hero.inventory.filter((_, i) => i !== at) };
+      if (!p.hero.inventory.includes(gone)) delete p.itemNotes[gone];
       return { ok: true, line: { text: `You no longer have ${gone}.`, tone: "plain" } };
     }
     case "potion": {
@@ -1842,6 +1898,9 @@ function tierWord(tier: EquipmentTier): string {
 // as its body plus whatever it wears, every piece the same clip, facing and
 // frame, so they register pixel for pixel.
 // ---------------------------------------------------------------------------
+
+/** How long a rolled ability score stays on the tray before the next one is thrown, in the creator. */
+const SCORE_READ_MS = 700;
 
 /** The heroes a player can start as today (characters/templates.ts). */
 const PLAYABLE_HEROES: ArchetypeId[] = ARCHETYPES_BY_TEMPLATE.fantasy.filter((id) => PLAYABLE_ARCHETYPE_IDS.includes(id));
@@ -2491,6 +2550,34 @@ function clearHeadroom(px: Uint8ClampedArray, states: Uint8Array, tile: XY, size
   }
 }
 
+/**
+ * A small picture of a class for the sheet's header and the creator's class cards:
+ * the archetype's own token sprite from the art the bench is showing, scaled by a
+ * whole number. Null when the art has no such token.
+ */
+function portraitCanvas(archetypeId: string): HTMLCanvasElement | null {
+  const sprite = artManifest("fantasy").tokens[bodySpriteId(archetypeId as ArchetypeId)];
+  const rows = sprite?.pixels;
+  if (!rows || rows.length === 0) return null;
+  const manifest = artManifest("fantasy");
+  const w = Math.max(...rows.map((r) => r.length));
+  const k = Math.max(1, Math.round(72 / rows.length));
+  const canvas = document.createElement("canvas");
+  canvas.width = w * k;
+  canvas.height = rows.length * k;
+  canvas.className = "lt-item-icon";
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  rows.forEach((row, y) => {
+    row.forEach((idx, x) => {
+      if (idx < 0) return;
+      ctx.fillStyle = manifest.palette[idx] ?? "#f0f";
+      ctx.fillRect(x * k, y * k, k, k);
+    });
+  });
+  return canvas;
+}
+
 function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   injectPanelStyle();
   el.innerHTML = "";
@@ -2555,6 +2642,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     textStyle = textSelect.value as TextStyle;
     overlay.setStyle(textStyle);
     hud.setStyle(textStyle);
+    sheetView?.setStyle(textStyle);
+    creationView?.setStyle(textStyle);
   };
   field("Text", textSelect);
   const rollBox = el_("input");
@@ -2570,7 +2659,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   resetBtn.type = "button";
   resetBtn.onclick = () => {
     const p = st();
-    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero);
+    play = newPlay(p.template, p.archetypeId, p.floorId, p.hero, p.start);
     newScene();
   };
   controls.appendChild(resetBtn);
@@ -2584,7 +2673,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     el_(
       "p",
       "lt-note lt-howto",
-      "Click a square to walk there, the goblin to attack it, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press anything to look closer; type what you do in the box. Keys: arrows or WASD step, F attack, E use, Q potion, I pack, T end turn, Space skips the goblin's turn, Esc stops the DM.",
+      "Click a square to walk there, the goblin to attack it, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press anything to look closer; type what you do in the box. Hover or tap anything in the pack, or any number on the sheet, to read exactly what it is. Sheet (C) opens your character sheet and makes your own hero; the Hero setting here quick-picks a ready-made one. Keys: arrows or WASD step, F attack, E use, Q potion, I pack, C sheet, T end turn, Space skips the goblin's turn, Esc stops the DM.",
     ),
   );
 
@@ -2622,6 +2711,155 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   async function rollStep(prompt: string, dice: readonly { kind: DieKind; result: number }[], label: string, detail: string, tone: "good" | "bad" | "plain"): Promise<void> {
     if (rollMyself) await tray.awaitRoll(prompt, dice.map((d) => d.kind));
     await tray.roll({ dice, label, detail, tone });
+  }
+
+  // ---- the character sheet and character creation (sheet.ts) --------------------
+  //
+  // Both open over the board (the stage), so the HUD and the dice tray stay in view
+  // beside them on a wide screen. While one is open the game waits: board clicks and
+  // game keys do nothing, the HUD's action buttons and the DM field are greyed, and
+  // Escape (or the view's own buttons) gets back to the board. The sheet follows the
+  // hero live (hit points, potions, what the DM hands over).
+
+  let sheetView: SheetView | null = null;
+  let creationView: CreationView | null = null;
+  let sheetSig = "";
+  const overlayOpen = (): boolean => sheetView !== null || creationView !== null;
+  const sheetExtras = (p: PlayState): SheetExtras => ({ potions: p.potions, notes: p.itemNotes, portrait: portraitCanvas(p.archetypeId) });
+  const sheetSigFor = (p: PlayState): string => JSON.stringify([p.hero, p.potions, p.itemNotes, art.source, art.chars, art.size]);
+
+  /** The stage is only as tall as the board, which can be short; a sheet needs room to read. */
+  function syncStageRoom(): void {
+    stageWrap.style.minHeight = overlayOpen() ? `${Math.min(560, Math.max(380, Math.round(innerHeight * 0.7)))}px` : "";
+  }
+
+  function viewsChanged(): void {
+    hover = null;
+    previewed = null;
+    marksKey = "";
+    syncStageRoom();
+    renderHud();
+  }
+
+  function closeSheet(): void {
+    sheetView?.close();
+  }
+
+  function closeCreation(): void {
+    const c = creationView;
+    creationView = null;
+    c?.close();
+    viewsChanged();
+  }
+
+  function closeViews(): void {
+    closeSheet();
+    if (creationView) closeCreation();
+  }
+
+  function openSheetView(): void {
+    if (overlayOpen()) return;
+    const p = st();
+    sheetView = openSheet(stageWrap, p.hero, {
+      style: textStyle,
+      extras: sheetExtras(p),
+      onNewCharacter: () => {
+        closeSheet();
+        openCreationView();
+      },
+      onClose: () => {
+        sheetView = null;
+        sheetSig = "";
+        viewsChanged();
+      },
+    });
+    sheetSig = sheetSigFor(p);
+    viewsChanged();
+  }
+
+  function toggleSheet(): void {
+    if (sheetView) closeSheet();
+    else openSheetView();
+  }
+
+  /**
+   * The creator's ability dice, thrown in the real tray one score at a time (four d6
+   * each, so every number is on a die the player can see). With "I roll my own dice"
+   * on, the player taps once for the whole set; a tap on the tray while it throws
+   * jumps to the end of that throw.
+   */
+  async function rollScoreDice(groups: number, count: number, sides: number, label: string): Promise<number[][]> {
+    const kind = dieOf(sides);
+    const out: number[][] = [];
+    const skipThrow = (): void => tray.skip();
+    trayHost.addEventListener("click", skipThrow);
+    // On a phone the tray sits under the stage: bring it into view for the throw (a no-op beside it).
+    const scrollTo = (node: HTMLElement): void => node.scrollIntoView?.({ block: "nearest", behavior: REDUCED_MOTION ? "auto" : "smooth" });
+    scrollTo(trayHost);
+    try {
+      for (let g = 0; g < groups; g++) {
+        const faces = Array.from({ length: count }, () => rollDie(sides));
+        if (g === 0 && rollMyself) await tray.awaitRoll(`Tap to roll your ${groups} scores`, faces.map(() => kind));
+        const kept = dropLowest(faces);
+        await tray.roll({
+          dice: faces.map((result) => ({ kind, result })),
+          label: `Score ${g + 1} of ${groups}: ${faces.join(" ")}`,
+          // dropped is the lowest die's index; the player reads its face.
+          detail: `KEEP ${kept.total}, DROP THE ${faces[kept.dropped]}`,
+          tone: "plain",
+        });
+        // Cancelled, or the scene went away, while it rolled: stop throwing.
+        if (!alive || !creationView) throw new Error(label);
+        out.push(faces);
+        // A beat to read this score before the next throw clears it (a tap on the tray moves on).
+        if (g < groups - 1 && !REDUCED_MOTION) {
+          await new Promise<void>((resolve) => {
+            const done = (): void => {
+              clearTimeout(timer);
+              trayHost.removeEventListener("click", done);
+              resolve();
+            };
+            const timer = setTimeout(done, SCORE_READ_MS);
+            trayHost.addEventListener("click", done);
+          });
+        }
+      }
+    } finally {
+      trayHost.removeEventListener("click", skipThrow);
+      if (alive) scrollTo(stageWrap);
+    }
+    return out;
+  }
+
+  /** The new hero: the sheet the creator built, in a fresh scene with the DM's memory and recent talk cleared. */
+  function beginCharacter(made: CharacterSheet): void {
+    const p = st();
+    const id = made.archetypeId as ArchetypeId;
+    const sheet = made.appearanceAssetId === bodySpriteId(id) ? made : { ...made, appearanceAssetId: bodySpriteId(id) };
+    play = newPlay(p.template, id, ROOM_FLOOR[p.template], undefined, sheet);
+    newScene();
+    overlay.say({ text: `${sheet.name} steps into the room.`, tone: "plain" });
+  }
+
+  function openCreationView(): void {
+    if (overlayOpen()) return;
+    const p = st();
+    creationView = openCreation(
+      stageWrap,
+      { style: () => textStyle, rollDice: rollScoreDice, portrait: portraitCanvas },
+      {
+        start: { archetypeId: p.archetypeId },
+        onBegin: (sheet) => {
+          creationView = null;
+          beginCharacter(sheet);
+        },
+        onCancel: () => {
+          creationView = null;
+          viewsChanged();
+        },
+      },
+    );
+    viewsChanged();
   }
 
   // ---- gear ----------------------------------------------------------------
@@ -3183,30 +3421,33 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   /** What the HUD's freehand field shows right now. */
   function askStateFor(p: PlayState): NonNullable<Parameters<Hud["render"]>[0]["ask"]> {
     if (dmThinking) return { enabled: false, busy: true };
+    if (overlayOpen()) return { enabled: false, status: "Close the sheet to act." };
     if (sampleState === "pending") return { enabled: false, status: "Waking the DM..." };
     if (sampleState === "none") return { enabled: false, status: dmStatus ?? NO_DM };
     const myMove = !p.round || heroesTurn(p);
     return { enabled: !busy && !heroDown(p) && myMove };
   }
 
-  /** The pack view inside the game window: what the hero wears, the bag, what is carried and the potions. */
+  /**
+   * The pack view inside the game window: what the hero wears, the bag, what is carried
+   * and the consumables (the bench's own potion count included). Every row carries the
+   * hover tip from inventory/itemInfo.ts: what it is, its real numbers, and whether the
+   * game applies it or the DM rules on it. The DM's own words for things it handed over
+   * ride in through itemNotes.
+   */
   function packSections(p: PlayState): PackSection[] {
-    const h = p.hero;
-    const worn = GEAR_ROLES.map((role) => {
-      const tier = wornTier(p, role);
-      return tier ? itemName(p.archetypeId, role, tier) : null;
-    }).filter((n): n is string => n !== null);
-    return [
-      { label: "Worn", items: worn },
-      { label: "Bag", items: (h.bag ?? []).map((b) => itemName(p.archetypeId, b.slot, b.tier)) },
-      { label: "Carried", items: [...packItems(h)] },
-      { label: "Potions", items: p.potions > 0 ? [`Potion of healing x${p.potions}`] : [] },
-    ];
+    return packInfo(p.hero, { potions: p.potions, notes: p.itemNotes }).map((section) => ({
+      label: section.label,
+      items: section.items.map((info) => {
+        const count = itemCount(info);
+        return { text: count ? `${info.name} ${count}` : info.name, tip: itemTip(info) };
+      }),
+    }));
   }
 
   /** Look closely at a square the hero has seen. */
   function examineAt(at: XY): void {
-    if (busy) return;
+    if (busy || overlayOpen()) return;
     const p = st();
     if (sightLevel(p, at) === 0) return refuse(NOT_SEEN);
     void runDm({ kind: "examine", at: { ...at }, what: whatIsAt(p, at) });
@@ -3496,6 +3737,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (id === "potion") return drinkPotion();
     if (id === "end") return endTurnFlow();
     if (id === "cancel") return cancelDm();
+    if (id === "sheet") return toggleSheet();
   }
 
   /** Whose turn it is, what is left of it, everyone's hit points and the buttons: the game window's own readout. */
@@ -3528,16 +3770,27 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const myMove = !p.round || mine;
     const actionLeft = heroActionReady(p);
     const moveLeft = (c?.economy.movementRemaining ?? 0) >= FEET_PER_TILE;
+    // While the sheet or the creator is open the game waits: only Sheet itself (to close it) stays live.
+    const free = !overlayOpen();
     const actions: HudAction[] = [
-      { id: "attack", label: "Attack", key: "F", enabled: !busy && !heroDown(p) && monsterInSight(p) && actionLeft },
-      { id: "use", label: "Use", key: "E", enabled: !busy && !heroDown(p) && myMove && near },
-      { id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: !busy && p.potions > 0 && actionLeft && (heroDown(p) || h.currentHp < h.maxHp) },
+      { id: "attack", label: "Attack", key: "F", enabled: free && !busy && !heroDown(p) && monsterInSight(p) && actionLeft },
+      { id: "use", label: "Use", key: "E", enabled: free && !busy && !heroDown(p) && myMove && near },
+      { id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: free && !busy && p.potions > 0 && actionLeft && (heroDown(p) || h.currentHp < h.maxHp) },
       // The thing to press once the action is spent, or nothing is left to do.
-      { id: "end", label: "End turn", key: "T", enabled: !busy && mine, emphasis: !busy && mine && (!actionLeft || (!moveLeft && !near)) },
+      { id: "end", label: "End turn", key: "T", enabled: free && !busy && mine, emphasis: free && !busy && mine && (!actionLeft || (!moveLeft && !near)) },
+      { id: "sheet", label: "Sheet", key: "C", enabled: creationView === null },
     ];
     // While the DM thinks, the one live button is Cancel (Escape does the same).
     if (dmThinking) actions.push({ id: "cancel", label: "Cancel", key: "Esc", enabled: true });
     hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) } });
+    // The open sheet follows the hero: hit points, potions and anything the DM hands over.
+    if (sheetView) {
+      const sig = sheetSigFor(p);
+      if (sig !== sheetSig) {
+        sheetSig = sig;
+        sheetView.update(p.hero, sheetExtras(p));
+      }
+    }
     const entries =
       p.round && p.monster
         ? p.round.order.map((cb) => ({ id: cb.id, label: cb.id === HERO_ID ? p.hero.name : foeName(p), total: cb.initiative, side: (cb.side === "player" ? "hero" : "enemy") as InitiativeSide }))
@@ -3665,6 +3918,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   /** A new hero, a reset: nothing pending carries over, and the camera jumps to the hero. */
   function newScene(): void {
+    // The sheet and the creator belong to the old hero.
+    closeViews();
     // A DM call still out belongs to the old scene: let it go.
     const pending = dmCtl;
     dmCtl = null;
@@ -3694,6 +3949,19 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const key = e.key.toLowerCase();
     if (target?.closest?.("button") && (key === " " || key === "enter")) return;
     if (target?.tagName === "SELECT" && !KEY_DIR[key]) return;
+    // The sheet and the creator pause the game: their own keys are theirs (they handle Escape themselves), and C closes the sheet again.
+    if (overlayOpen()) {
+      if (key === "c" && !e.repeat && sheetView) {
+        closeSheet();
+        e.preventDefault();
+      }
+      return;
+    }
+    if (key === "c" && !e.repeat) {
+      openSheetView();
+      e.preventDefault();
+      return;
+    }
     if (key === "escape" && dmThinking) {
       cancelDm();
       e.preventDefault();
@@ -3850,6 +4118,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     alive = false;
     dmCtl?.abort();
     diceSkin = tray.skin().id;
+    closeViews();
     hud.destroy();
     stage.dispose();
     overlay.destroy();
@@ -4671,7 +4940,9 @@ export default {
   source: "scripts/asset-bench/assets.ts, the game's code under src/games/livingtable, KayKit renders from scripts/kaykit/",
   notes: [
     "Play is the game in miniature, turn based: click to walk, click the goblin to attack, the door or the chest to use it; " +
-      "initiative, movement and the dice are the game's own. Characters shows the whole animated cast, Pieces every still " +
+      "initiative, movement and the dice are the game's own. Its Sheet button (C) opens your character sheet and the character " +
+      "creator; hover anything in the pack or on the sheet to read exactly what it is. Rules is the rulebook and Bestiary the " +
+      "creatures (SRD 5.1 numbers, no animation yet). Characters shows the whole animated cast, Pieces every still " +
       "sprite beside its KayKit version, Gear the paper doll and inventory icons, Terrain the autotiling.",
     "The Art row switches between the game's current hand-drawn art and the KayKit art (Kay Lousberg, CC0); the choice " +
       "holds across tabs. Fantasy only: sci-fi is paused and the Healer is out of play.",
@@ -4681,6 +4952,8 @@ export default {
   assets: [],
   panels: [
     { id: "play", label: "Play", mount: mountPlayPanel },
+    { id: "rules", label: "Rules", mount: mountRulesPanel },
+    { id: "bestiary", label: "Bestiary", mount: mountBestiaryPanel },
     { id: "characters", label: "Characters", mount: mountCharactersPanel },
     { id: "pieces", label: "Pieces", mount: mountPiecesPanel },
     { id: "gear", label: "Gear", mount: mountGearPanel },
