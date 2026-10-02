@@ -78,6 +78,18 @@ export interface InitiativeEntry {
  */
 export type PlateReadout = RollReadout & { caption?: string; critical?: boolean; fumble?: boolean };
 
+/**
+ * A DM narration box that is up. update() replaces the whole text so far (a streaming
+ * reply passes the accumulated text each time), done() says the text is complete and
+ * starts the reading time, close() dismisses it now. Once the box has been closed,
+ * replaced by a newer narrate() or cleared, update() and close() do nothing.
+ */
+export interface NarrationHandle {
+  update(text: string): void;
+  done(): void;
+  close(): void;
+}
+
 export interface Overlay {
   setStyle(style: TextStyle): void;
   /** A big centred title for about 900 ms. Banners queue; resolves when this one is gone. */
@@ -88,6 +100,12 @@ export interface Overlay {
   rollPlate(at: OverlayPoint, readout: PlateReadout): void;
   /** A line in the dialogue box at the bottom of the board. 2 to 3 lines show; the history scrolls. */
   say(line: DialogueLine): void;
+  /**
+   * The DM's voice at the bottom of the board, above the dialogue box: a parchment box in storybook, a gold pixel frame
+   * in pixel, tagged "DM" (or the speaker). It shows a "..." while there is no text yet, follows streamed text through
+   * update(), and after done() stays for narrationHoldMs then fades; a click closes it early; a new narrate() replaces it.
+   */
+  narrate(opts: { speaker?: string; text: string }): NarrationHandle;
   /** The turn-order strip above the board. An empty array hides it. */
   initiative(entries: readonly InitiativeEntry[], activeId: string | null, round: number): void;
   /** A short notice, for refused clicks. */
@@ -123,6 +141,13 @@ const PLATE_OUT_MS = 220;
 const TOAST_MS = 1900;
 const TOAST_FADE_MS = 200;
 const HISTORY_LIMIT = 80;
+const NARRATION_BASE_MS = 2500;
+const NARRATION_PER_CHAR_MS = 45;
+const NARRATION_MAX_MS = 12000;
+const NARRATION_IN_MS = 180;
+const NARRATION_OUT_MS = 400;
+const NARRATION_CLOSE_MS = 140;
+const NARRATION_TAG_MAX = 16;
 
 // ---- palettes ---------------------------------------------------------------
 
@@ -225,6 +250,24 @@ export function sizeTier(width: number): "s" | "m" | "l" {
 /** The game's own wording for a roll's verdict (LivingTable.tsx RollReadoutOverlay). */
 export function verdictWords(r: Pick<PlateReadout, "hit" | "critical" | "fumble">): string {
   return r.critical ? "NATURAL 20, CRITICAL HIT" : r.fumble ? "NATURAL 1, AUTOMATIC MISS" : r.hit ? "HIT" : "MISS";
+}
+
+/** How long a finished narration box stays up for reading: about 2.5 s plus 45 ms a character, never more than 12 s. */
+export function narrationHoldMs(chars: number): number {
+  return Math.min(NARRATION_MAX_MS, NARRATION_BASE_MS + NARRATION_PER_CHAR_MS * Math.max(0, chars));
+}
+
+/**
+ * The pack items in `next` whose text was not in `prev`, by text alone (an item that moves from the bag to being
+ * worn is not new). `prev` null is the first look at the pack, where nothing counts as new.
+ */
+export function newPackItems(prev: readonly PackSection[] | null | undefined, next: readonly PackSection[] | null | undefined): Set<string> {
+  const fresh = new Set<string>();
+  if (!prev || !next) return fresh;
+  const had = new Set<string>();
+  for (const sec of prev) for (const it of sec.items) had.add(it);
+  for (const sec of next) for (const it of sec.items) if (!had.has(it)) fresh.add(it);
+  return fresh;
 }
 
 function signed(n: number): string {
@@ -372,7 +415,9 @@ const CSS = `
 .lto-layer{position:absolute;inset:0;pointer-events:none}
 .lto-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .lto-top{position:absolute;left:8px;right:8px;top:8px;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
-.lto-bottom{position:absolute;left:8px;right:8px;bottom:8px;display:flex;justify-content:center;pointer-events:none}
+.lto-bottom{position:absolute;left:8px;right:8px;bottom:8px;display:flex;flex-direction:column;align-items:center;pointer-events:none}
+.lto-narr-host{display:flex;flex-direction:column;align-items:center;width:100%;min-width:0;pointer-events:none}
+.lto-narr-host:not(:empty){margin-bottom:6px}
 .lto-banners{position:absolute;left:0;right:0;top:48px;display:flex;flex-direction:column;align-items:center;pointer-events:none}
 .lto-float{position:absolute;transform:translate(-50%,-100%);pointer-events:none;white-space:nowrap;will-change:transform,opacity}
 .lto-float-in{transform-origin:50% 100%}
@@ -453,6 +498,28 @@ const CSS = `
 .lto-sb .lto-banner::before{top:0}.lto-sb .lto-banner::after{bottom:0}
 .lto-sb .lto-dlg:focus-visible,.lto-px .lto-dlg:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
 
+/* ---- the DM's narration box: a tag, then the framed text ---- */
+.lto-narr{--nl:5;display:flex;flex-direction:column;width:min(760px,100%);min-width:0;pointer-events:auto;cursor:pointer;touch-action:manipulation}
+.lto-root[data-size="s"] .lto-narr{--nl:4}
+.lto-narr:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
+.lto-narr-tag{position:relative;z-index:1;align-self:flex-start;margin-left:12px;width:max-content;max-width:calc(100% - 24px);overflow:hidden}
+.lto-narr-box{min-width:0}
+.lto-narr-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;scrollbar-width:thin;scrollbar-gutter:stable}
+.lto-narr-dots{display:flex;align-items:center;gap:6px}
+.lto-narr-dots i{display:block;width:6px;height:6px;background:currentColor;animation:lto-narr-dot 1.1s ease-in-out infinite}
+.lto-narr-dots i:nth-child(2){animation-delay:.18s}.lto-narr-dots i:nth-child(3){animation-delay:.36s}
+@keyframes lto-narr-dot{0%,75%,100%{opacity:.3;transform:translateY(0)}35%{opacity:1;transform:translateY(-3px)}}
+.lto-px .lto-narr-tag{margin-bottom:calc(-5px*var(--fs))}
+.lto-px .lto-narr-box{padding:0 2px}
+.lto-px .lto-narr-body{max-height:calc(var(--nl)*var(--lto-nrow,20px));scrollbar-color:#b8801a #05061a}
+.lto-px .lto-narr-dots{height:var(--lto-nrow,20px);color:#ffc72a}
+.lto-sb .lto-narr-tag{margin-bottom:-11px;padding:4px 11px;border-radius:999px;background:var(--sb-badge);color:var(--sb-badge-ink);border:1px solid var(--sb-gold);
+  font:700 11px/1.1 var(--lto-num);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;text-overflow:ellipsis;box-shadow:0 2px 6px rgb(0 0 0/.4)}
+.lto-sb .lto-narr-box{padding:14px 16px 10px 18px;border-radius:10px;border-left:4px solid var(--sb-gold)}
+.lto-sb .lto-narr-body{max-height:calc(var(--nl)*1.45em);font:italic 15.5px/1.45 var(--lto-serif);color:var(--sb-ink);white-space:pre-wrap;scrollbar-color:var(--sb-rule) transparent}
+.lto-sb .lto-narr-dots{height:1.45em;color:var(--sb-spk)}
+.lto-sb .lto-narr-dots i{border-radius:50%}
+
 @media (prefers-reduced-motion: reduce){.lto-root *{animation:none!important;transition:none!important}}
 `;
 
@@ -521,7 +588,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
   dlg.setAttribute("aria-label", "Dialogue history");
   const dlgScroll = el("div", "lto-dlg-scroll");
   dlg.append(dlgScroll);
-  bottom.append(dlg);
+  const narrHost = el("div", "lto-narr-host");
+  bottom.append(narrHost, dlg);
   const bannersLayer = el("div", "lto-banners");
   // Stacking, bottom to top: the strip and toasts, the dialogue, roll plates (they cover the dialogue for
   // their two seconds rather than the other way round, so a verdict is never hidden), floats, banners.
@@ -630,6 +698,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
       lastLayoutKey = layoutKey();
       renderDialogue();
       renderInitiative();
+      if (narr && !narr.closed) renderNarration(narr);
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
     else run();
@@ -974,7 +1043,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     const rootH = root.clientHeight;
     const tailPx = isPixel() ? PLATE_TAIL_PIXEL_PX : PLATE_TAIL_PX;
     const strip = safeTop();
-    const safeBottom = dlg.hidden ? rootH - 8 : rootH - dlg.offsetHeight - 16;
+    const safeBottom = dlg.hidden && narrHost.childElementCount === 0 ? rootH - 8 : rootH - bottom.offsetHeight - 16;
     const left = clamp(at.x - w / 2, 8, Math.max(8, rootW - w - 8));
     let above = true;
     let y = at.y - damageReach() - FLOAT_GAP_PX - tailPx - h;
@@ -1214,6 +1283,148 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (node.isConnected && Number(node.dataset.lease ?? "0") === lease) node.remove();
   }
 
+  // ---- DM narration
+
+  /** One narration box: the tag and the framed body are built once, and renderNarration fills them for the current style. */
+  interface Narr {
+    node: HTMLElement;
+    tag: HTMLElement;
+    box: HTMLElement;
+    body: HTMLElement;
+    speaker: string;
+    text: string;
+    /** done() was called: the text is complete. */
+    done: boolean;
+    /** Dismissed, replaced or cleared: nothing more is drawn. The text is still kept, so done() can announce it. */
+    closed: boolean;
+    announced: boolean;
+    renderQueued: boolean;
+    epoch: number;
+  }
+  let narr: Narr | null = null;
+  const narrAlive = (n: Narr): boolean => !destroyed && n.epoch === epoch && !n.closed && narr === n;
+
+  function renderNarration(n: Narr): void {
+    const pixel = isPixel();
+    // Keep the reader at the newest line while text streams in, unless they have scrolled up.
+    const stick = n.body.childElementCount === 0 || n.body.scrollHeight - n.body.scrollTop - n.body.clientHeight < 14;
+    n.node.dataset.text = n.text;
+    n.node.dataset.speaker = n.speaker;
+    n.node.dataset.thinking = String(n.text === "");
+    n.node.setAttribute("aria-label", `${n.speaker} narration`);
+    n.box.classList.remove("lto-fr", "fr-gold", "fs1", "lto-plate");
+    n.tag.classList.remove("lto-fr", "fr-gold", "fs1");
+    n.tag.replaceChildren();
+    const label = n.speaker.length > NARRATION_TAG_MAX ? `${n.speaker.slice(0, NARRATION_TAG_MAX - 1)}.` : n.speaker;
+    if (pixel) {
+      frame(n.box, "gold", tier === "s");
+      frame(n.tag, "gold", true);
+      n.tag.append(px(label.toUpperCase(), { scale: 2, weight: "bold", color: PX.gold, shadow: PX.shade }));
+    } else {
+      n.box.classList.add("lto-plate");
+      n.tag.textContent = label;
+    }
+    // A row is what the text really takes at this ratio (see cssScale), so the box shows whole rows and never half a line.
+    if (pixel) n.node.style.setProperty("--lto-nrow", `${(CELL_H + LINE_GAP) * cssScale(2, deviceRatio())}px`);
+    if (n.text === "") {
+      const dots = el("span", "lto-narr-dots");
+      dots.setAttribute("role", "img");
+      dots.setAttribute("aria-label", `${n.speaker} is thinking`);
+      dots.append(el("i"), el("i"), el("i"));
+      n.body.replaceChildren(dots);
+    } else if (pixel) {
+      const ratio = deviceRatio();
+      // The scrollbar gutter and a little air come off the width the text may use.
+      const inner = Math.max(80, (n.body.clientWidth || (root.clientWidth || width) - 48) - 12);
+      n.body.replaceChildren(srText(n.text), px(n.text, { scale: 2, color: PX.ink, shadow: PX.shade, maxWidth: wrapWidth(inner, 2, ratio) }));
+    } else {
+      n.body.textContent = n.text;
+    }
+    if (stick) n.body.scrollTop = n.body.scrollHeight;
+  }
+
+  function queueNarrationRender(n: Narr): void {
+    if (n.renderQueued) return;
+    if (typeof requestAnimationFrame !== "function") {
+      renderNarration(n);
+      return;
+    }
+    n.renderQueued = true;
+    requestAnimationFrame(() => {
+      n.renderQueued = false;
+      if (narrAlive(n)) renderNarration(n);
+    });
+  }
+
+  /** Take a narration box down: a quick fade, then gone. Does nothing if it is already closed or was replaced. */
+  async function retireNarration(n: Narr, ms: number): Promise<void> {
+    if (!narrAlive(n)) return;
+    n.closed = true;
+    await play(n.node, [{ opacity: 1 }, { opacity: 0 }], reduced() ? 120 : ms);
+    if (narr === n) {
+      narr = null;
+      delete root.dataset.narrating;
+    }
+    n.node.remove();
+  }
+
+  function narrate(opts: { speaker?: string; text: string }): NarrationHandle {
+    const dead: NarrationHandle = { update() {}, done() {}, close() {} };
+    if (destroyed) return dead;
+    // A new narration replaces the old one at once (a fading one included).
+    narrHost.replaceChildren();
+    if (narr) narr.closed = true;
+    const node = el("div", "lto-narr");
+    node.dataset.ltoNarration = "";
+    node.tabIndex = 0;
+    node.setAttribute("role", "group");
+    node.title = "Click to dismiss";
+    const tag = el("div", "lto-narr-tag");
+    const box = el("div", "lto-narr-box");
+    const body = el("div", "lto-narr-body");
+    box.append(body);
+    node.append(tag, box);
+    const n: Narr = { node, tag, box, body, speaker: opts.speaker?.trim() || "DM", text: opts.text ?? "", done: false, closed: false, announced: false, renderQueued: false, epoch };
+    narr = n;
+    root.dataset.narrating = "1";
+    narrHost.append(node);
+    renderNarration(n);
+    const closeNow = (): void => void retireNarration(n, NARRATION_CLOSE_MS);
+    node.addEventListener("click", closeNow);
+    node.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" && e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeNow();
+    });
+    if (reduced()) void play(node, [{ opacity: 0 }, { opacity: 1 }], 120);
+    else void play(node, [{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "translateY(0)" }], NARRATION_IN_MS, "ease-out");
+    return {
+      update(text: string): void {
+        if (n.done) return;
+        n.text = text;
+        if (narrAlive(n)) queueNarrationRender(n);
+      },
+      done(): void {
+        if (n.done) return;
+        n.done = true;
+        if (n.text !== "" && !n.announced && !destroyed && n.epoch === epoch) {
+          n.announced = true;
+          announce(`${n.speaker}: ${n.text}`);
+        }
+        if (!narrAlive(n)) return;
+        // The text is complete: draw it now (a render may still be queued), then give the reader their time.
+        renderNarration(n);
+        if (n.text === "") {
+          void retireNarration(n, NARRATION_CLOSE_MS);
+          return;
+        }
+        void wait(narrationHoldMs(n.text.length)).then(() => retireNarration(n, NARRATION_OUT_MS));
+      },
+      close: closeNow,
+    };
+  }
+
   // ---- control
 
   function clear(): void {
@@ -1231,6 +1442,10 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     liveFloats.clear();
     bannersLayer.replaceChildren();
     toasts.replaceChildren();
+    narrHost.replaceChildren();
+    if (narr) narr.closed = true;
+    narr = null;
+    delete root.dataset.narrating;
     dlgScroll.replaceChildren();
     dlg.hidden = true;
     dialogue.length = 0;
@@ -1249,6 +1464,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     applyStyleClass();
     renderDialogue();
     renderInitiative();
+    if (narr && !narr.closed) renderNarration(narr);
   }
 
   function destroy(): void {
@@ -1261,7 +1477,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     internals.delete(api);
   }
 
-  const api: Overlay = { setStyle, banner, float, rollPlate, say, initiative, toast, clear, destroy };
+  const api: Overlay = { setStyle, banner, float, rollPlate, say, narrate, initiative, toast, clear, destroy };
   internals.set(api, { host, root });
   applyStyleClass();
   measure();
@@ -1363,6 +1579,11 @@ export interface HudBar {
   /** Out of the fight (dead, or the hero at 0 and making death saves). */
   down?: boolean;
 }
+/** One heading in the pack view and what is under it ("Worn", "Bag", "Carried", "Potions"). */
+export interface PackSection {
+  label: string;
+  items: readonly string[];
+}
 export interface HudState {
   /** One line on top: "Round 2, your turn", "Exploring". */
   title: string;
@@ -1370,10 +1591,21 @@ export interface HudState {
   lines: readonly string[];
   bars: readonly HudBar[];
   actions: readonly HudAction[];
+  /**
+   * The freehand line under the buttons ("What do you do?" and a Do it button). Without it, or without an onAsk,
+   * the field is not shown. `enabled: false` greys it out and `status` can say why; `busy` greys it out while the
+   * DM answers and shows `status` (default "The DM is thinking...") under it.
+   */
+  ask?: { enabled: boolean; placeholder?: string; status?: string; busy?: boolean };
+  /** The hero's things. With it the HUD has a "Pack (I)" button that shows or hides them inside the panel. */
+  pack?: { sections: readonly PackSection[] };
 }
 export interface Hud {
   setStyle(style: TextStyle): void;
   render(state: HudState): void;
+  /** Show or hide the pack list. Does nothing while the state has no `pack`. */
+  togglePack(): void;
+  isPackOpen(): boolean;
   destroy(): void;
 }
 
@@ -1391,6 +1623,35 @@ const HUD_CSS = `
 .lto-hud-btn:disabled{cursor:default;opacity:.42}
 .lto-hud-btn:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
 .lto-hud-key{opacity:.75}
+.lto-hud-pack{display:flex;flex-direction:column;gap:6px;margin-top:2px;padding-top:6px}
+.lto-hud-pack-list{position:relative;max-height:176px;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:7px;padding-right:4px;scrollbar-width:thin}
+.lto-hud-sec{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lto-hud-row{min-width:0;padding:1px 4px;overflow-wrap:anywhere}
+.lto-hud-seclabel,.lto-hud-item{display:block;min-width:0}
+.lto-hud-row.is-new{animation:lto-hud-new 1.8s ease-out}
+@keyframes lto-hud-new{0%,35%{background:rgb(255 205 70/.55);box-shadow:inset 3px 0 0 #ffc72a}100%{background:rgb(255 205 70/0);box-shadow:inset 3px 0 0 rgb(255 199 42/0)}}
+@media (prefers-reduced-motion: reduce){.lto-hud-row.is-new{background:rgb(255 205 70/.28);box-shadow:inset 3px 0 0 #ffc72a}}
+.lto-hud-btn[data-new="true"]::after{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:#ffc72a;box-shadow:0 0 0 2px rgb(0 0 0/.5)}
+.lto-hud-ask{display:flex;flex-direction:column;gap:4px}
+.lto-hud-ask-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
+.lto-hud-ask-row .lto-hud-btn{justify-content:center}
+.lto-hud-ask-status{min-width:0;padding:0 2px}
+.lto-hud-input{appearance:none;display:block;margin:0;width:100%;min-width:0;min-height:42px;padding:6px 10px;font:16px/1.25 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:inherit}
+.lto-hud-input:disabled{opacity:.55}
+.lto-hud-input:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
+.lto-px .lto-hud-pack{border-top:2px solid #4d5da6}
+.lto-px .lto-hud-pack-list{scrollbar-color:#4d5da6 #05061a}
+.lto-px .lto-hud-seclabel canvas,.lto-px .lto-hud-item canvas{display:block}
+.lto-px .lto-hud-input{color:#f4ecd0;background:#141a3c}
+.lto-px .lto-hud-input.lto-fr{padding:2px 4px}
+.lto-px .lto-hud-input::placeholder{color:#98a5d8;opacity:1}
+.lto-px .lto-hud-btn[data-new="true"]::after{border-radius:0}
+.lto-sb .lto-hud-pack{border-top:1px solid var(--sb-rule)}
+.lto-sb .lto-hud-pack-list{scrollbar-color:var(--sb-rule) transparent}
+.lto-sb .lto-hud-seclabel{font:700 12px/1.2 var(--lto-serif);letter-spacing:.07em;text-transform:uppercase;color:var(--sb-spk)}
+.lto-sb .lto-hud-item{font:14px/1.3 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-hud-input{font-family:var(--lto-serif);color:var(--sb-ink);background:var(--sb-paper);border:1px solid var(--sb-rule);border-radius:9px;box-shadow:inset 0 1px 3px rgb(var(--sb-shade)/.25)}
+.lto-sb .lto-hud-input::placeholder{color:var(--sb-muted);opacity:1}
 @keyframes lto-hud-pulse{0%,100%{filter:none}50%{filter:brightness(1.35) drop-shadow(0 0 6px rgb(255 205 70/.9))}}
 .lto-hud-btn.is-now:not(:disabled){animation:lto-hud-pulse 1.1s ease-in-out infinite}
 .lto-px .lto-hud-meter{background:#0b0d22;box-shadow:0 0 0 2px #05061a}
@@ -1413,7 +1674,7 @@ function hpColour(bar: HudBar): string {
   return bar.side === "hero" ? "#59a8ff" : "#ff5a4a";
 }
 
-export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: (id: string) => void, opts: { slot?: HTMLElement } = {}): Hud {
+export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: (id: string) => void, opts: { slot?: HTMLElement; onAsk?: (text: string) => void } = {}): Hud {
   injectStyle();
   if (typeof document !== "undefined" && !document.getElementById(HUD_STYLE_ID)) {
     const s = document.createElement("style");
@@ -1424,6 +1685,12 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
   let style: TextStyle = initialStyle;
   let last: HudState | null = null;
   let lastKey = "";
+  let packOpen = false;
+  /** The pack as the last render saw it, to tell what is new; null before the first look. */
+  let prevPack: readonly PackSection[] | null = null;
+  /** New items to light up in the next pack draw, and ones that arrived while the pack was shut (they light up when it opens). */
+  let freshNow = new Set<string>();
+  let pendingNew = new Set<string>();
   const root = el("div", "lto-root lto-hud");
   root.dataset.ltoHud = "";
   for (const key of Object.keys(FRAMES) as FrameKey[]) {
@@ -1435,9 +1702,31 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
   const actions = el("div", "lto-hud-actions");
   actions.setAttribute("role", "toolbar");
   actions.setAttribute("aria-label", "Actions");
+  // The freehand line is built once and kept across redraws, so a half-typed sentence and its focus survive a state change.
+  const askBox = el("div", "lto-hud-ask");
+  askBox.dataset.hudAsk = "";
+  askBox.hidden = true;
+  const askRow = el("div", "lto-hud-ask-row");
+  const askInput = el("input", "lto-hud-input");
+  askInput.type = "text";
+  askInput.autocomplete = "off";
+  askInput.maxLength = 500;
+  askInput.enterKeyHint = "send";
+  askInput.setAttribute("autocapitalize", "sentences");
+  askInput.setAttribute("aria-label", "What do you do? Type any action and the DM will respond");
+  askInput.placeholder = "What do you do?";
+  const askSend = el("button", "lto-hud-btn");
+  askSend.type = "button";
+  askSend.dataset.hudAskSend = "";
+  askSend.setAttribute("aria-label", "Do it");
+  const askStatus = el("div", "lto-hud-ask-status");
+  askStatus.setAttribute("aria-live", "polite");
+  askStatus.hidden = true;
+  askRow.append(askInput, askSend);
+  askBox.append(askRow, askStatus);
   root.append(panel);
   if (opts.slot) root.append(opts.slot);
-  root.append(actions);
+  root.append(actions, askBox);
   host.appendChild(root);
 
   const isPixel = (): boolean => style === "pixel";
@@ -1447,13 +1736,14 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     return c;
   };
   /** A line of HUD text in the current treatment, with the words kept for screen readers. */
-  const text = (words: string, kind: "title" | "line" | "name" | "num"): HTMLElement => {
+  const text = (words: string, kind: "title" | "line" | "name" | "num" | "seclabel" | "item", inset = 0): HTMLElement => {
     const node = el("span", `lto-hud-${kind}`);
     if (isPixel()) {
-      const colour = kind === "title" ? PX.gold : kind === "line" ? PX.muted : PX.ink;
-      // Titles and lines wrap to the panel (font pixels are 2 CSS px); names and numbers stay on one line.
-      const wrap = kind === "title" || kind === "line" ? Math.max(40, Math.floor(((root.clientWidth || 300) - 44) / 2)) : undefined;
-      node.append(px(words, { scale: 2, weight: kind === "title" || kind === "num" ? "bold" : "regular", color: colour, outline: PX.dark, maxWidth: wrap }), el("span", "lto-sr", words));
+      const gold = kind === "title" || kind === "seclabel";
+      const colour = gold ? PX.gold : kind === "line" ? PX.muted : PX.ink;
+      // Titles, lines and pack items wrap to the panel (font pixels are 2 CSS px); names and numbers stay on one line.
+      const wrap = kind === "name" || kind === "num" ? undefined : Math.max(40, Math.floor(((root.clientWidth || 300) - 44 - inset) / 2));
+      node.append(px(words, { scale: 2, weight: gold || kind === "num" ? "bold" : "regular", color: colour, outline: PX.dark, maxWidth: wrap }), el("span", "lto-sr", words));
     } else {
       node.textContent = words;
     }
@@ -1465,6 +1755,8 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     if (!s) return;
     root.classList.toggle("lto-px", isPixel());
     root.classList.toggle("lto-sb", !isPixel());
+    // The pack list scrolls inside the panel, which is rebuilt below: note where the reader was.
+    const packScroll = panel.querySelector<HTMLElement>(".lto-hud-pack-list")?.scrollTop ?? 0;
     panel.className = "lto-hud-panel";
     if (isPixel()) panel.classList.add("lto-fr", "fr-win");
     else panel.classList.add("lto-plate");
@@ -1491,6 +1783,7 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       }
       panel.append(bars);
     }
+    if (packOpen && s.pack) panel.append(packView(s.pack.sections, packScroll));
     actions.replaceChildren();
     for (const a of s.actions) {
       const btn = el("button", "lto-hud-btn");
@@ -1511,29 +1804,182 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       btn.onclick = () => onAction(a.id);
       actions.append(btn);
     }
+    if (s.pack) actions.append(packButton());
+    applyAsk(s.ask);
   }
 
-  return {
+  function packButton(): HTMLButtonElement {
+    const btn = el("button", "lto-hud-btn");
+    btn.type = "button";
+    btn.dataset.hudPack = "";
+    btn.setAttribute("aria-label", "Pack (I)");
+    btn.setAttribute("aria-pressed", String(packOpen));
+    btn.setAttribute("aria-expanded", String(packOpen));
+    if (!packOpen && pendingNew.size > 0) btn.dataset.new = "true";
+    if (isPixel()) {
+      btn.classList.add("lto-fr", "fs1", packOpen ? "fr-gold" : "fr-win");
+      btn.append(px("Pack", { scale: 2, weight: "bold", color: packOpen ? PX.gold : PX.ink, outline: PX.dark }), px("I", { scale: 2, color: PX.muted, outline: PX.dark }));
+    } else {
+      btn.append(el("span", undefined, "Pack"), el("span", "lto-hud-key", "I"));
+      if (packOpen) btn.classList.add("is-now");
+    }
+    btn.onclick = () => api.togglePack();
+    return btn;
+  }
+
+  /** The pack list: a heading per section, its items under it, scrolling inside when long. Items in `freshNow` get a brief highlight. */
+  function packView(sections: readonly PackSection[], prevScroll: number): HTMLElement {
+    const fresh = freshNow;
+    freshNow = new Set();
+    const wrap = el("div", "lto-hud-pack");
+    wrap.dataset.hudPackView = "";
+    wrap.setAttribute("role", "group");
+    wrap.setAttribute("aria-label", "Pack");
+    const list = el("div", "lto-hud-pack-list");
+    let firstFresh: HTMLElement | null = null;
+    for (const sec of sections) {
+      const box = el("div", "lto-hud-sec");
+      box.dataset.section = sec.label;
+      const head = el("div", "lto-hud-row");
+      head.append(text(sec.label, "seclabel", 18));
+      box.append(head);
+      if (sec.items.length === 0) {
+        const none = el("div", "lto-hud-row");
+        none.append(text("Nothing", "line", 18));
+        box.append(none);
+      }
+      for (const item of sec.items) {
+        const row = el("div", "lto-hud-row");
+        row.dataset.item = item;
+        if (fresh.has(item)) {
+          row.classList.add("is-new");
+          row.dataset.new = "true";
+          firstFresh ??= row;
+        }
+        row.append(text(item, "item", 18));
+        box.append(row);
+      }
+      list.append(box);
+    }
+    wrap.append(list);
+    if (firstFresh) {
+      // Show what just arrived, by scrolling the list itself and never the page. It is measured once the panel is in the page.
+      const row: HTMLElement = firstFresh;
+      queueMicrotask(() => {
+        const bottom = row.offsetTop + row.offsetHeight;
+        if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+      });
+    }
+    queueMicrotask(() => {
+      if (!firstFresh) list.scrollTop = prevScroll;
+    });
+    return wrap;
+  }
+
+  /** Redraw while keeping keyboard focus on the same button. */
+  function redraw(): void {
+    const at = document.activeElement as HTMLElement | null;
+    const mine = at && actions.contains(at) ? at : null;
+    const sel = mine ? (mine.dataset.action !== undefined ? `[data-action="${mine.dataset.action}"]` : mine.dataset.hudPack !== undefined ? "[data-hud-pack]" : "") : "";
+    draw();
+    if (sel) actions.querySelector<HTMLElement>(sel)?.focus();
+  }
+
+  // ---- the freehand line
+
+  let askKey = "";
+  /** Set when a line is sent from the field: it is disabled while the DM answers, which drops focus, so the field takes it back after. */
+  let refocusAsk = false;
+
+  function sendAsk(): void {
+    if (askInput.disabled) return;
+    const words = askInput.value.trim();
+    if (!words) return;
+    const at = document.activeElement;
+    refocusAsk = at === askInput || (at === askSend && typeof matchMedia === "function" && matchMedia("(pointer: fine)").matches);
+    askInput.value = "";
+    opts.onAsk?.(words);
+  }
+  // Typing must never reach the bench's own keys (arrows, WASD, F, E, Q, T, I), so every key event stops here.
+  askInput.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      sendAsk();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      askInput.blur();
+    }
+  });
+  askInput.addEventListener("keyup", (e) => e.stopPropagation());
+  askInput.addEventListener("keypress", (e) => e.stopPropagation());
+  askSend.addEventListener("click", sendAsk);
+
+  function applyAsk(a: HudState["ask"]): void {
+    const show = !!a && !!opts.onAsk;
+    askBox.hidden = !show;
+    if (!a || !show) return;
+    const off = !a.enabled || !!a.busy;
+    askInput.disabled = off;
+    askSend.disabled = off;
+    askInput.placeholder = a.placeholder ?? "What do you do?";
+    const words = a.busy ? (a.status ?? "The DM is thinking...") : (a.status ?? "");
+    // The status redraws only when the look or the words change, so the live region does not repeat itself.
+    const key = `${isPixel()}|${words}|${root.clientWidth}`;
+    if (key !== askKey) {
+      askKey = key;
+      askStatus.hidden = words === "";
+      askStatus.replaceChildren(...(words ? [text(words, "line")] : []));
+    }
+    for (const node of [askInput, askSend]) {
+      node.classList.toggle("lto-fr", isPixel());
+      node.classList.toggle("fs1", isPixel());
+      node.classList.toggle("fr-win", isPixel());
+    }
+    askSend.replaceChildren(isPixel() ? px("Do it", { scale: 2, weight: "bold", color: PX.ink, outline: PX.dark }) : el("span", undefined, "Do it"));
+    if (!off && refocusAsk) {
+      refocusAsk = false;
+      const at = document.activeElement;
+      if (!at || at === document.body) askInput.focus({ preventScroll: true });
+    }
+  }
+
+  const api: Hud = {
     setStyle(next: TextStyle): void {
       if (next === style) return;
       style = next;
-      draw();
+      redraw();
     },
     render(state: HudState): void {
       // Rebuilt only when what it shows changed: a turn is a handful of changes, not one per frame.
       const key = JSON.stringify(state) + style;
       if (key === lastKey) return;
       lastKey = key;
-      // Keep keyboard focus on the same button across a redraw.
-      const focused = (document.activeElement as HTMLElement | null)?.dataset?.action;
+      // What is new in the pack since the last look lights up if the pack is open, and otherwise waits for it to be opened.
+      const added = newPackItems(prevPack, state.pack?.sections);
+      prevPack = state.pack?.sections ?? null;
+      if (packOpen) freshNow = added;
+      else for (const item of added) pendingNew.add(item);
       last = state;
-      draw();
-      if (focused) (actions.querySelector(`[data-action="${focused}"]`) as HTMLButtonElement | null)?.focus();
+      redraw();
+    },
+    togglePack(): void {
+      if (!last?.pack) return;
+      packOpen = !packOpen;
+      if (packOpen) {
+        freshNow = pendingNew;
+        pendingNew = new Set();
+      }
+      redraw();
+    },
+    isPackOpen(): boolean {
+      return packOpen && !!last?.pack;
     },
     destroy(): void {
       root.remove();
     },
   };
+  return api;
 }
 
 export interface OverlayDemoOptions {

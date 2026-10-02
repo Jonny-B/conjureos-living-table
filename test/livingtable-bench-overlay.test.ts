@@ -41,6 +41,8 @@ import {
   floatLift,
   floatStackIndex,
   floatStackTop,
+  narrationHoldMs,
+  newPackItems,
   overlayDemo,
   sizeTier,
   verdictWords,
@@ -451,6 +453,32 @@ test("verdictWords uses the game's own sentences", () => {
   assert.equal(verdictWords({ hit: false }), "MISS");
   assert.equal(verdictWords({ hit: true, critical: true }), "NATURAL 20, CRITICAL HIT");
   assert.equal(verdictWords({ hit: false, fumble: true }), "NATURAL 1, AUTOMATIC MISS");
+});
+
+test("narrationHoldMs: about 2.5 s plus 45 ms a character, capped at 12 s", () => {
+  assert.equal(narrationHoldMs(0), 2500);
+  assert.equal(narrationHoldMs(100), 7000);
+  assert.equal(narrationHoldMs(211), 11995);
+  assert.equal(narrationHoldMs(212), 12000);
+  assert.equal(narrationHoldMs(5000), 12000);
+  assert.equal(narrationHoldMs(-4), 2500);
+});
+
+test("newPackItems: new by text, nothing new on the first look", () => {
+  const before = [
+    { label: "Worn", items: ["Leather armor"] },
+    { label: "Bag", items: ["Rope", "Torch"] },
+  ];
+  const after = [
+    { label: "Worn", items: ["Leather armor", "Rope"] },
+    { label: "Bag", items: ["Torch", "Rusty key"] },
+    { label: "Potions", items: ["Healing potion"] },
+  ];
+  assert.deepEqual([...newPackItems(before, after)].sort(), ["Healing potion", "Rusty key"]);
+  assert.equal(newPackItems(null, after).size, 0);
+  assert.equal(newPackItems(before, null).size, 0);
+  assert.equal(newPackItems(after, before).size, 0);
+  assert.equal(newPackItems(before, before).size, 0);
 });
 
 // ---- hygiene ----------------------------------------------------------------
