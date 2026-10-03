@@ -760,6 +760,7 @@ export const MOCK_LT_ASSETS: Record<LtTemplate, ReturnType<typeof mockAsset>[]> 
       floor_stone floor_stone_b floor_stone_c floor_stone_d
       cliff_top cliff_top_b cliff_top_c cliff_top_d
       floor_grass_tufted floor_grass_flowers floor_stone_cracked floor_stone_drain
+      floor_wood floor_wood_b
     `),
     // Water, canopy, the cliff face and the wall course: field variants just
     // the same, but nothing stands on them.
@@ -768,6 +769,7 @@ export const MOCK_LT_ASSETS: Record<LtTemplate, ReturnType<typeof mockAsset>[]> 
       forest_canopy forest_canopy_b forest_canopy_c forest_canopy_d
       cliff_face cliff_face_b cliff_face_c cliff_face_d
       wall_stone wall_stone_b wall_stone_c wall_stone_top wall_stone_base
+      wall_earth wall_earth_b
     `),
     // Terrain transitions. The DM never names these: the renderer substitutes
     // them for the plain tile from a cell's own neighbours
@@ -806,13 +808,16 @@ export const MOCK_LT_ASSETS: Record<LtTemplate, ReturnType<typeof mockAsset>[]> 
       cottage_nw cottage_n cottage_ne cottage_w cottage_e cottage_sw cottage_s cottage_se
       arch_jamb_w arch_jamb_e pillar_top pillar_base table_w table_e bed_head bed_foot
       fence_w fence_mid fence_e well_nw well_ne well_sw well_se
+      barrel crate crate_stack bar_counter_w bar_counter_mid bar_counter_e workbench anvil hearth shelf
     `),
     ...mockAssets("prop", true, `
       door_open door_open_ns torch torch_left torch_right cottage_door arch_passage stair_up_w stair_up_e
+      stool chair rug stairs_down ladder_up rat_hole tunnel_mouth sack cobweb
     `),
     ...mockAssets("token", false, `
       token_knight token_shadow token_healer token_fireball_person token_goblin
       token_skeleton token_villager token_robed_figure token_guard
+      token_rat token_giant_rat
     `),
     // The 72 equipment sprites ship with kind "token" and walkable false, the
     // same as a body, because the compositor draws them over a character

@@ -374,7 +374,8 @@ test("roster covers every kind", () => {
   const gear = SPRITES.filter((s) => s.kind === "token" && s.assetId.startsWith("gear_"));
   assert.ok(tiles.length > 0, "no tile-kind sprites in the roster");
   assert.ok(props.length > 0, "no prop-kind sprites in the roster");
-  assert.equal(tokens.length, 9, `expected 9 character token sprites, got ${tokens.length}`);
+  // 9 people plus the first adventure's two rats (token_rat, token_giant_rat).
+  assert.equal(tokens.length, 11, `expected 11 character token sprites, got ${tokens.length}`);
   // v1's 36 (weapon, outer, crown) plus contract v2's 15 (8 boots, 5 icons, 2 silhouettes).
   assert.equal(gear.length, 51, `expected 51 gear token sprites, got ${gear.length}`);
   assert.ok(tiles.some((t) => !t.walkable), "no wall-like tile (walkable:false) in the roster");
