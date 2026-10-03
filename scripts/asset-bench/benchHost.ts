@@ -372,7 +372,7 @@ function browserDownload(filename: string, bytes: Uint8Array): boolean {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** The on-screen text, the roll-my-own-dice choice, the dice skin and the zoom: set by the bench's controls row, kept across tab visits. */
-const settingsNow: TableSettings = { textStyle: "pixel", rollMyself: true, diceSkin: "bone", zoom: null };
+const settingsNow: TableSettings = { textStyle: "pixel", textSpeed: "normal", rollMyself: true, diceSkin: "bone", zoom: null };
 /** Skins the player owns. Buying is not wired (a later product decision), so it is the free one. */
 const OWNED_SKINS: readonly string[] = DICE_SKINS.filter((s) => s.priceCredits === 0).map((s) => s.id);
 

@@ -630,7 +630,7 @@ test("gameSettings: a change is kept across instances, merged into what was ther
   a.set({ textStyle: "storybook" });
   a.set({ zoom: 3, rollMyself: false });
   const b = createGameSettings({ store });
-  assert.deepEqual(b.get(), { textStyle: "storybook", rollMyself: false, diceSkin: "bone", zoom: 3 });
+  assert.deepEqual(b.get(), { textStyle: "storybook", textSpeed: "normal", rollMyself: false, diceSkin: "bone", zoom: 3 });
   b.set({ zoom: null });
   assert.equal(createGameSettings({ store }).get().zoom, null);
   const raw = JSON.parse(store.data.get(TABLE_KEYS.settings)!);

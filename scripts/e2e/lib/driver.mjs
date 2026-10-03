@@ -1,8 +1,9 @@
-// Drives TODAY's game screens by what a player sees: button text and the
-// game's own class names (lt-*, cui-*). When the port replaces a screen, only
-// this file changes; the specs keep reading the same verbs.
+// Drives the Living Table as a player sees it: the page bar (Adventures, Fullscreen), the table window's own
+// start screen, hero choice, board, dialogue box and HUD. The window marks its parts with data attributes
+// (data-lto-adventure, data-lto-quick, data-lto-dialogue, data-hud-drawer, data-setting-choice, ...), which are
+// the stable handles; button text is only used for the page bar.
 //
-// Every method waits for the thing it expects, so a spec never sleeps.
+// Every method waits for the thing it expects, so a spec never sleeps on a guess.
 
 const T = 15000;
 
@@ -12,166 +13,221 @@ export class Driver {
     this.platform = platform;
   }
 
-  /** The visible headline of the screen: the game header's title. */
-  async title() {
-    return ((await this.page.locator("h2.cui-heading").first().textContent({ timeout: T })) ?? "").trim();
+  /** Wait until the window has mounted (its HUD is on the page). */
+  async ready() {
+    await this.page.locator("[data-lto-hud]").waitFor({ timeout: T });
+    return this;
   }
 
-  /** Wait for the campaign list (the app's first screen). */
-  async openList() {
-    await this.page.locator(".lt-campaign-grid").waitFor({ timeout: T });
+  /** Everything a player can read on the page, as one string. */
+  async text() {
+    return (await this.page.locator("body").innerText()).replace(/\s+/g, " ");
   }
 
-  /** The campaign cards on the list: [{ title, genre, status }] (the "New campaign" card is not one). */
-  async campaigns() {
-    await this.openList();
-    return this.page.locator(".lt-campaign-card:not(.lt-new-card)").evaluateAll((cards) =>
-      cards.map((c) => {
-        const bits = [...c.children].map((e) => (e.textContent || "").trim());
-        return { title: bits[0], genre: bits[1], status: bits[2] };
-      }),
+  /** Same, for the HTML attributes a player could also see: titles, labels, placeholders. */
+  async labels() {
+    return this.page.evaluate(() =>
+      [...document.querySelectorAll("[title],[aria-label],[placeholder],[alt]")]
+        .map((e) => [e.getAttribute("title"), e.getAttribute("aria-label"), e.getAttribute("placeholder"), e.getAttribute("alt")].filter(Boolean).join(" | "))
+        .join(" | "),
     );
   }
 
-  /** From the list, open the New campaign screen. */
-  async openNewCampaign() {
-    if (await this.page.locator(".lt-template-row").count()) return;
-    await this.openList();
-    await this.page.locator(".lt-new-card").click();
-    await this.page.locator(".lt-template-row").waitFor({ timeout: T });
+  // ---- the start screen -----------------------------------------------------------------
+
+  /** The adventure cards on the start screen: [{ id, text }]. */
+  async adventures() {
+    await this.page.locator("[data-lto-adventure]").first().waitFor({ timeout: T });
+    return this.page.locator("[data-lto-adventure]").evaluateAll((n) => n.map((x) => ({ id: x.dataset.ltoAdventure, text: x.innerText.replace(/\s+/g, " ").trim() })));
   }
 
-  /** Text of the price line under "Plan this campaign". */
-  async planPriceNote() {
-    return (await this.page.locator(".lt-price-note").textContent({ timeout: T }))?.trim() ?? "";
+  /** The test room cards: [{ id, text }]. */
+  async rooms() {
+    return this.page.locator("[data-lto-room]").evaluateAll((n) => n.map((x) => ({ id: x.dataset.ltoRoom, text: x.innerText.replace(/\s+/g, " ").trim() })));
   }
 
-  /**
-   * New campaign -> arc call -> the character screen. The arc reply comes from
-   * the platform script. Returns the AI calls the click spent.
-   */
-  async createCampaign({ theme } = {}) {
-    await this.openNewCampaign();
-    if (theme) await this.page.locator("input.cui-input").fill(theme);
+  /** Pick an adventure card, then a quick-start class ("fighter" is the Knight), and wait for the board to be there. */
+  async quickStart(adventureId = "rat-cellar", chassis = "fighter") {
+    await this.page.locator(`[data-lto-adventure="${adventureId}"]`).click({ timeout: T });
+    await this.page.locator(`[data-lto-quick="${chassis}"]`).click({ timeout: T });
+    await this.page.locator("[data-lto-dialogue]:not([hidden])").waitFor({ timeout: T });
+  }
+
+  /** The page bar's Adventures button: back to the start screen. */
+  async adventuresButton() {
+    await this.page.getByRole("button", { name: "Adventures", exact: true }).click({ timeout: T });
+    await this.page.locator("[data-lto-adventure]").first().waitFor({ timeout: T });
+  }
+
+  // ---- the dialogue box -----------------------------------------------------------------
+
+  /** What the dialogue box says now, or null when it is down. */
+  async dialogue() {
+    return this.page.evaluate(() => {
+      const d = document.querySelector("[data-lto-dialogue]");
+      if (!d || d.hidden) return null;
+      const body = d.querySelector(".lto-dlg-body");
+      return {
+        speaker: d.dataset.speaker ?? "",
+        text: d.dataset.text ?? "",
+        shown: Number(d.dataset.shown ?? 0),
+        complete: d.dataset.complete === "true",
+        more: d.dataset.more === "true",
+        page: Number(d.dataset.page ?? 1),
+        pages: Number(d.dataset.pages ?? 1),
+        queued: Number(d.dataset.queued ?? 0),
+        thinking: d.dataset.thinking === "true",
+        scrolls: body ? body.scrollHeight > body.clientHeight + 1 : false,
+      };
+    });
+  }
+
+  /** Wait for the box to say something satisfying `fn`. */
+  async waitDialogue(fn = () => true, ms = 12000) {
+    const t0 = Date.now();
+    let last = null;
+    while (Date.now() - t0 < ms) {
+      last = await this.dialogue();
+      if (last && fn(last)) return last;
+      await this.page.waitForTimeout(40);
+    }
+    throw new Error(`the dialogue box never reached the wanted state; last: ${JSON.stringify(last)}`);
+  }
+
+  /** Press the box (finish the page, then the next page, then the next entry, then it closes). */
+  async pressDialogue() {
+    await this.page.locator("[data-lto-dialogue]:not([hidden])").click({ timeout: 2000 });
+    await this.page.waitForTimeout(80);
+  }
+
+  /** Press the box until it is gone (at most `max` presses). Returns how many presses it took. */
+  async dismissDialogue(max = 40) {
+    for (let i = 0; i < max; i += 1) {
+      if (!(await this.dialogue())) return i;
+      await this.pressDialogue().catch(() => {});
+    }
+    throw new Error("the dialogue box would not close");
+  }
+
+  // ---- the board ---------------------------------------------------------------------
+
+  /** A fingerprint of what the board canvas shows now (it is still when nothing moves). */
+  async boardHash() {
+    return this.page.evaluate(() => {
+      const c = document.querySelector("canvas.ltt-canvas");
+      if (!c) return "";
+      const data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let h = 2166136261;
+      for (let i = 0; i < data.length; i += 7) h = Math.imul(h ^ data[i], 16777619) >>> 0;
+      return String(h);
+    });
+  }
+
+  /** How many different colours the board canvas holds (a blank or failed paint has one or two). */
+  async boardColours() {
+    return this.page.evaluate(() => {
+      const c = document.querySelector("canvas.ltt-canvas");
+      if (!c) return 0;
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      const seen = new Set();
+      for (let i = 0; i < d.length; i += 16) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+      return seen.size;
+    });
+  }
+
+  /** Click the board at a point measured from its top left corner, in screen pixels. */
+  async clickBoard(x, y) {
+    const box = await this.page.locator("canvas.ltt-canvas").boundingBox();
+    if (!box) throw new Error("no board on the page");
+    await this.page.mouse.click(box.x + x, box.y + y);
+  }
+
+  /** Wait until the board has been still for `ms`. Returns the hash it settled on. */
+  async settle(ms = 500, max = 8000) {
+    const t0 = Date.now();
+    let prev = await this.boardHash();
+    let since = Date.now();
+    while (Date.now() - t0 < max) {
+      await this.page.waitForTimeout(80);
+      const now = await this.boardHash();
+      if (now !== prev) {
+        prev = now;
+        since = Date.now();
+      } else if (Date.now() - since >= ms) return now;
+    }
+    return prev;
+  }
+
+  // ---- the HUD -----------------------------------------------------------------------
+
+  /** Open a HUD drawer by its tab ("pack", "journal", "log", "saves", "settings"). Does nothing when it is open already. */
+  async openDrawer(name) {
+    const tab = this.page.locator(`[data-lto-hud] button[data-hud-drawer="${name}"]`);
+    await tab.waitFor({ timeout: T });
+    if ((await tab.getAttribute("aria-pressed")) !== "true") await tab.click();
+    await this.page.waitForTimeout(150);
+  }
+
+  async closeDrawer(name) {
+    const tab = this.page.locator(`[data-lto-hud] button[data-hud-drawer="${name}"]`);
+    if ((await tab.getAttribute("aria-pressed")) === "true") await tab.click();
+    await this.page.waitForTimeout(100);
+  }
+
+  /** The HUD's own text (the readout, the open drawer). */
+  async hudText() {
+    return (await this.page.locator("[data-lto-hud]").innerText()).replace(/\s+/g, " ");
+  }
+
+  /** The readout's headline and the first lines, e.g. "Morning at home At Your Home ...". */
+  async readout() {
+    return this.hudText();
+  }
+
+  /** Choose a value in the Settings tab ("textSpeed", "fast"). */
+  async setSetting(key, value) {
+    await this.openDrawer("settings");
+    await this.page.locator(`[data-setting-choice="${key}:${value}"]`).click({ timeout: T });
+    await this.page.waitForTimeout(150);
+  }
+
+  /** The choices pressed in the Settings tab, as "key:value" strings. */
+  async settingsPressed() {
+    await this.openDrawer("settings");
+    return this.page.locator('[data-hud-settings-view] [aria-pressed="true"]').evaluateAll((n) => n.map((x) => x.dataset.settingChoice));
+  }
+
+  /** The save rows in the Saves tab: [{ id, label, detail }]. */
+  async saves() {
+    await this.openDrawer("saves");
+    return this.page.locator("[data-save-row]").evaluateAll((rows) => rows.map((r) => ({ id: r.dataset.saveRow, label: (r.querySelector(".lto-hud-save-info")?.innerText ?? "").replace(/\s+/g, " ").trim() })));
+  }
+
+  /** Rest (the HUD's Rest button) saves a point; it may ask nothing, or confirm, depending on the hero's state. */
+  async rest() {
+    await this.page.locator('[data-lto-hud] button[data-action="rest"]').click({ timeout: T });
+    await this.page.waitForTimeout(300);
+  }
+
+  /** Ask the DM anything in the "What do you do?" line. Returns the AI calls the ask spent. */
+  async ask(text) {
     const before = this.platform.calls.length;
-    await this.page.getByRole("button", { name: /Plan this campaign/ }).click();
-    await this.page.locator(".lt-archetype-row").waitFor({ timeout: T });
+    const input = this.page.locator("[data-lto-hud] input.lto-hud-input");
+    await input.fill(text);
+    await this.page.locator("[data-lto-hud] [data-hud-ask-send]").click();
+    await this.platform.waitForCalls(before + 1);
     return this.platform.calls.length - before;
   }
 
-  /** Archetype cards on the character screen, by their heading. */
-  async archetypes() {
-    return this.page.locator(".lt-archetype-card strong").allTextContents();
+  // ---- the page bar ------------------------------------------------------------------
+
+  /** True when the page scrolls sideways. */
+  async scrollsSideways() {
+    return this.page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1 || document.body.scrollWidth > window.innerWidth + 1);
   }
 
-  /** Character screen -> the Begin the scene screen (creating a character is free and makes no AI call). */
-  async createCharacter({ name = "Tess", archetype } = {}) {
-    if (archetype) await this.page.locator(".lt-archetype-card", { hasText: archetype }).click();
-    await this.page.locator('input[placeholder="Their name"]').fill(name);
-    await this.page.getByRole("button", { name: "Begin", exact: true }).click();
-    await this.page.getByRole("button", { name: /Begin the scene/ }).waitFor({ timeout: T });
-  }
-
-  /** The Begin the scene button's text and price line (the screen between the character and the board). */
-  async beginSceneScreen() {
-    const btn = this.page.getByRole("button", { name: /Begin the scene/ });
-    await btn.waitFor({ timeout: T });
-    return {
-      button: ((await btn.textContent()) ?? "").trim(),
-      price: ((await this.page.locator(".lt-price-note").textContent()) ?? "").trim(),
-      free: ((await this.page.locator(".lt-free-note").textContent()) ?? "").trim(),
-    };
-  }
-
-  /** Click Begin the scene: one DM call builds the first room. Resolves when the board is up. */
-  async beginScene() {
-    await this.page.getByRole("button", { name: /Begin the scene/ }).click();
-    await this.page.locator(".lt-play-layout").waitFor({ timeout: T });
-    await this.page.locator("canvas.lt-canvas").waitFor({ timeout: T });
-  }
-
-  /** Character screen -> Begin the scene screen -> the board. Returns nothing; the spec reads platform.calls. */
-  async createCharacterAndBegin(opts) {
-    await this.createCharacter(opts);
-    await this.beginScene();
-  }
-
-  /** The play screen's header: { title, subtitle, hp }. */
-  async hud() {
-    const head = this.page.locator("header.game-head");
-    return {
-      title: ((await head.locator("h2").textContent({ timeout: T })) ?? "").trim(),
-      subtitle: ((await head.locator(".game-head-text p").textContent({ timeout: T })) ?? "").trim(),
-      hp: ((await head.locator(".cui-pill").textContent({ timeout: T })) ?? "").trim(),
-    };
-  }
-
-  /** The d-pad button for a direction: N, W, E or S. */
-  move(dir) {
-    return this.page.locator(".lt-menu-move button", { hasText: new RegExp("^\\s*" + dir + "(?![A-Za-z])") });
-  }
-
-  /** True when this direction's button shows a price (stepping builds a new room). */
-  async movePaid(dir) {
-    const label = (await this.move(dir).getAttribute("aria-label")) ?? "";
-    return /nobody has built/.test(label);
-  }
-
-  /**
-   * Press a d-pad button once and wait for the board to settle: the canvas
-   * redraws, or (for a paid step) the DM answers and the header's place changes.
-   */
-  async step(dir) {
-    const before = await this.boardHash();
-    await this.move(dir).click();
-    await this.page.waitForFunction(
-      ([prev]) => {
-        const c = document.querySelector("canvas.lt-canvas");
-        if (!c) return false;
-        const d = c.toDataURL();
-        let h = 5381;
-        for (let i = 0; i < d.length; i++) h = ((h << 5) + h + d.charCodeAt(i)) | 0;
-        return `${c.width}x${c.height}:${h}` !== prev;
-      },
-      [before],
-      { timeout: T },
-    );
-  }
-
-  /** Several steps the same way. */
-  async walk(dir, n) {
-    for (let i = 0; i < n; i++) await this.step(dir);
-  }
-
-  /** The flash note (a refusal or an error line) on the play screen, or null. */
-  async flash() {
-    const f = this.page.locator("p.flash").first();
-    return (await f.count()) ? ((await f.textContent()) ?? "").trim() : null;
-  }
-
-  /** The story panel's bubbles, oldest first. */
-  async story() {
-    return this.page.locator(".lt-narration .bubble:not(.thinking)").allTextContents();
-  }
-
-  /** Type a line to the DM and send it with Talk (one paid call). */
-  async talk(text) {
-    await this.page.locator("textarea.cui-input").fill(text);
-    await this.page.locator(".composer-bar").getByRole("button", { name: /^Talk/ }).click();
-  }
-
-  /** Leave with the header's back arrow. */
-  async back() {
-    await this.page.getByRole("button", { name: "Back to the games" }).click();
-  }
-
-  /** A hash of the board canvas, to see whether anything on it moved. */
-  async boardHash() {
-    return this.page.locator("canvas.lt-canvas").evaluate((c) => {
-      const data = c.toDataURL();
-      let h = 5381;
-      for (let i = 0; i < data.length; i++) h = ((h << 5) + h + data.charCodeAt(i)) | 0;
-      return `${c.width}x${c.height}:${h}`;
-    });
+  /** The line under the window (where the saves are). */
+  async footLine() {
+    return ((await this.page.locator(".lt-app-save").innerText()) ?? "").trim();
   }
 }

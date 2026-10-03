@@ -100,7 +100,7 @@ Play tab dresses the hero from `renderPlanFor` (the game's own equipment
 plan): each plan layer's sprite id is a cast gear id.
 
 Output, per style: `.cache/kaykit/out/cast-<style>/cast.json` (the shape is
-in `scripts/asset-bench/cast.ts`), a contact sheet `sheet.png` beside the
+in `src/games/livingtable/table/ui/cast.ts`), a contact sheet `sheet.png` beside the
 Knight, and the static `tokens-<style>-<size>.json` library parts.
 
 Seven characters are in the cast. To keep an id hand-drawn, make two edits in
@@ -111,7 +111,7 @@ the parts, so the cast would still animate the KayKit figure. Today only
 `token_goblin` is kept this way.
 The bench reads that reason, shows the game's own sprite for it, and moves the
 one drawing with the same clips as the cast (`spritePose` in
-`scripts/asset-bench/cast.ts`).
+`src/games/livingtable/table/ui/cast.ts`).
 
 ```
 "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe" -b --factory-startup --python scripts/kaykit/cast.py -- render --style bands

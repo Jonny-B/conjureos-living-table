@@ -3,7 +3,7 @@
  *
  * Adventures are normally written by the owner. This module lets a person ask
  * the AI to write one instead, only when they choose to, because a whole
- * adventure is long and costs real usage (see AI_ADVENTURE_COST_NOTE).
+ * adventure is long and takes minutes (see AI_ADVENTURE_COST_NOTE).
  *
  * It is transport-agnostic: the caller passes a `complete` function (the app's
  * AI bridge, a test double, anything that turns a prompt into text). The
@@ -53,10 +53,14 @@ export type WriteAdventureResult =
   | { ok: true; adventure: Adventure; markdown: string; repairs: number; warnings: string[] }
   | { ok: false; errors: string[]; markdown?: string };
 
-/** Plain words for the button that starts the AI writer. */
+/**
+ * Plain words for the button that starts the AI writer. Neutral on purpose: no
+ * price, no number and no mention of credits (the platform's credit display
+ * says what AI use costs; the game never does).
+ */
 export const AI_ADVENTURE_COST_NOTE =
-  "Having the AI write an adventure takes a few minutes and uses a lot of your Claude usage, because a whole adventure is long and may need a couple of rewrites to pass the checks. " +
-  "Adventures written by hand cost nothing to load. Only press this if you want a new one made for you.";
+  "Having the AI write an adventure takes a few minutes, because a whole adventure is long and may need a couple of rewrites to pass the checks. " +
+  "Adventures written by hand load straight away. Only press this if you want a new one made for you.";
 
 const DEFAULT_REPAIRS = 2;
 /** The most problems listed back to the model in one repair request. */

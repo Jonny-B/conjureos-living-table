@@ -4,9 +4,10 @@
  * streaming and stop-reason additions to src/bridge/ai.ts): the tier and
  * token-ceiling mapping, the system/user cache split of dmCore's prompt, one
  * call in flight, at most one repair round for a DM turn, errors reaching
- * dmCore's failFor with a code, cancel dropping the reply, and the price
- * estimate against the platform's own arithmetic. Every model call is a
- * scripted fake `complete`; nothing here touches a network.
+ * dmCore's failFor with a code, cancel dropping the reply, and that nothing
+ * in the adapter works out or states a price (the platform's credit display
+ * says what AI use costs; the game never does). Every model call is a scripted
+ * fake `complete`; nothing here touches a network.
  *
  * Run: npx tsx --test test/livingtable-table-dm.test.ts
  */
@@ -23,23 +24,8 @@ import {
   type DmSceneView,
 } from "../src/games/livingtable/table/dmCore";
 import { DmCallError, DM_SYSTEM_STUB, WRITER_SYSTEM_STUB, codeForError, createGameDm, splitDmInput } from "../src/games/livingtable/table/host/gameDm";
-import {
-  CACHE_TTL_MS,
-  MAX_REPAIRS,
-  MAX_TOKENS,
-  TEMPERATURE,
-  TYPICAL_TURN,
-  afterLine,
-  creditRange,
-  estimateCall,
-  estimateWriter,
-  roundCredits,
-  tierFor,
-  turnPriceLine,
-  typicalDmTurn,
-  writerPriceLine,
-  DM_OUTPUT,
-} from "../src/games/livingtable/table/cost";
+import * as costModule from "../src/games/livingtable/table/cost";
+import { CACHE_TTL_MS, MAX_REPAIRS, MAX_TOKENS, TEMPERATURE, tierFor, tokensOf } from "../src/games/livingtable/table/cost";
 
 /** The em and en dash, built from code points so this file holds neither. */
 const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
@@ -161,70 +147,15 @@ afterEach(() => {
   delete g.window;
 });
 
-// ---- cost: the platform's arithmetic ----------------------------------------------------
+// ---- no price, anywhere a player could read it -------------------------------------------------
 
-test("cost: the measured Rat Cellar turn on Sonnet comes out at 51 uncached, 25 cached, 58 for the turn that writes the cache", () => {
-  const out = { low: 500, typical: 500, high: 500 };
-  const at = (warm: boolean, cacheConfirmed: boolean) => estimateCall({ tier: "capable", ...TYPICAL_TURN, warm, cacheConfirmed }, out, MAX_TOKENS.default).likely;
-  assert.ok(Math.abs(at(false, false) - 51) < 1.5, `uncached ${at(false, false)}`);
-  assert.ok(Math.abs(at(true, true) - 25) < 1, `cached ${at(true, true)}`);
-  assert.ok(Math.abs(at(false, true) - 58) < 1.5, `cache write ${at(false, true)}`);
-});
-
-test("cost: Haiku is a fraction of Sonnet, Opus is dearer", () => {
-  const sonnet = typicalDmTurn("capable").likely;
-  assert.ok(typicalDmTurn("cheap").likely < sonnet / 2.5);
-  assert.ok(typicalDmTurn("epic").likely > sonnet * 1.3);
-});
-
-test("cost: the writer is about 130 (430 worst) short and 230 (790 worst) medium on Sonnet, and Opus costs more", () => {
-  const s = estimateWriter("short", "capable");
-  const m = estimateWriter("medium", "capable");
-  assert.ok(Math.abs(s.low - 130) < 6 && Math.abs(s.high - 430) < 10, `${s.low} ${s.high}`);
-  assert.ok(Math.abs(m.low - 230) < 8 && Math.abs(m.high - 790) < 15, `${m.low} ${m.high}`);
-  assert.equal(s.repairs, 2);
-  assert.ok(estimateWriter("short", "epic").low > s.low * 1.5);
-  assert.equal(estimateWriter("short", "capable", 0).high, s.low);
-});
-
-test("cost: an estimate is ordered low, likely, high, ceiling in every cache state", () => {
-  for (const warm of [false, true]) {
-    for (const cacheConfirmed of [false, true]) {
-      const e = estimateCall({ tier: "capable", ...TYPICAL_TURN, warm, cacheConfirmed }, DM_OUTPUT, MAX_TOKENS.default);
-      assert.ok(e.low <= e.likely && e.likely <= e.high && e.high < e.ceiling, JSON.stringify({ warm, cacheConfirmed, e }));
-    }
-  }
-  // the ceiling is what the proxy holds back for a whole 8,000 token answer on Sonnet: about 280 credits, as measured
-  const c = estimateCall({ tier: "capable", ...TYPICAL_TURN }, DM_OUTPUT, MAX_TOKENS.default).ceiling;
-  assert.ok(c > 250 && c < 330, String(c));
-});
-
-test("cost: until the cache is confirmed a warm turn leaves room for no cache at all", () => {
-  const unconfirmed = estimateCall({ tier: "capable", ...TYPICAL_TURN, warm: true }, DM_OUTPUT, MAX_TOKENS.default);
-  const confirmed = estimateCall({ tier: "capable", ...TYPICAL_TURN, warm: true, cacheConfirmed: true }, DM_OUTPUT, MAX_TOKENS.default);
-  assert.ok(unconfirmed.high > confirmed.high);
-  assert.equal(unconfirmed.low, confirmed.low);
-});
-
-test("cost: words round to whole credits, then fives, then tens, and always say about", () => {
-  assert.equal(roundCredits(7.2), 7);
-  assert.equal(roundCredits(23), 25);
-  assert.equal(roundCredits(0.2), 1);
-  assert.equal(roundCredits(127), 130);
-  assert.equal(creditRange(24, 61), "about 25 to 60 credits");
-  assert.equal(creditRange(25, 25.4), "about 25 credits");
-  assert.equal(creditRange(0.5, 0.9), "about 1 credit");
-  assert.equal(afterLine({ credits: 25.3, exact: false }), "about 25 credits");
-  assert.equal(afterLine({ credits: 31, exact: true }), "31 credits");
-  const line = turnPriceLine(typicalDmTurn("capable"));
-  assert.match(line, /^A turn costs about \d+ to \d+ credits from your ConjureOS balance\./);
-  assert.match(line, /Free accounts/);
-  assert.doesNotMatch(turnPriceLine(typicalDmTurn("cheap"), { forcedCheap: true }), /Free accounts/);
-  const w = writerPriceLine(estimateWriter("short", "capable"));
-  assert.match(w, /about 130 credits/);
-  assert.match(w, /up to about 4\d0/);
-  assert.match(w, /does not refund/);
-  for (const s of [line, w]) assert.doesNotMatch(s, DASH);
+test("cost.ts holds the call settings and no price: no rates, no estimates, no credit words", () => {
+  const names = Object.keys(costModule).sort();
+  assert.deepEqual(names, ["CACHE_TTL_MS", "CHARS_PER_TOKEN", "MAX_REPAIRS", "MAX_TOKENS", "TEMPERATURE", "tierFor", "tokensOf"]);
+  const text = readFileSync(new URL("../src/games/livingtable/table/cost.ts", import.meta.url), "utf8");
+  // the file may say, once, that it states no price; it may never hold a figure or a player-facing price string
+  assert.doesNotMatch(text, /CREDITS_PER_USD|TIER_RATES|per million|\$\d|costs about|from your ConjureOS balance/i);
+  assert.equal(tokensOf(400), 100);
 });
 
 test("tiers: quick, default and complex map to cheap, capable and capable; the writer reaches epic only by a flag", () => {
@@ -341,7 +272,6 @@ test("the writer runs on the capable tier with its own larger ceiling, and on ep
   const dm2 = createGameDm({ complete: f2.complete, writerTier: "epic" });
   await dm2.sampler("write an adventure about a lighthouse", { modelTier: "complex" });
   assert.equal(f2.calls[0]!.tier, "epic");
-  assert.ok(dm2.writerEstimate("short").low > dm.writerEstimate("short").low);
 });
 
 test("a reply that stopped at the token ceiling comes back truncated", async () => {
@@ -465,7 +395,7 @@ test("one call at a time: a second ask while one runs is refused and nothing ext
   assert.equal(dm.busy(), false);
 });
 
-test("cancel drops the reply, keeps the slot until the platform call really ends, and reports the spend when it does", async () => {
+test("cancel drops the reply, keeps the slot until the platform call really ends, and reports the drop when it does", async () => {
   const gate = deferred<CompleteResult>();
   const gate2 = deferred<CompleteResult>();
   const f = fake()
@@ -499,7 +429,7 @@ test("cancel drops the reply, keeps the slot until the platform call really ends
   gate2.resolve({ content: "wanted" });
   assert.deepEqual(await second, { text: "wanted" });
   assert.deepEqual(events, ["start", "dropped", "start", "done"]);
-  assert.equal(dm.total().calls, 2, "the dropped call is counted: its credits were spent");
+  assert.equal(dm.total().calls, 2, "the dropped call is counted: it still finished on the platform");
 });
 
 test("a call cancelled before it starts never reaches the model", async () => {
@@ -511,37 +441,43 @@ test("a call cancelled before it starts never reaches the model", async () => {
   assert.equal(f.calls.length, 0);
 });
 
-// ---- the price ------------------------------------------------------------------------------------------
+// ---- the report and the cache, with no price ----------------------------------------------------------------
 
-test("the price is shown before the click and the readout after lands inside it", async () => {
+test("a finished call reports its size and timing and says nothing about money", async () => {
   const f = fake().next(LONG_REPLY);
   const dm = createGameDm({ complete: f.complete });
   const input = buildDmInput(advView(), ASK);
-  const before = dm.estimate(input);
-  assert.match(before.line, /^A turn costs about \d+ to \d+ credits/);
-  assert.ok(before.estimate.low < before.estimate.high);
-  assert.equal(f.calls.length, 0, "estimating spends nothing");
   await dm.sampler(input, { modelTier: "default" });
-  const after = dm.last()!;
-  assert.match(after.line, /^about \d+ credits?$/);
-  assert.equal(after.spend.exact, false);
-  assert.ok(after.spend.credits >= before.estimate.low && after.spend.credits <= before.estimate.high, `${after.spend.credits} in ${before.estimate.low}..${before.estimate.high}`);
-  assert.equal(dm.total().calls, 1);
-  assert.equal(dm.total().exact, false);
+  const r = dm.last()!;
+  assert.equal(r.kind, "default");
+  assert.equal(r.repair, false);
+  assert.ok(r.inputTokens > 0 && r.outputTokens > 0);
+  assert.deepEqual(Object.keys(r).sort(), ["inputTokens", "kind", "ms", "outputTokens", "repair", "tier", "warm"]);
+  assert.deepEqual(dm.total(), { calls: 1 });
 });
 
-test("a cached system prompt: the next turn inside five minutes is priced warm, one after five minutes is not", async () => {
+test("the start event says only the kind and whether it is a repair, and a reported figure from the host is not passed on", async () => {
+  const f = fake().next({ content: GOOD_REPLY, credits: 31, usage: { inputTokens: 900, outputTokens: 120, cacheReadInputTokens: 4800 } });
+  const dm = createGameDm({ complete: f.complete });
+  const seen: unknown[] = [];
+  dm.subscribe((e) => seen.push(e));
+  await dm.sampler(buildDmInput(advView(), ASK), {});
+  assert.deepEqual(seen[0], { type: "start", kind: "default", repair: false });
+  const r = dm.last()!;
+  assert.equal(r.inputTokens, 900);
+  assert.equal(r.outputTokens, 120);
+  assert.doesNotMatch(JSON.stringify(seen), /credit|price|cost|about/i);
+});
+
+test("a cached system prompt: the next turn inside five minutes is warm, one after five minutes is not", async () => {
   let t = 1_000_000;
   const f = fake().next(GOOD_REPLY).next(GOOD_REPLY).next(GOOD_REPLY);
-  const dm = createGameDm({ complete: f.complete, now: () => t, cacheConfirmed: true });
+  const dm = createGameDm({ complete: f.complete, now: () => t });
   const turn = (over: Partial<DmSceneView> = {}) => buildDmInput(advView(over), ASK);
-  const cold = dm.estimate(turn()).estimate.likely;
   await dm.sampler(turn(), {});
   assert.equal(dm.last()?.warm, false);
   t += 60_000;
   assert.equal(dm.warm(), true);
-  const warm = dm.estimate(turn({ log: ["the door creaks"] })).estimate.likely;
-  assert.ok(warm < cold * 0.6, `warm ${warm} cold ${cold}`);
   await dm.sampler(turn({ log: ["the door creaks"] }), {});
   assert.equal(dm.last()?.warm, true);
   t += CACHE_TTL_MS + 1;
@@ -550,44 +486,12 @@ test("a cached system prompt: the next turn inside five minutes is priced warm, 
   assert.equal(dm.last()?.warm, false);
 });
 
-test("when the host reports the credits the readout says so without 'about', and a reported cache read confirms the cache", async () => {
-  const f = fake().next({ content: GOOD_REPLY, credits: 31, usage: { inputTokens: 900, outputTokens: 120, cacheReadInputTokens: 4800 } });
-  const dm = createGameDm({ complete: f.complete });
-  await dm.sampler(buildDmInput(advView(), ASK), {});
-  const r = dm.last()!;
-  assert.equal(r.line, "31 credits");
-  assert.equal(r.spend.exact, true);
-  assert.equal(r.inputTokens, 900);
-  assert.equal(r.outputTokens, 120);
-  assert.equal(dm.total().exact, true);
-  // learned: a cold estimate is now a cache write, dearer than the unconfirmed "no cache" middle
-  let t = 0;
-  const g2 = fake().next({ content: GOOD_REPLY, usage: { inputTokens: 900, outputTokens: 120, cacheReadInputTokens: 4800 } });
-  const learner = createGameDm({ complete: g2.complete, now: () => t });
-  const input = buildDmInput(advView(), ASK);
-  const before = learner.estimate(input).estimate.likely;
-  await learner.sampler(input, {});
-  t += CACHE_TTL_MS + 1;
-  assert.ok(learner.estimate(input).estimate.likely > before);
-});
-
-test("a free account is priced on the cheap model and says nothing about the capable one", () => {
-  const dm = createGameDm({ complete: fake().complete, forcedCheap: true });
-  const input = buildDmInput(advView(), ASK);
-  const free = dm.estimate(input);
-  const paid = createGameDm({ complete: fake().complete }).estimate(input);
-  assert.equal(free.estimate.tier, "cheap");
-  assert.ok(free.estimate.high < paid.estimate.low);
-  assert.doesNotMatch(free.line, /Free accounts/);
-  assert.match(paid.line, /Free accounts/);
-});
-
-test("the host's cost note is the typical turn's price line, and the writer's line carries a price and the worst case", () => {
+test("the host has no cost note and the adapter offers no estimate or price line", () => {
   const dm = createGameDm({ complete: fake().complete });
-  assert.match(dm.dm.costNote ?? "", /^A turn costs about \d+ to \d+ credits from your ConjureOS balance\./);
-  assert.match(dm.writerLine("short"), /about 130 credits.*up to about 430 if/);
-  assert.match(dm.writerLine("medium"), /about 230 credits.*up to about 790 if/);
+  assert.equal((dm.dm as { costNote?: string }).costNote, undefined);
+  for (const k of ["estimate", "writerLine", "writerEstimate"]) assert.equal((dm as unknown as Record<string, unknown>)[k], undefined, k);
   assert.match(dm.dm.unavailable, /permission/);
+  assert.doesNotMatch(dm.dm.unavailable, /credit|price|cost/i);
 });
 
 // ---- the bridge ------------------------------------------------------------------------------------------------
@@ -601,7 +505,7 @@ test("sample() is the adapter by default and null outside ConjureOS only when th
   assert.equal(await b.dm.sample(), b.sampler);
 });
 
-test("through the real bridge wrapper: streaming, the stop reason and the credits come back, and a rejection keeps the host's words", async () => {
+test("through the real bridge wrapper: streaming and the stop reason come back, and a rejection keeps the host's words", async () => {
   const seen: CompleteRequest[] = [];
   g.window = {
     __conjureos: {
@@ -621,7 +525,7 @@ test("through the real bridge wrapper: streaming, the stop reason and the credit
   assert.deepEqual(res, { text: "hello", truncated: true });
   assert.deepEqual(parts, ["he"]);
   assert.equal(seen[0]!.tier, "capable");
-  assert.equal(dm.last()?.line, "12 credits");
+  assert.equal(dm.last()?.outputTokens, 5);
   await assert.rejects(dm.sampler("boom", {}), (e: unknown) => e instanceof DmCallError && e.code === "rate_limited");
   const direct = await completeDetailed({ system: "s", messages: [{ role: "user", content: "hi" }] });
   assert.equal(direct.stopReason, "max_tokens");

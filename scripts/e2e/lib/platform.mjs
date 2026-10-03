@@ -1,15 +1,18 @@
 // A mock of the ConjureOS host bridge, installed into a page before any app
 // script runs.
 //
-// What the game reads (read from src/bridge/ai.ts, gamesApi.ts, actions.ts):
+// What the game reads (src/bridge/ai.ts, gamesApi.ts, table/host/gameHost.ts):
 //   window.__conjureos.ai.complete(req) -> Promise<{ content: string }>
 //       req = { system, messages: [{role, content}], maxTokens?, tier?, temperature? }
-//   window.__conjureos.actions.invoke / register / list   (games-db, hub)
-//   window.__conjureos.openApp
+//   window.__conjureos.actions.invoke(appPath, "gamesDb", { action, ...params })   (games-db)
+//   window.__conjureos.auth.whoami() -> { signedIn, email }
 //
-// This mock defines ONLY `ai`. With no `actions`, gamesApi.ts answers every
-// games-db call from its own in-memory mock (state resets on reload, so specs
-// must not reload mid-test), and registerActions() / openHub() are no-ops.
+// The mock always defines `ai`. With `server: true` it also defines `actions` and `auth`, and
+// plays games-db from Node: the server saves (ltSaveList / Get / Put / Delete, the same rules
+// as the real table: key shape, kind, 256 KiB, 60 rows a game) live in `platform.saves` for the
+// whole browser context, so they SURVIVE A RELOAD like a real server's do. ltAssetManifest
+// answers from the dev manifest (or an error, so the bundled art is used). Without `server` the
+// game runs as it does outside ConjureOS: saves stay on the device and games-db is its own mock.
 //
 // The AI is answered from Node: the page calls an exposed function, so every
 // call is recorded in `platform.calls` with its full request, and the reply is
@@ -30,8 +33,19 @@
 // No match at all rejects the call and records it in `platform.unmatched`, so a
 // spec cannot spend a call it did not plan for without noticing.
 
+const SAVE_KEY = /^[a-z0-9:_-]{1,80}$/;
+const SAVE_KINDS = ["rest", "checkpoint", "manual", "current", "ai-adventure"];
+const MAX_ROWS = 60;
+const MAX_BYTES = 256 * 1024;
+
 export async function installPlatform(page, opts = {}) {
   const platform = {
+    /** The server saves, by key (server: true): { key, kind, label, updatedAt, payload }. Shared by every page of one context. */
+    saves: opts.saves ?? new Map(),
+    /** Every games-db call the page made: { action, key? }. */
+    serverCalls: [],
+    /** Set to a message to make every games-db save call fail like an outage (the page keeps its saves on the device). */
+    serverDown: null,
     /** Every ai.complete call, in order: { n, at, system, messages, maxTokens, tier, temperature, answered }. */
     calls: [],
     /** Calls no script entry matched. */
@@ -112,8 +126,41 @@ export async function installPlatform(page, opts = {}) {
 
   await page.exposeFunction("__e2eAiComplete", handle);
 
+  let stamp = 0;
+  const nextStamp = () => new Date((stamp = Math.max(Date.now(), stamp + 1))).toISOString();
+  const serverHandle = async (params) => {
+    const { action } = params;
+    platform.serverCalls.push({ action, key: params.key });
+    if (action === "ltAssetManifest") {
+      const m = opts.assetManifest ? opts.assetManifest(params.template) : null;
+      return m ? m : { error: "no art served in this test" };
+    }
+    if (platform.serverDown) throw new Error(platform.serverDown);
+    if (params.game !== "livingtable") return { error: "bad_game" };
+    if (action === "ltSaveList") {
+      const rows = [...platform.saves.values()].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+      return { saves: rows.map((r) => ({ key: r.key, kind: r.kind, label: r.label, updatedAt: r.updatedAt, bytes: Buffer.byteLength(JSON.stringify(r.payload)) })) };
+    }
+    if (action === "ltSaveGet") return { save: platform.saves.get(params.key) ?? null };
+    if (action === "ltSavePut") {
+      if (typeof params.key !== "string" || !SAVE_KEY.test(params.key)) return { error: "bad_key" };
+      if (!SAVE_KINDS.includes(params.kind)) return { error: "bad_kind" };
+      if (Buffer.byteLength(JSON.stringify(params.payload ?? null)) > MAX_BYTES) return { error: "too_large" };
+      if (!platform.saves.has(params.key) && platform.saves.size >= MAX_ROWS) return { error: "too_many" };
+      const updatedAt = nextStamp();
+      platform.saves.set(params.key, { key: params.key, kind: params.kind, label: String(params.label ?? "").slice(0, 120), updatedAt, payload: params.payload });
+      return { ok: true, updatedAt };
+    }
+    if (action === "ltSaveDelete") {
+      platform.saves.delete(params.key);
+      return { ok: true };
+    }
+    return { error: `e2e platform: games-db action ${action} is not played` };
+  };
+  if (opts.server) await page.exposeFunction("__e2eGamesDb", serverHandle);
+
   // The init script runs before the page's own scripts, in every frame.
-  await page.addInitScript((extra) => {
+  await page.addInitScript(({ extra, server, who }) => {
     const ai = {
       complete: async (req) => {
         const out = await window.__e2eAiComplete(JSON.parse(JSON.stringify(req)));
@@ -124,6 +171,15 @@ export async function installPlatform(page, opts = {}) {
       },
     };
     window.__conjureos = Object.assign(window.__conjureos ?? {}, { ai });
+    if (server) {
+      window.__conjureos.actions = {
+        invoke: async (_appPath, name, params) => {
+          if (name !== "gamesDb") throw new Error("e2e platform: no action " + name);
+          return await window.__e2eGamesDb(JSON.parse(JSON.stringify(params)));
+        },
+      };
+      window.__conjureos.auth = { whoami: async () => who };
+    }
     if (extra) {
       try {
         // eslint-disable-next-line no-new-func
@@ -132,7 +188,7 @@ export async function installPlatform(page, opts = {}) {
         console.error("e2e platform extra init failed", e);
       }
     }
-  }, opts.extraInit ?? null);
+  }, { extra: opts.extraInit ?? null, server: !!opts.server, who: opts.who ?? { signedIn: true, email: "tester@example.test" } });
 
   return platform;
 }

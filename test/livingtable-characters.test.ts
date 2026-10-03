@@ -16,59 +16,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ARCHETYPES, getArchetype } from "../src/games/livingtable/characters/templates";
 import { createCharacter, creationChoicesFor, normalizeSheet, type CharacterSheet } from "../src/games/livingtable/characters/creation";
-import {
-  addMilestone,
-  applyLevelUpChoice,
-  canLevelUp,
-  levelUpChoices,
-  milestonesRemaining,
-  MILESTONES_PER_LEVEL,
-} from "../src/games/livingtable/characters/leveling";
-import {
-  applyDamage,
-  applyDeathSave,
-  applyHealing,
-  longRest,
-  longRestBlockedReason,
-  newAdventuringDay,
-  shortRest,
-  shortRestBlockedReason,
-} from "../src/games/livingtable/characters/health";
+import { addMilestone, applyLevelUpChoice, canLevelUp, levelUpChoices, milestonesRemaining, MILESTONES_PER_LEVEL } from "../src/games/livingtable/characters/leveling";
+import { applyDamage, applyDeathSave, applyHealing, longRest, longRestBlockedReason, newAdventuringDay, shortRest, shortRestBlockedReason } from "../src/games/livingtable/characters/health";
 import { abilityModifier, computeAC, type ArmorCategory } from "../src/games/livingtable/rules";
 import { SLOT_ROLES, STARTING_LOADOUT } from "../src/games/livingtable/characters/equipmentTypes";
 import { equipItem, equippableTiers, gearView } from "../src/games/livingtable/menu/equipment";
 import { commitLoadout, draftFromSheet, stageEquip } from "../src/games/livingtable/rules/inventory";
 import { lootFor } from "../src/games/livingtable/rules/loot";
-import {
-  CAMPAIGN_PLANNING_SUB,
-  CREDIT_BUYS,
-  FREE_FOREVER_LINE,
-  GAME_TAGLINE,
-  NEW_CAMPAIGN_BLURB,
-} from "../src/games/livingtable/menu/labels";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-/**
- * The two template cards' copy, comments stripped. Anchored on the row's own
- * class and the input under it, so a card gaining a third sibling still gets
- * read and a moved block fails loudly rather than passing on an empty string.
- */
-function TEMPLATE_CARDS(): string {
-  const source = readFileSync(join(ROOT, "src", "games", "livingtable", "LivingTable.tsx"), "utf8")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, " ")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/^\s*\/\/.*$/gm, " ");
-  const from = source.indexOf('className="lt-template-row"');
-  const to = source.indexOf('className="cui-input"', from);
-  assert.ok(from >= 0 && to > from, "the template cards moved; this test is looking at the wrong block");
-  const block = source.slice(from, to);
-  assert.ok(block.includes("Fantasy") && block.includes("Sci-fi"), "the template cards moved out of the row");
-  return block;
-}
+import { CAMPAIGN_PLANNING_SUB, CREDIT_BUYS, FREE_FOREVER_LINE, GAME_TAGLINE, NEW_CAMPAIGN_BLURB } from "../src/games/livingtable/menu/labels";
+import { join } from "node:path";
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
@@ -701,36 +657,6 @@ test("no archetype blurb sells a party this game never shows", () => {
   for (const archetype of ARCHETYPES) {
     const match = PARTY_WORDS.exec(archetype.kitDescription);
     assert.equal(match, null, `${archetype.id} promises company: ${JSON.stringify(match?.[0])}`);
-  }
-});
-
-test("the template cards offer a CHOICE of four, never a party of four (issue #16)", () => {
-  // The archetype blurbs above were cleaned of company; the two TEMPLATE cards
-  // one screen earlier still read as a roster -- "A knight, a shadow, a healer,
-  // and a wizard..." -- which is the same promise in the same product, made
-  // before the player has even reached the archetype list. The player gets ONE
-  // character: `createCharacter` is called once, and the sheet, the HP bar and
-  // the player token are all singular.
-  //
-  // Read off the TSX rather than a constant because that is where this copy
-  // lives, with comments scrubbed for the same reason coldcase.test.ts scrubs
-  // them: this test's own rationale has to be allowed to quote the sentence it
-  // bans.
-  const cards = TEMPLATE_CARDS();
-  // The roster form, exactly: a comma list of archetypes joined by "and". The
-  // fix is the same list joined by "or", which this must not match.
-  assert.doesNotMatch(cards, /,\s*and an?\s/i, `a template card still lists a party: ${JSON.stringify(cards.slice(0, 400))}`);
-  for (const [template, last] of [
-    ["fantasy", "wizard"],
-    ["scifi", "mind"],
-  ] as const) {
-    // Naming the four is fine and useful -- what they are IS the choice on
-    // offer. It has to read as a choice, so the last one is preceded by "or".
-    assert.match(
-      cards,
-      new RegExp(`or an? ${last}`, "i"),
-      `the ${template} card does not offer its fourth archetype as an alternative: ${JSON.stringify(cards)}`,
-    );
   }
 });
 

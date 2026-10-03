@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
  * Writes src/games/livingtable/table/adventures/data.ts: every adventures/*.md (README.md is the authoring guide and is left out)
- * inlined as text, so the table window carries the owner's adventures with it and parses them in the page. The old path,
- * scripts/asset-bench/adventuresData.ts, is a one-line re-export of that module (until the bench imports the new path directly).
+ * inlined as text, so the table window carries the owner's adventures with it and parses them in the page.
  *
  *   node scripts/asset-bench/gen-adventures.mjs           write the module
  *   node scripts/asset-bench/gen-adventures.mjs --check   exit 1 when the written module is out of date (no write)

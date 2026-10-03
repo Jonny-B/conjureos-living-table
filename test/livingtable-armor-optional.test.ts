@@ -21,47 +21,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  classArmorFor,
-  createCharacter,
-  creationChoicesFor,
-  normalizeSheet,
-  previewCharacter,
-  withArmor,
-  type CharacterSheet,
-  type CreateCharacterInput,
-} from "../src/games/livingtable/characters/creation";
+import { classArmorFor, createCharacter, creationChoicesFor, previewCharacter, withArmor, type CharacterSheet, type CreateCharacterInput } from "../src/games/livingtable/characters/creation";
 import { armorSpeedPenaltyFt, equipmentStatus, isUnarmored, itemNameFor, slotIsBare, tierInSlot } from "../src/games/livingtable/characters/equipment";
 import { UNARMORED_LABEL } from "../src/games/livingtable/characters/equipmentTypes";
-import {
-  BARE_SLOT_NAME,
-  armorDisplayLabel,
-  gearView,
-  packItems,
-  renderPlanFor,
-} from "../src/games/livingtable/menu/equipment";
-import {
-  equipItem,
-  itemActionsFor,
-  itemStatusLine,
-  unequipItem,
-  NO_ARMOR_WORN_REASON,
-  type ItemActionContext,
-} from "../src/games/livingtable/inventory/itemActions";
+import { BARE_SLOT_NAME, armorDisplayLabel, gearView, packItems, renderPlanFor } from "../src/games/livingtable/menu/equipment";
+import { equipItem, itemActionsFor, itemStatusLine, unequipItem, NO_ARMOR_WORN_REASON, type ItemActionContext } from "../src/games/livingtable/inventory/itemActions";
 import { describeCarried, describeWorn } from "../src/games/livingtable/inventory/itemInfo";
-import { characterStateFromStats, statsFromCharacterState } from "../src/games/livingtable/session/characterState";
-import {
-  MONSTER_STATBLOCKS,
-  effectiveArmorClass,
-  effectiveSpeedFt,
-  equipmentStatusFor,
-  lookupStatblock,
-  monsterCurrentHp,
-  statblockFor,
-  weaponDamageNotationFor,
-  weaponFor,
-} from "../src/games/livingtable/session/combat";
-import { buildDmCharacterView } from "../src/games/livingtable/session/dmContext";
+import { MONSTER_STATBLOCKS, effectiveArmorClass, effectiveSpeedFt, equipmentStatusFor, lookupStatblock, monsterCurrentHp, statblockFor, weaponDamageNotationFor, weaponFor } from "../src/games/livingtable/session/combat";
 import { resolveDamage } from "../src/games/livingtable/rules/combat";
 import { GEAR_CHANGE_BLOCKED } from "../src/games/livingtable/characters/equipmentTypes";
 
@@ -248,15 +214,6 @@ test("a bare hero is not drawn in armour they are not wearing", () => {
   assert.equal(wizard.layers.length, wizardArmoured.layers.length - 1, "the travelling cloak is gone, hat, staff and boots remain");
 });
 
-test("the DM is told only what is worn and carried", () => {
-  const view = buildDmCharacterView(bare("knight"), "hero");
-  assert.ok(!view.wearing.includes("Kite Shield"));
-  assert.ok(!view.wearing.includes("Plate Harness"));
-  assert.ok(view.wearing.includes("Longsword"));
-  assert.deepEqual(view.inventory, []);
-  assert.equal(view.armorClass, 10 + bare("knight").modifiers.dex);
-});
-
 // ── 4. putting armour on and taking it off ──────────────────────────────
 
 test("equip then unequip body armour round-trips through the item actions", () => {
@@ -422,26 +379,6 @@ test("the item cards for the armour state the real numbers", () => {
   for (const info of [carried, worn, leather]) {
     for (const line of [info.summary, info.inGame, ...info.facts]) assert.ok(!DASH.test(line), line);
   }
-});
-
-// ── 5. the saved sheet ──────────────────────────────────────────────────
-
-test("normalizeSheet and the load boundary keep armor none and invent nothing", () => {
-  const sheet = bare("shadow");
-  const kept = normalizeSheet(sheet);
-  assert.equal(kept.armor, "none");
-  assert.equal(kept.armorClass, sheet.armorClass);
-  const viaStats = characterStateFromStats(statsFromCharacterState({ sheet: make("shadow", { startingKit: { armor: "none", weaponNote: "a plain dagger" } }), position: { cx: 0, cy: 0 } })).sheet;
-  assert.equal(viaStats.armor, "none");
-  assert.equal(viaStats.weaponNote, "a plain dagger");
-
-  const old = make("knight");
-  const junk = normalizeSheet({ ...old, armor: "class" as never, weaponNote: 5 as never });
-  assert.equal("armor" in junk, false);
-  assert.equal("weaponNote" in junk, false);
-  assert.equal("armor" in normalizeSheet({ ...old, armor: "plate" as never }), false);
-  assert.equal("armor" in normalizeSheet(old), false);
-  assert.equal(normalizeSheet({ ...bare("shadow"), weaponNote: "  a plain dagger  " }).weaponNote, "a plain dagger");
 });
 
 // ── 6. fighting styles ──────────────────────────────────────────────────

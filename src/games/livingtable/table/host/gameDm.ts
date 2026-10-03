@@ -3,8 +3,10 @@
  * (`SampleFn`, what dmCore's askDm and the adventure writer call) into calls on
  * the ConjureOS bridge (`ai.complete`, through src/bridge/ai.ts).
  *
- * What it does, and why each part exists (the money is real, so every rule here
- * is about spending less, or being honest about what was spent):
+ * What it does, and why each part exists (AI use is metered by the platform, so
+ * every rule here is about making fewer, smaller calls). The game never states
+ * a price, an estimate or a number of credits to the player: the platform's
+ * credit display does that.
  *
  *   tiers        The sampler's quick / default / complex become the platform's
  *                cheap / capable / capable (see cost.ts: tierFor). The writer
@@ -23,21 +25,21 @@
  *                message and simply does not cache.
  *   one at once  One call in flight, always. A second ask while one is running
  *                is refused ("busy"), because the proxy holds the worst-case
- *                price of a call while it runs. A call the player cancelled is
- *                still running on the platform (the bridge cannot stop it, and
- *                it is still billed), so the next call waits for it to finish
- *                rather than stacking a second one on top.
+ *                amount a call may use while it runs. A call the player cancelled
+ *                is still running on the platform (the bridge cannot stop it),
+ *                so the next call waits for it to finish rather than stacking a
+ *                second one on top.
  *   repairs      A DM turn may spend ONE repair round, the writer two; a third
  *                call in a row is refused without being sent (code
  *                "repair_limit"). Each repair resends the prompt and the bad
  *                answer, so the host is told ("start" event, repair true) and
- *                the window can say "trying again, this costs again".
+ *                the window can say the DM is trying once more.
  *   streaming    Every call streams, because the bridge's 60 second idle timer
  *                only resets on a chunk and a whole written adventure takes
  *                minutes. The narration reaches the window live through onText.
  *   cancelling   Abort rejects with code "cancelled" and drops the reply. The
- *                credits are still spent; a "dropped" event reports it when the
- *                call finishes anyway.
+ *                call still finishes on the platform; a "dropped" event reports
+ *                it when it does.
  *   errors       The bridge rejects with a plain Error whose message is the
  *                host's words (no code). This maps them to the codes dmCore's
  *                failFor reads (not_granted, rate_limited, cancelled) and a few
@@ -45,10 +47,8 @@
  *                app_budget, not_foreground, timeout, busy, repair_limit). The
  *                original text stays in Error.message for the debug export and
  *                is never shown to the player.
- *   price        `estimate()` prices a call before it is sent, `costNote` is the
- *                line to show beside the ask, and every finished call reports
- *                "about N credits" (or the exact figure when the host reported
- *                it, which only happens for an app with `credits.read`).
+ *   no price     Nothing here works out or reports money. A finished call
+ *                reports its size and timing for the debug export only.
  *
  * No DOM, no clock at import, no network at import: the bridge is only touched
  * when a call is made. Tests pass their own `complete`.
@@ -59,26 +59,11 @@ import {
   CACHE_TTL_MS,
   MAX_REPAIRS,
   MAX_TOKENS,
-  RETRY_LINE,
   TEMPERATURE,
-  afterLine,
-  creditRange,
-  estimateCall,
-  estimateDmTurn,
-  estimateSpend,
-  estimateWriter,
   tierFor,
   tokensOf,
-  turnPriceLine,
-  typicalDmTurn,
-  writerPriceLine,
-  DM_OUTPUT,
-  WRITER_OUTPUT,
   type CallKind,
-  type CostEstimate,
   type ModelTier,
-  type Spend,
-  type WriterEstimate,
 } from "../cost";
 
 type SampleInput = Parameters<SampleFn>[0];
@@ -217,9 +202,6 @@ export interface DmReport {
   /** The tier that was asked for (a free account is moved to the cheap model by the platform). */
   tier: ModelTier;
   repair: boolean;
-  spend: Spend;
-  /** "about 25 credits", or "25 credits" when the host reported the figure. Ready to show. */
-  line: string;
   inputTokens: number;
   outputTokens: number;
   /** The system prompt was the one used inside the cache's lifetime. */
@@ -228,11 +210,11 @@ export interface DmReport {
 }
 
 export type DmEvent =
-  /** A call is about to be sent. `repair` true means it resends everything and costs again; `line` is the price to show. */
-  | { type: "start"; kind: CallKind; repair: boolean; estimate: CostEstimate; line: string }
+  /** A call is about to be sent. `repair` true means it resends everything (the DM is trying once more). */
+  | { type: "start"; kind: CallKind; repair: boolean }
   /** A call finished and was used. */
   | { type: "done"; report: DmReport }
-  /** The player cancelled, the reply was dropped, and the call finished anyway: the credits were spent. */
+  /** The player cancelled, the reply was dropped, and the call finished anyway. */
   | { type: "dropped"; report: DmReport }
   | { type: "fail"; kind: CallKind; code: DmErrorCode };
 
@@ -245,10 +227,6 @@ export interface GameDmOptions {
   now?: () => number;
   /** The writer's model. Default "capable"; "epic" (Opus) only when the owner agrees. */
   writerTier?: "capable" | "epic";
-  /** True when the player's plan runs every call on the cheap model (a free account). Only changes the price shown. */
-  forcedCheap?: boolean;
-  /** True once the platform is known to cache the system prompt (two turns inside five minutes, compared). Otherwise it is learned from a reply that reports cache reads. */
-  cacheConfirmed?: boolean;
   /** True: `sample()` is null outside ConjureOS instead of the dev mock, so the window says the DM is unavailable. Default false (the dev mock answers, as for the campaign DM). */
   requireBridge?: boolean;
   /** Most repair rounds in a row, per kind. Defaults: cost.ts MAX_REPAIRS. */
@@ -256,17 +234,12 @@ export interface GameDmOptions {
 }
 
 export interface GameDm {
-  /** What goes in `host.dm`. Its `costNote` is a getter: the price line for a typical turn, in the cache state the DM is in now. */
+  /** What goes in `host.dm`. It has no cost note: the game never states a price. */
   dm: TableDm;
-  /** Price a call before sending it, from the prompt the window built. For a first ask or a repair conversation. */
-  estimate(input: SampleInput, kind?: CallKind): { estimate: CostEstimate; line: string };
-  /** The line for the adventure writer's button: price, worst case, and that cancelling does not refund. */
-  writerLine(length: "short" | "medium"): string;
-  writerEstimate(length: "short" | "medium"): WriterEstimate;
   /** The report of the last finished call, or null. */
   last(): DmReport | null;
-  /** The sum of this session's reports (an estimate unless every one was exact). */
-  total(): { credits: number; calls: number; exact: boolean };
+  /** How many calls this session has finished (a dropped one counts). */
+  total(): { calls: number };
   /** True while a call is running, cancelled or not. The window keeps the ask button off while it is. */
   busy(): boolean;
   /** True when the next call would find the system prompt in the cache (the last call used it less than five minutes ago). */
@@ -290,8 +263,6 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
   const complete = options.complete ?? completeDetailed;
   const now = options.now ?? Date.now;
   const policy = { writerTier: options.writerTier ?? "capable" } as const;
-  const forcedCheap = options.forcedCheap === true;
-  let cacheConfirmed = options.cacheConfirmed === true;
   const repairCap = (k: CallKind): number => options.maxRepairs?.[k] ?? MAX_REPAIRS[k];
 
   const listeners = new Set<(e: DmEvent) => void>();
@@ -310,28 +281,11 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
   let lastSystem: string | null = null;
   let lastAt = 0;
   const streak: Record<CallKind, number> = { quick: 0, default: 0, complex: 0 };
-  const sum = { credits: 0, calls: 0, exact: true };
+  const sum = { calls: 0 };
 
-  const effectiveTier = (tier: ModelTier): ModelTier => (forcedCheap ? "cheap" : tier);
   const isWarm = (system: string): boolean => lastSystem !== null && system === lastSystem && now() - lastAt < CACHE_TTL_MS;
 
   const cancelled = (): DmCallError => new DmCallError("cancelled", "The call was cancelled.");
-
-  function estimateFor(p: Prepared, kind: CallKind, tier: ModelTier): CostEstimate {
-    const t = effectiveTier(tier);
-    if (kind === "default") {
-      return estimateDmTurn({ tier: t, stableChars: p.stableChars, liveChars: p.liveChars, warm: p.stableChars > 0 && isWarm(p.req.system), cacheConfirmed, maxTokens: p.req.maxTokens ?? MAX_TOKENS.default });
-    }
-    const out = kind === "complex" ? { low: WRITER_OUTPUT.short, typical: WRITER_OUTPUT.short, high: WRITER_OUTPUT.medium } : DM_OUTPUT;
-    return estimateCall({ tier: t, stableChars: p.stableChars, liveChars: p.liveChars }, out, p.req.maxTokens ?? MAX_TOKENS[kind]);
-  }
-
-  function estimate(input: SampleInput, kind: CallKind = "default"): { estimate: CostEstimate; line: string } {
-    const tier = tierFor(kind, policy);
-    const p = prepare(input, kind, tier);
-    const est = estimateFor(p, kind, tier);
-    return { estimate: est, line: turnPriceLine(est, { forcedCheap }) };
-  }
 
   /** Wait for an abandoned call to finish, giving up if this call is cancelled meanwhile. */
   function waitFor(f: Flight, signal: AbortSignal | undefined): Promise<void> {
@@ -345,9 +299,6 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
       });
     });
   }
-
-  const writerEstimate = (length: "short" | "medium"): WriterEstimate => estimateWriter(length, effectiveTier(tierFor("complex", policy)), repairCap("complex"));
-  const writerLine = (length: "short" | "medium"): string => writerPriceLine(writerEstimate(length));
 
   const sampler: SampleFn = async (input: SampleInput, opts: SampleOpts = {}) => {
     const kind: CallKind = opts.modelTier === "quick" || opts.modelTier === "complex" ? opts.modelTier : "default";
@@ -373,7 +324,6 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
       streak[kind] += 1;
     } else streak[kind] = 0;
 
-    const est = estimateFor(p, kind, tier);
     const warm = p.stableChars > 0 && isWarm(p.req.system);
     const startedAt = now();
     let dropped = false;
@@ -389,7 +339,7 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
       },
     };
 
-    emit({ type: "start", kind, repair: p.repair, estimate: est, line: p.repair ? RETRY_LINE : kind === "complex" ? `The writer costs ${creditRange(est.low, est.high)} for this pass.` : turnPriceLine(est, { forcedCheap }) });
+    emit({ type: "start", kind, repair: p.repair });
 
     let started: Promise<CompleteResult>;
     try {
@@ -411,18 +361,11 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
 
     const report = (res: CompleteResult): DmReport => {
       const usage = res.usage;
-      if (usage && (usage.cacheReadInputTokens ?? 0) > 0) cacheConfirmed = true;
       const outputChars = typeof res.content === "string" ? res.content.length : 0;
-      const spend: Spend =
-        typeof res.credits === "number"
-          ? { credits: res.credits, exact: true }
-          : estimateSpend({ tier: effectiveTier(tier), stableChars: p.stableChars, liveChars: p.liveChars, outputChars, warm, cacheConfirmed });
       const r: DmReport = {
         kind,
         tier,
         repair: p.repair,
-        spend,
-        line: afterLine(spend),
         inputTokens: usage ? usage.inputTokens : tokensOf(p.stableChars + p.liveChars),
         outputTokens: usage ? usage.outputTokens : tokensOf(outputChars),
         warm,
@@ -432,9 +375,7 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
         lastSystem = p.req.system;
         lastAt = now();
       }
-      sum.credits += spend.credits;
       sum.calls += 1;
-      if (!spend.exact) sum.exact = false;
       lastReport = r;
       return r;
     };
@@ -471,18 +412,12 @@ export function createGameDm(options: GameDmOptions = {}): GameDm {
   const dm: TableDm = {
     sample: async () => (options.requireBridge === true && !isAiAvailable() ? null : sampler),
     unavailable: UNAVAILABLE,
-    get costNote(): string {
-      return turnPriceLine(typicalDmTurn(effectiveTier(tierFor("default", policy)), { warm: lastSystem !== null && now() - lastAt < CACHE_TTL_MS, cacheConfirmed }), { forcedCheap });
-    },
   };
 
   return {
     dm,
-    estimate,
-    writerLine,
-    writerEstimate,
     last: () => lastReport,
-    total: () => ({ credits: sum.credits, calls: sum.calls, exact: sum.exact }),
+    total: () => ({ calls: sum.calls }),
     busy: () => flight !== null,
     warm: () => lastSystem !== null && now() - lastAt < CACHE_TTL_MS,
     subscribe: (cb) => {

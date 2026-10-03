@@ -8,11 +8,12 @@
  * the others. `set()` ignores invalid fields the same way, merges the rest and keeps
  * them. A zoom of null means "let the window pick from the screen".
  */
-import type { TableSettings, TableSettingsHost, TextStyle } from "../host";
+import type { TableSettings, TableSettingsHost, TextSpeed, TextStyle } from "../host";
 import { TABLE_KEYS, browserStore, readEnvelope, writeEnvelope, type KeyValueStore } from "./gameStorage";
 
 export const DEFAULT_SETTINGS: Readonly<TableSettings> = Object.freeze({
   textStyle: "pixel",
+  textSpeed: "normal",
   rollMyself: true,
   diceSkin: "bone",
   zoom: null,
@@ -23,6 +24,7 @@ export const ZOOM_MIN = 1;
 export const ZOOM_MAX = 4;
 
 const TEXT_STYLES: readonly TextStyle[] = ["pixel", "storybook"];
+const TEXT_SPEEDS: readonly TextSpeed[] = ["slow", "normal", "fast", "instant"];
 
 /** The fields of `raw` that are valid, as a partial settings object. Anything else is dropped. */
 export function validSettings(raw: unknown): Partial<TableSettings> {
@@ -30,6 +32,7 @@ export function validSettings(raw: unknown): Partial<TableSettings> {
   if (typeof raw !== "object" || raw === null) return out;
   const r = raw as Record<string, unknown>;
   if (typeof r.textStyle === "string" && (TEXT_STYLES as readonly string[]).includes(r.textStyle)) out.textStyle = r.textStyle as TextStyle;
+  if (typeof r.textSpeed === "string" && (TEXT_SPEEDS as readonly string[]).includes(r.textSpeed)) out.textSpeed = r.textSpeed as TextSpeed;
   if (typeof r.rollMyself === "boolean") out.rollMyself = r.rollMyself;
   if (typeof r.diceSkin === "string" && r.diceSkin.length > 0 && r.diceSkin.length <= 64) out.diceSkin = r.diceSkin;
   if (r.zoom === null) out.zoom = null;

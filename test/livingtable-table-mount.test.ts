@@ -23,6 +23,7 @@ import { PLAYABLE_HEROES } from "../src/games/livingtable/table/state";
 import { artManifest, benchHost, benchSession, bindBenchDefaults, installBenchHooks, MANIFEST, SPRITES_BY_TEMPLATE } from "../scripts/asset-bench/benchHost";
 import { adventureById, benchAdventures, unbindAdventures } from "../src/games/livingtable/table/adventureCatalog";
 import { catalogBound, unbindCatalog } from "../src/games/livingtable/table/catalog";
+import { SETTING_CHOICES } from "../src/games/livingtable/table/ui/overlay";
 import { fightEnvBound, tableRng } from "../src/games/livingtable/table/fightRules";
 
 const read = (rel: string): string => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").split(String.fromCharCode(13)).join("");
@@ -222,4 +223,59 @@ test("neither file names the bench folder or uses a dash character", () => {
     if (f.startsWith("src/")) assert.equal(text.includes("asset-bench"), false, `${f} names the bench folder`);
     assert.equal(DASHES.test(text), false, `${f} has an en or em dash`);
   }
+});
+
+// ---- the dialogue box and the window's own copy ---------------------------------------------------------------------------
+
+const OVERLAY = "src/games/livingtable/table/ui/overlay.ts";
+
+test("the window states no price, no number and no credits anywhere a player can read it", () => {
+  const src = read(MOUNT);
+  assert.doesNotMatch(src, /costNote|AI_ADVENTURE_COST_NOTE/, "the window shows no cost note");
+  const note = /const AI_WRITER_NOTE = "([^"]*)"/.exec(src)?.[1] ?? "";
+  assert.match(note, /few minutes/, "the writer's note says it is a long job");
+  assert.doesNotMatch(note, /\d|credit|price|cost|usage|\$/i, "the writer's note names no number, price or credits");
+  assert.match(src, /aiNote: AI_WRITER_NOTE/);
+  // No string of the window's own speaks of credits or prices (the quoted text a player can read).
+  const strings = [...src.matchAll(/"([^"\n]{3,})"|`([^`\n]{3,})`/g)].map((m) => m[1] ?? m[2] ?? "");
+  for (const text of strings) assert.doesNotMatch(text, /\bcredits?\b|\bprice\b|\bcosts? \d|\d+ credits?/i, `"${text}" talks money`);
+});
+
+test("story text has one home: the window queues it in the dialogue box, and the Space key is the box's press first", () => {
+  const src = read(MOUNT);
+  assert.match(src, /overlay\.advanceStory\(\)/, "Space presses the dialogue box when one is up");
+  assert.match(src, /overlay\.say\(line\)/, "story lines go to the box");
+  assert.match(src, /overlay\.narrate\(/, "the DM's text goes to the box");
+  assert.doesNotMatch(src, /locationHoldMs|dropPendingCards|sceneTimer/, "the cards no longer carry text or take turns");
+  // A streaming reply that turns out to be a person speaking keeps its entry: it is renamed, not queued twice.
+  assert.match(src, /current\.setSpeaker\(speaker\)/);
+  const overlay = read(OVERLAY);
+  for (const name of ["setTextSpeed", "advanceStory", "createDialogueQueue"]) assert.ok(overlay.includes(name), name);
+  assert.doesNotMatch(overlay, /lto-narr-host|lto-dlg-scroll|stripOverflow|retireNarration/, "the second box and the scrolling strip are gone");
+});
+
+test("text speed is a game setting: the host type declares it, the window reads it, and the Settings tab's choices are all handled", () => {
+  const host = read("src/games/livingtable/table/host.ts");
+  assert.match(host, /export type TextSpeed = "slow" \| "normal" \| "fast" \| "instant"/);
+  assert.match(host, /textSpeed: TextSpeed;/);
+  const src = read(MOUNT);
+  assert.match(src, /textSpeedOf\(host\.settings\.get\(\)\.textSpeed\)/, "an old saved setting with no speed reads as normal");
+  assert.match(src, /reducedMotion \? "instant" : textSpeed/, "reduced motion prints at once");
+  for (const g of SETTING_CHOICES) assert.match(src, new RegExp(`key === "${g.key}"`), `the window handles set:${g.key}`);
+  assert.match(src, /id\.startsWith\("set:"\)/);
+  assert.match(src, /settings: \{ textSpeed, textStyle, rollMyself, zoom: host\.settings\.get\(\)\.zoom \?\? null \}/, "the HUD is told the settings");
+});
+
+test("Space and Enter keep their own meaning on a focused control: summary, link, button and role=button are exempt from the board's keys", () => {
+  const src = read(MOUNT);
+  // The guard line in onKey: a focused control that Space or Enter activates is left alone (the board keeps Space on the board itself).
+  const guard = /target\?\.closest\?\.\("([^"]*)"\) && \(key === " " \|\| key === "enter"\)/.exec(src);
+  assert.ok(guard, "onKey has a guard that lets Space and Enter through to a focused control");
+  const parts = guard[1].split(",").map((s) => s.trim());
+  for (const sel of ["button", "summary", "a", '[role=button]']) assert.ok(parts.includes(sel), `Space on a focused "${sel}" is not swallowed`);
+  // Typing fields and selects were already exempt and stay so.
+  assert.match(src, /target\?\.closest\?\.\("input, textarea, \[contenteditable\]"\)\) return;/);
+  assert.match(src, /target\?\.tagName === "SELECT" && !KEY_DIR\[key\]\) return;/);
+  // The board's own Space (dialogue press, then skip) is still there, after the guard.
+  assert.ok(src.indexOf("overlay.advanceStory()") > guard.index, "Space still presses the dialogue box and skips when nothing focused wants it");
 });

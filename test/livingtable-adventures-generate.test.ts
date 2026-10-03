@@ -187,9 +187,9 @@ test("the fixture creature list is made of real bestiary creatures", () => {
   for (const c of creatures) assert.ok(ids.has(c), c);
 });
 
-test("the cost note says what it costs in plain words and uses no long dashes", () => {
+test("the writer note says it takes a few minutes, states no price, no number and no credits, and uses no long dashes", () => {
   assert.match(AI_ADVENTURE_COST_NOTE, /few minutes/);
-  assert.match(AI_ADVENTURE_COST_NOTE, /lot of your Claude usage/);
-  assert.match(AI_ADVENTURE_COST_NOTE, /cost nothing/);
+  assert.match(AI_ADVENTURE_COST_NOTE, /load straight away/);
+  assert.doesNotMatch(AI_ADVENTURE_COST_NOTE, /credit|price|cost|usage|\d/i);
   assert.doesNotMatch(AI_ADVENTURE_COST_NOTE, LONG_DASHES);
 });

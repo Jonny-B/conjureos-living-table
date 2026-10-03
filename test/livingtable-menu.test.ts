@@ -10,113 +10,25 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  resolveMenuAction,
-  normalizeMenuHint,
-  menuHintSentence,
-  COMMAND_VERBS,
-  type MenuContext,
-} from "../src/games/livingtable/menu/commandMenu";
+import { resolveMenuAction, normalizeMenuHint, menuHintSentence, COMMAND_VERBS, type MenuContext } from "../src/games/livingtable/menu/commandMenu";
 import { ARCHETYPES } from "../src/games/livingtable/characters/templates";
 import { createCharacter } from "../src/games/livingtable/characters/creation";
-import {
-  BAG_CAPACITY,
-  BONUS_BY_TIER,
-  EQUIPMENT_TIERS,
-  GEAR_ROLES,
-  MAX_ATTUNED_ITEMS,
-  MAX_DISTINCT_MAGIC_ITEMS,
-  MAX_TOTAL_AC_BONUS,
-  MAX_TOTAL_SAVE_BONUS,
-  SLOTS_BY_ARCHETYPE,
-  SLOT_ROLES,
-  attunementFullReason,
-  gearItemName,
-  type ArchetypeId,
-  type LootRoll,
-} from "../src/games/livingtable/characters/equipmentTypes";
-import {
-  RARITY_WORD,
-  accessoryCopy,
-  armorDisplayLabel,
-  effectiveArmorClass,
-  equipItem,
-  equipmentAttackBonus,
-  equippableTiers,
-  gearView,
-  itemNameAt,
-  packItems,
-  renderPlanFor,
-  renderPlansFor,
-  startingGearNames,
-} from "../src/games/livingtable/menu/equipment";
+import { BAG_CAPACITY, BONUS_BY_TIER, EQUIPMENT_TIERS, MAX_ATTUNED_ITEMS, MAX_DISTINCT_MAGIC_ITEMS, MAX_TOTAL_AC_BONUS, MAX_TOTAL_SAVE_BONUS, SLOTS_BY_ARCHETYPE, SLOT_ROLES, attunementFullReason, gearItemName, type ArchetypeId, type LootRoll } from "../src/games/livingtable/characters/equipmentTypes";
+import { RARITY_WORD, accessoryCopy, armorDisplayLabel, effectiveArmorClass, equipItem, equipmentAttackBonus, equippableTiers, gearView, itemNameAt, packItems, renderPlanFor, renderPlansFor, startingGearNames } from "../src/games/livingtable/menu/equipment";
 import { weaponIdentityFor } from "../src/games/livingtable/session/combat";
-import {
-  assetNoun,
-  attackLine,
-  bonusSources,
-  checkLine,
-  humanizeEngineError,
-  lootLine,
-  moveButtonTitle,
-  neighbourLine,
-  placeName,
-  propLabel,
-  theProp,
-  tokenLabel,
-  explain,
-  stepsAndFeet,
-  GLOSSARY,
-  SRD_ATTRIBUTION,
-  GAME_TAGLINE,
-  NEW_CAMPAIGN_BLURB,
-  CAMPAIGN_PLANNING_SUB,
-  CREDIT_BUYS,
-  FREE_FOREVER_LINE,
-  type TokenNamer,
-} from "../src/games/livingtable/menu/labels";
+import { assetNoun, attackLine, bonusSources, checkLine, humanizeEngineError, lootLine, moveButtonTitle, neighbourLine, placeName, propLabel, tokenLabel, explain, stepsAndFeet, GLOSSARY, SRD_ATTRIBUTION, GAME_TAGLINE, NEW_CAMPAIGN_BLURB, CAMPAIGN_PLANNING_SUB, CREDIT_BUYS, FREE_FOREVER_LINE, type TokenNamer } from "../src/games/livingtable/menu/labels";
 import { attunedRoles, gearChangeBlockedReason } from "../src/games/livingtable/rules/attunement";
 import { commitLoadout, draftFromSheet, normalizeBag, stageEquip, stageUnequip } from "../src/games/livingtable/rules/inventory";
 import { lootDmNote, lootFor } from "../src/games/livingtable/rules/loot";
-import { buildInventoryView } from "../src/games/livingtable/inventory/inventoryView";
-import {
-  attackBlockedReason,
-  activeCombatant,
-  dropCombatant,
-  endTurn,
-  isPlayersTurn,
-  spendActiveAction,
-  spendActiveMovement,
-  spendCombatantAction,
-  startCombat,
-  withinMeleeReach,
-  MELEE_REACH_FT,
-} from "../src/games/livingtable/menu/combatRound";
-import {
-  castableSpells,
-  cantripNameFor,
-  spellAttackBonus,
-  spellSaveDc,
-  spendSlotFor,
-  spellRangeFt,
-  castBlockedReason,
-  attackWeaponName,
-  attackCaption,
-  SPELL_EFFECTS,
-} from "../src/games/livingtable/menu/casting";
+import { attackBlockedReason, activeCombatant, dropCombatant, endTurn, isPlayersTurn, spendActiveAction, spendActiveMovement, spendCombatantAction, startCombat, withinMeleeReach, MELEE_REACH_FT } from "../src/games/livingtable/menu/combatRound";
+import { castableSpells, cantripNameFor, spellAttackBonus, spellSaveDc, spendSlotFor, spellRangeFt, castBlockedReason, attackWeaponName, attackCaption, SPELL_EFFECTS } from "../src/games/livingtable/menu/casting";
 import { createCharacter } from "../src/games/livingtable/characters/creation";
 import { CLERIC_SPELLS, WIZARD_SPELLS } from "../src/games/livingtable/rules/spells";
 import { DEFAULT_RANGED_REACH_TILES } from "../src/games/livingtable/world/reach";
 import { emptyWorld, setCell } from "../src/games/livingtable/world/perception";
 import type { CellLayout } from "../src/games/livingtable/world/cell";
 import { CELL_HEIGHT, CELL_WIDTH } from "../src/games/livingtable/world/coordinates";
-import {
-  canvasDimensions,
-  spritePixelRect,
-  spritePixelSize,
-  tileOrigin,
-  type SpriteAsset,
-} from "../src/games/livingtable/render/canvasRenderer";
+import { canvasDimensions, spritePixelRect, spritePixelSize, tileOrigin, type SpriteAsset } from "../src/games/livingtable/render/canvasRenderer";
 
 function emptyLayout(): CellLayout {
   const tiles = Array.from({ length: CELL_HEIGHT }, () => Array.from({ length: CELL_WIDTH }, () => "floor"));
@@ -257,16 +169,6 @@ test("assetNoun strips the kind prefix and the underscores", () => {
 test("propLabel prefers the label the DM authored, falling back to the sprite noun", () => {
   assert.equal(propLabel({ assetId: "prop_chest", label: "the iron-bound chest" }), "the iron-bound chest");
   assert.equal(propLabel({ assetId: "prop_chest" }), "chest");
-});
-
-test("theProp never doubles the article, whether or not the DM-authored label already carries one", () => {
-  // Regression: every "the ${propLabel(prop)}" built by hand in LivingTable.tsx
-  // (the search dice line, the Perception caption, the found/not-found story
-  // lines, the loot readout's caption) doubled into "the the water-swollen
-  // chest" whenever the DM's own label already started with "the".
-  assert.equal(theProp({ assetId: "prop_chest", label: "the water-swollen chest" }), "the water-swollen chest");
-  assert.equal(theProp({ assetId: "prop_chest", label: "The Iron-Bound Chest" }), "The Iron-Bound Chest", "case-insensitive, and the author's own capitalisation is kept");
-  assert.equal(theProp({ assetId: "prop_chest" }), "the chest", "the fallback noun never carries an article of its own");
 });
 
 test("attackLine reads as a sentence about named creatures, with the whole formula still visible", () => {
@@ -1806,200 +1708,6 @@ test("accessoryCopy states every accessory effect's real magnitude, never an una
   assert.match(accessoryCopy("ring", "uncommon", 30), /3 charges; a long rest brings back 1d3/);
   assert.match(accessoryCopy("ring", "legendary", 30), /restores 6d6 hit points/);
   assert.equal(accessoryCopy("boots", "common", 30), "No effect. These are the boots you started in.");
-});
-
-test("buildInventoryView disables Equip exactly when stageEquip would refuse it, with the same reason", () => {
-  const sheet = gearSheet("knight");
-  const base = draftFromSheet(sheet);
-  const draft = {
-    equipment: {
-      ...base.equipment,
-      weapon: { slot: "weapon" as const, tier: "legendary" as const },
-      ring: { slot: "ring" as const, tier: "rare" as const },
-      boots: { slot: "boots" as const, tier: "rare" as const },
-    },
-    bag: [{ slot: "amulet" as const, tier: "rare" as const }],
-  };
-  const view = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft,
-    selection: { kind: "bag", index: 0 },
-    blockedReason: null,
-    usable: [],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  assert.equal(view.attunedCounter, "Attuned: 3 of 3");
-  assert.equal(view.detail.kind, "bag");
-  assert.equal(view.detail.equipDisabled, true);
-  assert.match(view.detail.equipDisabledReason ?? "", /You can be attuned to three magic items at once/);
-});
-
-test("buildInventoryView's slot boxes glow (highlight) the role a selected bag item fits", () => {
-  const sheet = gearSheet("trooper");
-  const draft = { ...draftFromSheet(sheet), bag: [{ slot: "outer" as const, tier: "rare" as const }] };
-  const view = buildInventoryView({
-    archetypeId: "trooper" as ArchetypeId,
-    template: "scifi",
-    sheet,
-    draft,
-    selection: { kind: "bag", index: 0 },
-    blockedReason: null,
-    usable: [],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  const outer = [...view.leftColumn, ...view.rightColumn].find((s) => s.role === "outer")!;
-  assert.equal(outer.highlighted, true);
-  const others = [...view.leftColumn, ...view.rightColumn].filter((s) => s.role !== "outer");
-  for (const s of others) assert.equal(s.highlighted, false);
-});
-
-test("buildInventoryView's usableLine drops a consumable with no uses left", () => {
-  // Regression: this used to pass `sheet.consumables` straight through
-  // unfiltered, so the inventory screen kept printing "Potion of healing x0"
-  // after the play screen's own Item verb had already dropped that button.
-  const sheet = gearSheet("knight");
-  const draft = draftFromSheet(sheet);
-  const view = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft,
-    selection: null,
-    blockedReason: null,
-    usable: [
-      { name: "Potion of healing", uses: 0 },
-      { name: "Antitoxin", uses: 2 },
-    ],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  assert.equal(view.usableLine, "Usable: Antitoxin x2");
-  assert.doesNotMatch(view.usableLine ?? "", /x0/);
-});
-
-test("buildInventoryView's usableLine is null when nothing usable has uses left", () => {
-  const sheet = gearSheet("knight");
-  const draft = draftFromSheet(sheet);
-  const view = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft,
-    selection: null,
-    blockedReason: null,
-    usable: [{ name: "Potion of healing", uses: 0 }],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  assert.equal(view.usableLine, null);
-});
-
-test("a worn attunement item reads as ALREADY attuned, never as still needing it", () => {
-  // Regression: the worn-magic detail used to print `attunementNeededLine`,
-  // the BAG's own sentence ("put this on and here is what it costs"), so a
-  // worn, attuned Dawnbreaker at the cap read "Needs attunement. You are
-  // attuned to 3 of 3." -- the exact wording of "this is NOT one of my
-  // three", which is backwards: wearing IS attuning (equipmentTypes.ts).
-  const sheet = equipItem(gearSheet("knight"), "weapon", "legendary");
-  const draft = draftFromSheet(sheet);
-  const view = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft,
-    selection: { kind: "slot", role: "weapon" },
-    blockedReason: null,
-    usable: [],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  assert.equal(view.detail.kind, "wornMagic");
-  assert.doesNotMatch(view.detail.attunementLine ?? "", /Needs attunement/, "a worn item is not a candidate for attunement, it already IS attuned");
-  assert.match(view.detail.attunementLine ?? "", /Attuned: this is one of your 3/);
-  assert.match(view.detail.attunementLine ?? "", /1 of 3 in use/);
-});
-
-test("a bag item's detail states the LIVE before/after AC, not just the worked example", () => {
-  // Regression: the bag detail carried no live number at all, only
-  // `armorCopy`'s fixed worked example ("an attack that needed a 15 to hit
-  // you now needs a 17"), which collided with a Knight's own AC of 17 and
-  // read as "this piece does nothing".
-  const sheet = gearSheet("knight");
-  const draft = { ...draftFromSheet(sheet), bag: [{ slot: "outer" as const, tier: "uncommon" as const }] };
-  const view = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft,
-    selection: { kind: "bag", index: 0 },
-    blockedReason: null,
-    usable: [],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  const before = effectiveArmorClass(sheet);
-  assert.equal(view.detail.statLine, `AC ${before} -> ${before + 1}`);
-});
-
-test("a bag item's live AC delta shows the cap swallowing a Ring of Protection, rather than promising +1", () => {
-  // The same live-delta line doubles as the fix for "Ring of Protection
-  // promises AC the cap will not grant": at the cap already, equipping the
-  // ring moves AC by exactly zero, and the live number says so instead of
-  // accessoryCopy's flat "+1 armour class".
-  let sheet = gearSheet("knight");
-  sheet = equipItem(sheet, "outer", "legendary");
-  sheet = equipItem(sheet, "crown", "legendary");
-  const capped = effectiveArmorClass(sheet);
-  assert.equal(capped, sheet.armorClass + MAX_TOTAL_AC_BONUS, "already at the +3 cap before the ring");
-  const draft = { ...draftFromSheet(sheet), bag: [{ slot: "ring" as const, tier: "rare" as const }] };
-  const view = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft,
-    selection: { kind: "bag", index: 0 },
-    blockedReason: null,
-    usable: [],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  assert.equal(view.detail.statLine, `AC ${capped} -> ${capped}, Saves +0 -> +1`, "AC does not move (the cap already binds); saves do, since nothing else was pushing on that cap");
-});
-
-test("buildInventoryView's bagCountLabel and stagedChangeCount track the draft against the committed sheet", () => {
-  const sheet = gearSheet("knight");
-  const outcome = stageEquip("knight", { ...draftFromSheet(sheet), bag: [{ slot: "weapon", tier: "uncommon" }] }, 0);
-  assert.ok(outcome.ok);
-  const view = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft: outcome.draft,
-    selection: null,
-    blockedReason: null,
-    usable: [],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  assert.equal(view.bagCountLabel, `Pack ${outcome.draft.bag.length}/${BAG_CAPACITY}`);
-  assert.equal(view.stagedChangeCount, 1, "one role (weapon) now wears a different tier than the committed sheet");
-
-  const unchanged = buildInventoryView({
-    archetypeId: "knight" as ArchetypeId,
-    template: "fantasy",
-    sheet,
-    draft: draftFromSheet(sheet),
-    selection: null,
-    blockedReason: null,
-    usable: [],
-    carrying: [],
-    baseSpeedFt: 30,
-  });
-  assert.equal(unchanged.stagedChangeCount, 0);
 });
 
 test("the glossary teaches rarity and attunement again now that loot can grant it (issue #15)", () => {

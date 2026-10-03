@@ -44,7 +44,7 @@ import {
   splitTierWords,
   typeOptions,
 } from "../scripts/asset-bench/books";
-import { FOE_TIER_WORDS } from "../scripts/asset-bench/foeDice";
+import { FOE_TIER_WORDS } from "../src/games/livingtable/table/ui/foeDice";
 import { BESTIARY, beastById } from "../src/games/livingtable/rules/bestiary";
 import { RULEBOOK } from "../src/games/livingtable/rules/rulebook";
 import { SRD_ATTRIBUTION } from "../src/games/livingtable/menu/labels";

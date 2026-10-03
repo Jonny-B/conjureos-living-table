@@ -71,7 +71,7 @@ import { type CombatEvent } from "../session/combatEvents";
 import {
   createHud,
   createOverlay,
-  locationHoldMs,
+  textSpeedOf,
   verdictWords,
   type ContextMenuEntry,
   type DialogueLine,
@@ -91,6 +91,7 @@ import {
   type StartHeroHook,
   type StartScreen,
   type EndingCard,
+  type TextSpeed,
   type TextStyle,
 } from "./ui/overlay";
 import { foeDiceForToken } from "./ui/foeDice";
@@ -133,7 +134,7 @@ import { visibilityStates } from "../world/visibility";
 import { DEFAULT_MELEE_REACH_TILES, tileDistance } from "../world/reach";
 import { type AdventureStepResult } from "../adventures/progress";
 import { exitDestination } from "../adventures/validate";
-import { AI_ADVENTURE_COST_NOTE, writeAdventure as writeAiAdventure, type AdventureWriterContext, type CompleteInput } from "../adventures/generate";
+import { writeAdventure as writeAiAdventure, type AdventureWriterContext, type CompleteInput } from "../adventures/generate";
 import {
   heroHook,
   itemOf,
@@ -225,6 +226,8 @@ const GOBLIN_BARKS = {
   miss: ["Grr! Hold still!"],
   thief: ["Hey! Thief!"],
 } as const;
+/** Said above the AI writer's premise box. No price, no number, no credits: the platform's credit icon says what AI use costs. */
+const AI_WRITER_NOTE = "Writing a whole adventure is a long AI job and takes a few minutes. Only press this if you want a new one made for you.";
 const bark = (list: readonly string[]): string => list[Math.floor(Math.random() * list.length)]!;
 /** Which creatures talk: the goblin has barks; a skeleton or a rat does not, and the board stays quiet for them. */
 const barksFor = (token: TileId): typeof GOBLIN_BARKS | null => (token === "token_goblin" ? GOBLIN_BARKS : null);
@@ -248,6 +251,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
   let textStyle: TextStyle = host.settings.get().textStyle;
   let rollMyself = host.settings.get().rollMyself;
   let diceSkin = host.settings.get().diceSkin;
+  let textSpeed: TextSpeed = textSpeedOf(host.settings.get().textSpeed);
   // A scene that starts here (first visit, or a hero the window no longer offers) gets its checkpoint below; coming back to one in progress does not.
   const startedNew = !session.play || !heroIds.includes(session.play.archetypeId);
   if (startedNew) {
@@ -298,6 +302,9 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
   arena.append(stageWrap, trayCol);
   el.appendChild(arena);
   const overlay: Overlay = createOverlay(stageWrap, textStyle);
+  /** Reduced motion prints a page at once; otherwise the text speed setting rules. */
+  const applyTextSpeed = (): void => overlay.setTextSpeed(reducedMotion ? "instant" : textSpeed);
+  applyTextSpeed();
   const tray: DiceTray = createDiceTray(trayHost, diceSkin);
   const hud: Hud = createHud(trayCol, textStyle, (id) => void onHudAction(id), {
     slot: trayHost,
@@ -555,7 +562,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     startScr = overlay.startScreen({
       adventures: startCardsFor(benchAdventures()),
       sandboxes: ROOM_CHOICES.map((r) => ({ id: `room:${r}`, title: roomLabel(st().template, r), summary: ROOM_SUMMARY[r] })),
-      aiNote: AI_ADVENTURE_COST_NOTE,
+      aiNote: AI_WRITER_NOTE,
       onPick: (id) => pickStart(id),
       onWrite: (premise) => void writeNewAdventure(premise),
     });
@@ -574,7 +581,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
 
   /**
    * The AI writer. Called only by the start screen's "Yes, write it" (the confirm is the screen's own), once per press. It asks the model through
-   * the sample capability (the complex tier: a whole adventure is long and costs a lot; no cache, a repeat must be fresh), with the engine's
+   * the sample capability (the complex tier: a whole adventure is long; no cache, a repeat must be fresh), with the engine's
    * writeAdventure checking every answer and sending the problems back for a repair. Cancel (or leaving the tab) stops the call in flight. A
    * finished adventure joins the start screen as "AI written" and is kept in this browser; a failure says why, in plain words, and keeps nothing.
    */
@@ -722,28 +729,13 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     newScene();
   }
 
-  // The place's card and the scene's card come one after the other (each is up for a reading time), never over each other.
-  let locationUntil = 0;
-  let sceneTimer: ReturnType<typeof setTimeout> | null = null;
-  function dropPendingCards(): void {
-    if (sceneTimer !== null) clearTimeout(sceneTimer);
-    sceneTimer = null;
-    locationUntil = 0;
-  }
+  // The place's card and the scene's card are short title banners. Their words (the place's read-aloud, the scene's opening) are queued in the
+  // dialogue box in the order the cards are shown, so nothing else on the board draws story text and nothing is said twice.
   function showLocationCard(card: { name: string; readAloud: string }): void {
     overlay.locationCard(card);
-    // The scene's card follows once the place's has had a reading (at most seven seconds); the first stays up its own time, so both are on the board for a while.
-    locationUntil = performance.now() + Math.min(7000, locationHoldMs(card.readAloud.length));
   }
   function showSceneCard(card: { title: string; opening?: string }): void {
-    if (sceneTimer !== null) clearTimeout(sceneTimer);
-    sceneTimer = null;
-    const wait = locationUntil - performance.now();
-    if (wait <= 0) return overlay.sceneCard(card);
-    sceneTimer = setTimeout(() => {
-      sceneTimer = null;
-      if (alive) overlay.sceneCard(card);
-    }, wait + 200);
+    overlay.sceneCard(card);
   }
 
   /** A new game of an adventure with this hero: a checkpoint, the place's name and read-aloud, the first scene's opening, and a fight at once when something awake and hostile is there. */
@@ -780,7 +772,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     await afterHeroAction();
   }
 
-  /** What the story did since it was last shown: beats on the strip, objectives in the notice and the Log, a new scene's card, an ending. */
+  /** What the story did since it was last shown: beats in the dialogue box, objectives in the notice and the Log, a new scene's card, an ending. */
   function flushAdventure(): void {
     const p = st();
     const a = adventureOf(p);
@@ -857,7 +849,6 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
       return refuse("The story has no such place.");
     }
     overlay.clear();
-    dropPendingCards();
     hover = null;
     previewed = null;
     marksKey = "";
@@ -904,7 +895,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
 
   /**
    * Search a feature. With a DC the engine rolls the better of Perception and Investigation in the tray (the hero's real modifier against the
-   * adventure's number); without one the secret is simply found. A failure says so and can be tried again. A find is said once on the strip,
+   * adventure's number); without one the secret is simply found. A failure says so and can be tried again. A find is said once in the dialogue box,
    * the items it gives go in the pack, and the story hears of them (a quest item can finish an objective or fire a beat).
    */
   async function searchFeature(f: AdventureFeature): Promise<void> {
@@ -1212,7 +1203,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     });
 
   /**
-   * The log is the full history (the Log tab). The board's story strip gets only story: creature speech and the big moments,
+   * The log is the full history (the Log tab). The board's dialogue box gets only story: creature speech and the big moments,
    * through story(). Here, every line the log gained since the last call that carries a short notice (an item or a potion
    * gained) flashes it beside the Pack button once, and the history is trimmed to LOG_KEEP.
    */
@@ -1229,7 +1220,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     }
   }
 
-  /** A line for the board's story strip (a creature's words, a big moment). It goes in the Log as well; everything mechanical goes only there. */
+  /** A line for the board's dialogue box (a creature's words, a big moment); it queues behind whatever is being read. It goes in the Log as well; everything mechanical goes only there. */
   function story(line: DialogueLine, alsoLog = true): void {
     overlay.say(line);
     if (alsoLog) st().log.push({ text: line.speaker ? `${line.speaker}: ${line.text}` : line.text, tone: "plain" });
@@ -1543,7 +1534,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
       const at = lootTarget.kind === "body" ? p.bodies.find((b) => b.id === (lootTarget as { id: string }).id)?.at : lootTarget.at;
       if (busy || p.round !== null || heroDown(p) || !at || tileDistance(p.heroAt, at) > 1) closeLoot();
     }
-    // The story hears about items that came or went, and plays out what it did (cards, the strip, the journal) once the table is free.
+    // The story hears about items that came or went, and plays out what it did (cards, the dialogue box, the journal) once the table is free.
     if (!busy && st().adventureId) flushAdventure();
     if (busy) return;
     const h = st().heroActor;
@@ -2218,9 +2209,12 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     }
 
     const narrate = (text: string, speaker: string | undefined, current: NarrationHandle | null): NarrationHandle => {
-      let h = current;
-      if (!h || speaker) h = overlay.narrate({ speaker, text });
-      else h.update(text);
+      // The streamed entry is the reply's own text: it takes the speaker's name and the final words instead of a second entry being queued.
+      const h = current ?? overlay.narrate({ speaker, text });
+      if (current) {
+        if (speaker) current.setSpeaker(speaker);
+        current.update(text);
+      }
       h.done();
       logQuiet(speaker ? `${speaker}: ${text}` : text);
       dmWords.push(speaker ? `${speaker}: ${text}` : text);
@@ -3203,6 +3197,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
   async function onHudAction(id: string): Promise<void> {
     if (id.startsWith("opt:")) return pickOption(Number(id.slice(4)));
     if (id.startsWith("load:")) return loadSave(id.slice(5));
+    if (id.startsWith("set:")) return chooseSetting(id);
     if (id === "rest") return restFlow();
     if (id === "reset") return busy ? undefined : resetScene();
     if (id === "attack") return attackNearest();
@@ -3325,7 +3320,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     // The DM's suggested next moves show only while the table is free (they are buttons that act when pressed).
     const options: HudOption[] = free && !busy && !down ? p.options.map((o, i) => ({ id: `opt:${i}`, label: o.label, key: String(i + 1) })) : [];
     const saveRows: HudSave[] = session.saves.list().map((s) => ({ id: s.id, label: saveLabel(s), detail: saveDetail(s), canLoad: free && !busy }));
-    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) }, options, log: p.log.map((l) => ({ text: l.text, tone: l.tone })), saves: saveRows, ...(adv ? { journal: journalFor(p) } : {}), ...(exportStatus ? { exportStatus } : {}), ...(exportCopyShown ? { exportCopy: true } : {}) });
+    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) }, options, log: p.log.map((l) => ({ text: l.text, tone: l.tone })), saves: saveRows, settings: { textSpeed, textStyle, rollMyself, zoom: host.settings.get().zoom ?? null }, ...(adv ? { journal: journalFor(p) } : {}), ...(exportStatus ? { exportStatus } : {}), ...(exportCopyShown ? { exportCopy: true } : {}) });
     // The open sheet follows the hero: hit points, potions and anything the DM hands over.
     if (sheetView) {
       const sig = sheetSigFor(p);
@@ -3390,12 +3385,31 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
       creationView?.setStyle(textStyle);
     }
     rollMyself = s.rollMyself;
+    const speed = textSpeedOf(s.textSpeed);
+    if (speed !== textSpeed) {
+      textSpeed = speed;
+      applyTextSpeed();
+    }
     const z = s.zoom ?? defaultScale();
     if (z !== scale) {
       scale = z;
       stage.invalidate();
       marksKey = "";
     }
+    renderHud();
+  }
+
+  /** A choice made in the HUD's Settings tab (an id like "set:textSpeed:fast"): kept by the host, then applied. */
+  function chooseSetting(id: string): void {
+    const [, key, value = ""] = id.split(":");
+    if (key === "textSpeed") host.settings.set({ textSpeed: textSpeedOf(value) });
+    else if (key === "textStyle") host.settings.set({ textStyle: value === "storybook" ? "storybook" : "pixel" });
+    else if (key === "rollMyself") host.settings.set({ rollMyself: value === "true" });
+    else if (key === "zoom") {
+      const n = Math.round(Number(value));
+      host.settings.set({ zoom: value !== "auto" && n >= 1 && n <= 4 ? n : null });
+    } else return;
+    applySettings();
   }
 
   /** A different class: in an adventure it starts the adventure again as that class (the adventure's own kit for it); in a test room it is a new hero there. */
@@ -3445,7 +3459,6 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     talkTarget = null;
     closeLoot();
     overlay.clear();
-    dropPendingCards();
     tray.clear();
     stage.snapCamera();
     if (checkpoint) addSavePoint(st(), "checkpoint", st().adventureId ? "start of the adventure" : "start of the scene");
@@ -3461,7 +3474,8 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     const target = e.target as HTMLElement | null;
     if (target?.closest?.("input, textarea, [contenteditable]")) return;
     const key = e.key.toLowerCase();
-    if (target?.closest?.("button") && (key === " " || key === "enter")) return;
+    // A focused control that Space or Enter activates (a button, the licence panel's summary, a link) keeps that key; the board has Space only when nothing like that is focused.
+    if (target?.closest?.("button, summary, a, [role=button]") && (key === " " || key === "enter")) return;
     if (target?.tagName === "SELECT" && !KEY_DIR[key]) return;
     // The sheet and the creator pause the game: their own keys are theirs (they handle Escape themselves), and C closes the sheet again.
     if (overlayOpen()) {
@@ -3493,6 +3507,11 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     }
     if (key === "j" && !e.repeat) {
       hud.toggleJournal();
+      e.preventDefault();
+      return;
+    }
+    // Space is the dialogue box's press first (finish the page, next page, next entry, close); with no box up it is the skip key it always was.
+    if (key === " " && overlay.advanceStory()) {
       e.preventDefault();
       return;
     }
@@ -3609,10 +3628,9 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     disposed = true;
     alive = false;
     dmCtl?.abort();
-    // The AI writer costs real usage and its Cancel button goes with the window: leaving stops it.
+    // The AI writer is a long call and its Cancel button goes with the window: leaving stops it.
     writerCtl?.abort();
     host.settings.set({ diceSkin: tray.skin().id });
-    dropPendingCards();
     endPress();
     closeViews();
     closeScreens();

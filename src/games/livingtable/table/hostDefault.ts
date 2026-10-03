@@ -127,7 +127,7 @@ export function createMemoryHost(opts: MemoryHostOptions = {}): MemoryHost {
   let ready = opts.ready ?? true;
   let version = 0;
   const catalogCalls: Record<TemplateGenre, number> = { fantasy: 0, scifi: 0 };
-  const settings: TableSettings = { textStyle: "pixel", rollMyself: true, diceSkin: "bone", zoom: null, ...opts.settings };
+  const settings: TableSettings = { textStyle: "pixel", textSpeed: "normal", rollMyself: true, diceSkin: "bone", zoom: null, ...opts.settings };
   const sample = opts.sample ?? null;
   const fire = (): void => {
     version += 1;

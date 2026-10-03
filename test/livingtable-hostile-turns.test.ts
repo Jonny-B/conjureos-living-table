@@ -17,24 +17,11 @@ import assert from "node:assert/strict";
 
 import { resolveMonsterTurn, runHostileTurns } from "../src/games/livingtable/session/hostileTurns";
 import { attackEvents, type CombatEvent, type ReadoutView } from "../src/games/livingtable/session/combatEvents";
-import * as screen from "../src/games/livingtable/LivingTable";
 import { activeCombatant, startCombat, type CombatRound } from "../src/games/livingtable/menu/combatRound";
 import { createCharacter, type CharacterSheet } from "../src/games/livingtable/characters/creation";
 import { resetTurnEconomy } from "../src/games/livingtable/rules/actionEconomy";
 import type { AttackResult } from "../src/games/livingtable/rules/combat";
-import {
-  CELL_HEIGHT,
-  CELL_WIDTH,
-  emptyWorld,
-  getCell,
-  setCell,
-  setDoorState,
-  type AssetManifest,
-  type CellCoord,
-  type CellLayout,
-  type TileCoord,
-  type World,
-} from "../src/games/livingtable/world";
+import { CELL_HEIGHT, CELL_WIDTH, emptyWorld, getCell, setCell, setDoorState, type AssetManifest, type CellCoord, type CellLayout, type TileCoord, type World } from "../src/games/livingtable/world";
 
 const PC = "pc-1";
 const CELL: CellCoord = { cx: 0, cy: 0 };
@@ -612,11 +599,4 @@ test("attackEvents: a hit that rolled 0 reports no damage number, and the attack
   const nothing = attackEvents({ by: PC, against: "gob", result: result(), readout, damage: 0 });
   assert.deepEqual(kinds(nothing), ["attack"]);
   assert.deepEqual(kinds(attackEvents({ by: PC, against: "gob", result: result(), readout })), ["attack"], "no damage given at all is the same");
-});
-
-// ── the screen still exports what it always did ─────────────────────────
-
-test("LivingTable.tsx re-exports the moved functions under their old names", () => {
-  assert.equal(screen.resolveMonsterTurn, resolveMonsterTurn);
-  assert.equal(screen.runHostileTurns, runHostileTurns);
 });

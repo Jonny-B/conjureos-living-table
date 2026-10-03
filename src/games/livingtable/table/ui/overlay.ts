@@ -1,6 +1,6 @@
 /**
- * The bench's on-screen text layer: banners, floating damage numbers, roll
- * plates, the story strip, the initiative strip and toasts, drawn as DOM over
+ * The table's on-screen text layer: banners, floating damage numbers, roll
+ * plates, the dialogue box, the initiative strip and toasts, drawn as DOM over
  * the Play canvas. "The canvas paints sprites, DOM paints type": the game's own
  * rule (the LivingTable.tsx readout comment), so this layer never touches the
  * board's pixels.
@@ -43,7 +43,7 @@
  * Node for validation). It imports the game's engine for types only.
  */
 import type { RollReadout } from "../../render/canvasRenderer";
-import { CELL_H, LINE_GAP, cssScale, deviceScale, fitScale, pixelText, textWidth, wrapText, wrapWidth, type PixelColor, type PixelRun, type PixelTextOptions, type PixelWeight } from "./pixelFont";
+import { CELL_H, LINE_GAP, cssScale, deviceScale, fitScale, normalizeText, pixelText, textWidth, wrapText, wrapWidth, type PixelColor, type PixelRun, type PixelTextOptions, type PixelWeight } from "./pixelFont";
 import { attachItemCard, attachTip, cardNavIndex, type ItemCardContent, type TipContent } from "./tip";
 
 export type { ItemCardAction, ItemCardContent, TipContent } from "./tip";
@@ -59,13 +59,18 @@ export interface OverlayPoint {
 export type BannerKind = "turn" | "enemy" | "initiative" | "victory" | "defeat";
 export type FloatKind = "damage" | "crit" | "heal" | "miss" | "down" | "info";
 export type DialogueTone = "good" | "bad" | "plain";
+/**
+ * One story message for the dialogue box. `speaker` is the tag in the box's corner ("DM" when absent): the DM, a person's name, a
+ * place's name, a creature. A `sticky` entry never fades by itself (it waits to be clicked, or for dismissStory): "You are down".
+ */
 export interface DialogueLine {
   speaker?: string;
   text: string;
   tone?: DialogueTone;
-  /** Stays on the board until the next action (dismissStory) instead of fading after its reading time: "You are down". Default false. */
   sticky?: boolean;
 }
+/** How fast story text prints: characters a second (TEXT_SPEED_CPS), or all at once. A game setting. */
+export type TextSpeed = "slow" | "normal" | "fast" | "instant";
 /** Which team a combatant is on, for colour coding the turn-order strip. */
 export type InitiativeSide = "hero" | "enemy";
 export interface InitiativeEntry {
@@ -84,15 +89,16 @@ export interface InitiativeEntry {
 export type PlateReadout = RollReadout & { caption?: string; critical?: boolean; fumble?: boolean };
 
 /**
- * A DM narration box that is up. update() replaces the whole text so far (a streaming
- * reply passes the accumulated text each time), done() says the text is complete and
- * starts the reading time, close() dismisses it now. Once the box has been closed,
- * replaced by a newer narrate() or cleared, update() and close() do nothing.
+ * A DM narration entry in the dialogue box. update() replaces the whole text so far (a streaming reply passes the accumulated
+ * text each time, and the typewriter follows it), done() says the text is complete, close() takes the entry away now, and
+ * setSpeaker() changes the tag (the DM's reply turned out to be a person speaking). Once the entry is gone (dismissed, cleared,
+ * or a duplicate of one already there) every call does nothing.
  */
 export interface NarrationHandle {
   update(text: string): void;
   done(): void;
   close(): void;
+  setSpeaker(name: string): void;
 }
 
 /** One line of a context menu: what it does, why it is offered, and whether it can be done now. */
@@ -156,7 +162,7 @@ export interface StartWriting {
 export interface StartScreenOptions {
   adventures: readonly StartAdventure[];
   sandboxes: readonly StartRoom[];
-  /** The plain-words cost note shown above the premise box (AI_ADVENTURE_COST_NOTE). */
+  /** A neutral plain-words note shown above the premise box ("a long AI job and takes a few minutes"). It states no price, number or credits. */
   aiNote: string;
   /** An adventure card, or a test room card, was picked (its id). */
   onPick: (id: string) => void;
@@ -221,19 +227,28 @@ export interface Overlay {
   /** The d20 maths near a point. Plates queue and never overwrite one another. */
   rollPlate(at: OverlayPoint, readout: PlateReadout): void;
   /**
-   * A line in the story strip at the bottom of the board: creature speech and the like, not results (the dice tray and the
-   * HUD log carry those). Each line fades after a reading time (stripHoldMs), at most two show at once (one on a phone while the
-   * DM narration is up; the oldest fades first), a click on the strip clears it, and the box goes away when it is empty.
+   * Queue a story message for the dialogue box at the bottom of the board: the ONE place story text is drawn (a person's or a
+   * creature's words, the DM, a place's read-aloud, a scene's opening). Results are not story: the dice tray and the HUD log carry
+   * those. One entry shows at a time with its speaker in the corner; the text prints one character at a time (setTextSpeed), is
+   * split into pages that fit the box (3 lines on a phone, 4 elsewhere; it never scrolls), and a click (or Space or Enter on the box)
+   * finishes the page, then goes to the next page, then the next entry, then closes the box. It never moves past an unread page by
+   * itself; the last entry may fade after its reading time. An entry that repeats one already waiting or just shown is dropped.
    */
   say(line: DialogueLine): void;
-  /** Fade the strip's lines now: all of them, or with `stickyOnly` just the ones that were kept ("You are down") for the next action. */
+  /** Take entries out of the dialogue box now: all of them, or with `stickyOnly` just the ones that were kept ("You are down") for the next action. */
   dismissStory(opts?: { stickyOnly?: boolean }): void;
   /**
-   * The DM's voice at the bottom of the board, above the dialogue box: a parchment box in storybook, a gold pixel frame
-   * in pixel, tagged "DM" (or the speaker). It shows a "..." while there is no text yet, follows streamed text through
-   * update(), and after done() stays for narrationHoldMs then fades; a click closes it early; a new narrate() replaces it.
+   * The same box for the DM's voice: an entry (tagged "DM", or the speaker) that shows "..." while it has no text yet and whose text
+   * the typewriter follows as it streams in through update(). `full` is accepted and ignored (every entry is paged to fit).
    */
   narrate(opts: { speaker?: string; text: string; full?: boolean }): NarrationHandle;
+  /** How fast story text prints. Under reduced motion it is always "instant". Default "normal". */
+  setTextSpeed(speed: TextSpeed): void;
+  /**
+   * The press the dialogue box takes on a click: finish the page, or the next page, or the next entry, or close. Returns whether a
+   * box was showing (so the board's skip key can leave its own job alone when this took the press).
+   */
+  advanceStory(): boolean;
   /** The turn-order strip above the board. An empty array hides it. */
   initiative(entries: readonly InitiativeEntry[], activeId: string | null, round: number): void;
   /** A short notice, for refused clicks. */
@@ -257,18 +272,19 @@ export interface Overlay {
   /**
    * The start screen, over the whole board: a title card, the adventures as cards (author badge, a draft note, and a problems list
    * on a file that does not validate, which then cannot be picked), the sandbox rooms in a smaller "Test rooms" group, and a "Write a
-   * new adventure with AI" card that opens a premise box with the cost note and a Write button that asks to confirm before onWrite.
+   * new adventure with AI" card that opens a premise box with the note and a Write button that asks to confirm before onWrite.
    * Modal: the keys do not reach the game, Tab stays inside, the arrow keys move between cards. One at a time (a new one replaces it).
    */
   startScreen(opts: StartScreenOptions): StartScreen;
   /** After an adventure is picked: "Make your own hero" or a quick start per class, each with that class's hook and starting kit in words. Escape is Back. */
   startHero(opts: StartHeroOptions): StartHero;
   /**
-   * The arrival card: the place's name as a banner and its read-aloud in the narration box style, at the top of the board. It stays
-   * for a reading time and fades, or a click (or Enter, Escape on it) dismisses it. A new one replaces the last location card.
+   * The arrival card: the place's name as a short banner at the top of the board (it fades after a moment, or a click dismisses it).
+   * The read-aloud is not drawn there: it is queued in the dialogue box with the place's name as the speaker. A new one replaces the
+   * last location banner.
    */
   locationCard(opts: { name: string; readAloud: string }): void;
-  /** A scene change: the title as a banner and the opening text under it, shown and dismissed like locationCard (its own slot, so both can be up). */
+  /** A scene change: the title as a short banner (its own slot, so both can be up) and the opening queued in the dialogue box, tagged "DM". */
   sceneCard(opts: { title: string; opening?: string }): void;
   /**
    * The ending: a full-board card with the title, the ending's text, Continue (only when onContinue is given) and Back to the start
@@ -276,7 +292,7 @@ export interface Overlay {
    */
   endingCard(opts: EndingCardOptions): EndingCard;
 
-  /** Drop everything on screen (banners resolve at once), the story strip and the initiative strip included, and the context menu (not the loot window). */
+  /** Drop everything on screen (banners resolve at once), the dialogue box and the initiative strip included, and the context menu (not the loot window). */
   clear(): void;
   destroy(): void;
 }
@@ -306,22 +322,20 @@ const PLATE_HOLD_QUEUED_MS = 1100;
 const PLATE_OUT_MS = 220;
 const TOAST_MS = 1900;
 const TOAST_FADE_MS = 200;
-/** The story strip: a line stays about 3.5 s plus 40 ms a character (capped at 9 s), then fades and shrinks away. */
+/** The dialogue box: the last entry waits about 3.5 s plus 40 ms a character (capped at 9 s) once it is all printed, then fades. */
 const STRIP_BASE_MS = 3500;
 const STRIP_PER_CHAR_MS = 40;
 const STRIP_MAX_MS = 9000;
 /** Under reduced motion nothing animates, so the reading time is longer (it still clears). */
 const STRIP_REDUCED_FACTOR = 1.5;
 const STRIP_REDUCED_MAX_MS = 13500;
-const STRIP_OUT_MS = 450;
-const STRIP_EVICT_MS = 250;
-export const STRIP_MAX_LINES = 2;
-const NARRATION_BASE_MS = 2500;
-const NARRATION_PER_CHAR_MS = 45;
-const NARRATION_MAX_MS = 12000;
+const DIALOGUE_IN_MS = 170;
+const DIALOGUE_OUT_MS = 260;
+/** The arrival banners (a place's or a scene's title): in and out. */
 const NARRATION_IN_MS = 180;
 const NARRATION_OUT_MS = 400;
 const NARRATION_CLOSE_MS = 140;
+/** The speaker tag in the dialogue box's corner is cut with a dot past this many characters. */
 const NARRATION_TAG_MAX = 16;
 
 // ---- palettes ---------------------------------------------------------------
@@ -427,44 +441,390 @@ export function verdictWords(r: Pick<PlateReadout, "hit" | "critical" | "fumble"
   return r.critical ? "NATURAL 20, CRITICAL HIT" : r.fumble ? "NATURAL 1, AUTOMATIC MISS" : r.hit ? "HIT" : "MISS";
 }
 
-/** How long a finished narration box stays up for reading: about 2.5 s plus 45 ms a character, never more than 12 s. */
-export function narrationHoldMs(chars: number): number {
-  return Math.min(NARRATION_MAX_MS, NARRATION_BASE_MS + NARRATION_PER_CHAR_MS * Math.max(0, chars));
-}
-
 /**
- * How long a story-strip line stays up before it fades: about 3.5 s plus 40 ms a character, never more than 9 s. Under reduced
- * motion (`still`) it is half as long again, up to 13.5 s, but it still clears.
+ * How long the last entry in the dialogue box waits, once it is all printed, before it fades: about 3.5 s plus 40 ms a character,
+ * never more than 9 s. Under reduced motion (`still`) it is half as long again, up to 13.5 s, but it still clears.
  */
 export function stripHoldMs(chars: number, still = false): number {
   const ms = Math.min(STRIP_MAX_MS, STRIP_BASE_MS + STRIP_PER_CHAR_MS * Math.max(0, chars));
   return still ? Math.min(STRIP_REDUCED_MAX_MS, Math.round(ms * STRIP_REDUCED_FACTOR)) : ms;
 }
 
-/** How many story lines the board shows at once: two, or one on a phone-width board while the DM narration is up. */
-export function stripMaxLines(size: "s" | "m" | "l", narrating: boolean): number {
-  return size === "s" && narrating ? 1 : STRIP_MAX_LINES;
+// ---- the dialogue box: one queue for all story text (pure, unit tested) ------
+
+export const TEXT_SPEEDS: readonly TextSpeed[] = ["slow", "normal", "fast", "instant"];
+/** Characters printed a second at each speed ("instant" prints a whole page at once). */
+export const TEXT_SPEED_CPS: Readonly<Record<TextSpeed, number>> = { slow: 22, normal: 45, fast: 90, instant: Number.POSITIVE_INFINITY };
+export const DEFAULT_TEXT_SPEED: TextSpeed = "normal";
+
+/** A text speed from anything a host may hand over (a saved setting): the speed itself, or the default for anything else. */
+export function textSpeedOf(value: unknown): TextSpeed {
+  return typeof value === "string" && (TEXT_SPEEDS as readonly string[]).includes(value) ? (value as TextSpeed) : DEFAULT_TEXT_SPEED;
+}
+
+/** How many characters of a page show after `elapsedMs` of printing at a speed (all of them at once for "instant"). */
+export function typedChars(elapsedMs: number, speed: TextSpeed): number {
+  const cps = TEXT_SPEED_CPS[speed];
+  if (!Number.isFinite(cps)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, Math.floor((Math.max(0, elapsedMs) / 1000) * cps));
+}
+
+/** The text rows the dialogue box holds: 3 on a phone-width board, 4 elsewhere. It never holds more, and it never scrolls. */
+export function dialogueLines(size: "s" | "m" | "l"): number {
+  return size === "s" ? 3 : 4;
 }
 
 /**
- * Which story lines must fade now so no more than `max` stay. `sticky` is per visible line, oldest first. The oldest go first, and a
- * kept (sticky) line outlasts an ordinary one. Returns indices into `sticky`, ascending.
+ * Greedy word wrap: the lines of `text` (spaces collapsed, a newline always breaks, blank lines dropped), each no wider than
+ * `maxWidth` by `measure`. A word is never split to make a line fit, except one wider than a whole line, which has to break
+ * between letters or it would run out of the box.
  */
-export function stripOverflow(sticky: readonly boolean[], max: number): number[] {
-  let excess = sticky.length - Math.max(0, max);
-  if (excess <= 0) return [];
-  const drop: number[] = [];
-  for (let i = 0; i < sticky.length && excess > 0; i++) {
-    if (sticky[i]) continue;
-    drop.push(i);
-    excess--;
+export function wrapWords(text: string, measure: (s: string) => number, maxWidth: number): string[] {
+  const lines: string[] = [];
+  const room = Math.max(1, maxWidth);
+  for (const para of text.replace(/\r/g, "").split("\n")) {
+    let cur = "";
+    for (const word of para.split(/\s+/)) {
+      if (word === "") continue;
+      const tryLine = cur === "" ? word : `${cur} ${word}`;
+      if (measure(tryLine) <= room) {
+        cur = tryLine;
+        continue;
+      }
+      if (cur !== "") {
+        lines.push(cur);
+        cur = "";
+      }
+      if (measure(word) <= room) {
+        cur = word;
+        continue;
+      }
+      let piece = "";
+      for (const ch of word) {
+        if (piece !== "" && measure(piece + ch) > room) {
+          lines.push(piece);
+          piece = "";
+        }
+        piece += ch;
+      }
+      cur = piece;
+    }
+    if (cur !== "") lines.push(cur);
   }
-  for (let i = 0; i < sticky.length && excess > 0; i++) {
-    if (!sticky[i]) continue;
-    drop.push(i);
-    excess--;
-  }
-  return drop.sort((a, b) => a - b);
+  return lines;
+}
+
+/** Lines cut into pages of at most `perPage` lines each (at least one line a page). */
+export function paginateLines(lines: readonly string[], perPage: number): string[][] {
+  const n = Math.max(1, Math.floor(perPage));
+  const pages: string[][] = [];
+  for (let i = 0; i < lines.length; i += n) pages.push(lines.slice(i, i + n));
+  return pages;
+}
+
+/** Text as pages that fit the box: wrapped to `maxWidth` by `measure`, then cut into pages of `perPage` lines. */
+export function dialoguePages(text: string, measure: (s: string) => number, maxWidth: number, perPage: number): string[][] {
+  return paginateLines(wrapWords(text, measure, maxWidth), perPage);
+}
+
+const storyWords = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Whether two story texts say the same thing: equal once case and punctuation are ignored, or (for texts of some length) one is
+ * wholly inside the other, which is how the DM restating a place's read-aloud shows up.
+ */
+export function sameStory(a: string, b: string): boolean {
+  const x = storyWords(a);
+  const y = storyWords(b);
+  if (x === "" || y === "") return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.length >= 24 && long.includes(short);
+}
+
+/** What goes into the queue. `open` is a text that may still grow (a streaming reply); finish() closes it. */
+export interface DialogueInput {
+  speaker?: string;
+  text: string;
+  tone?: DialogueTone;
+  sticky?: boolean;
+  open?: boolean;
+}
+
+/** The entry on show, as the box draws it. */
+export interface DialogueView {
+  id: number;
+  speaker: string;
+  tone: DialogueTone;
+  sticky: boolean;
+  /** The whole entry text so far (the typewriter shows only part of it). */
+  text: string;
+  open: boolean;
+  /** The entry cut into pages of lines. Empty while there is nothing to draw yet (the "..." of a reply that has not started). */
+  pages: readonly (readonly string[])[];
+  page: number;
+  /** How many characters of this page show now (the page's lines joined by newlines). */
+  shown: number;
+  /** How many characters this page has in all. */
+  pageChars: number;
+  /** Everything on this page is printed. */
+  complete: boolean;
+  /** No text to draw yet. */
+  thinking: boolean;
+  /** Another page or entry is waiting (only once this page is complete). */
+  more: boolean;
+  /** Entries waiting behind this one. */
+  queued: number;
+}
+
+/** What a press did: finished the page, turned to the next page, moved to the next entry, closed the box, or nothing (still waiting on a stream). */
+export type DialoguePress = "finish" | "page" | "next" | "close" | "none";
+
+export interface DialogueQueueOptions {
+  /** An entry's text as pages of lines that fit the box (it measures; the queue never does). */
+  layout(text: string): string[][];
+  /** How long the last entry waits once it is all printed before it closes, by the characters on its last page. Default stripHoldMs. */
+  reading?(chars: number): number;
+  now?(): number;
+  /** Entries kept waiting; the oldest waiting ones go first past it (the Log has them all). Default 12. */
+  maxQueued?: number;
+  speed?: TextSpeed;
+}
+
+export interface DialogueQueue {
+  /** Queue an entry. Returns its id, or null when it was dropped (nothing to say, or it repeats one waiting or just closed). */
+  push(input: DialogueInput): number | null;
+  setText(id: number, text: string): void;
+  setSpeaker(id: number, speaker: string): void;
+  /** The text is complete. An entry that ended with nothing in it goes away. */
+  finish(id: number): void;
+  drop(id: number): void;
+  /** Remove entries: all of them, or only the sticky ones. Returns how many went. */
+  dismiss(opts?: { stickyOnly?: boolean }): number;
+  clear(): void;
+  /** Advance the typewriter and the reading time by `dtMs`. `changed` is whether anything on screen differs; `closed` is the last entry timing out. */
+  tick(dtMs: number): { changed: boolean; closed: boolean };
+  press(): DialoguePress;
+  /** Whether the clock has anything to do: text still printing, or the last entry counting down its reading time. A box waiting for a click needs none. */
+  needsTick(): boolean;
+  view(): DialogueView | null;
+  size(): number;
+  setSpeed(speed: TextSpeed): void;
+  /** The layout changed (a resize, another text style): pages are cut again and the reader keeps their place. */
+  relayout(): void;
+}
+
+interface QueueEntry {
+  id: number;
+  speaker: string;
+  text: string;
+  tone: DialogueTone;
+  sticky: boolean;
+  open: boolean;
+  pages: string[][] | null;
+}
+
+const DEDUPE_RECENT_MS = 3000;
+
+export function createDialogueQueue(o: DialogueQueueOptions): DialogueQueue {
+  const reading = o.reading ?? ((chars: number) => stripHoldMs(chars));
+  const now = o.now ?? (() => (typeof performance !== "undefined" ? performance.now() : Date.now()));
+  const maxQueued = Math.max(1, o.maxQueued ?? 12);
+  let speed: TextSpeed = o.speed ?? DEFAULT_TEXT_SPEED;
+  const entries: QueueEntry[] = [];
+  let nextId = 1;
+  let page = 0;
+  let shownF = 0;
+  let holdMs = 0;
+  let lastClosed: { text: string; at: number } | null = null;
+
+  const pageLen = (pg: readonly string[] | undefined): number => (pg ? pg.join("\n").length : 0);
+  /** An entry still growing is laid out only as far as its last whole word, so a word being typed never jumps lines. */
+  const laidText = (e: QueueEntry): string => (e.open && !/\s$/.test(e.text) ? e.text.replace(/\S+$/, "") : e.text);
+  const pagesOf = (e: QueueEntry): string[][] => (e.pages ??= o.layout(laidText(e)));
+  const resetProgress = (): void => {
+    page = 0;
+    shownF = 0;
+    holdMs = 0;
+  };
+  /** After the head's pages changed: keep the page in range and the printed count inside the page. */
+  const settleHead = (): void => {
+    const e = entries[0];
+    if (!e) return;
+    const pgs = pagesOf(e);
+    page = Math.max(0, Math.min(page, pgs.length - 1));
+    shownF = Math.min(shownF, pageLen(pgs[page]));
+  };
+  const closeHead = (): void => {
+    const e = entries.shift();
+    if (e) lastClosed = { text: e.text, at: now() };
+    resetProgress();
+  };
+  const find = (id: number): QueueEntry | undefined => entries.find((e) => e.id === id);
+  const drop = (id: number): void => {
+    const at = entries.findIndex((e) => e.id === id);
+    if (at < 0) return;
+    entries.splice(at, 1);
+    if (at === 0) resetProgress();
+  };
+
+  return {
+    push(input) {
+      const text = input.text ?? "";
+      const open = !!input.open;
+      if (!open && text.trim() === "") return null;
+      if (text.trim() !== "") {
+        if (entries.some((e) => sameStory(e.text, text))) return null;
+        if (lastClosed && now() - lastClosed.at < DEDUPE_RECENT_MS && sameStory(lastClosed.text, text)) return null;
+      }
+      const e: QueueEntry = { id: nextId++, speaker: input.speaker?.trim() || "DM", text, tone: input.tone ?? "plain", sticky: !!input.sticky, open, pages: null };
+      entries.push(e);
+      // Too many waiting: the oldest of the waiting go (never the one on show, never one still streaming).
+      while (entries.length > maxQueued) {
+        const at = entries.findIndex((x, i) => i > 0 && !x.open);
+        if (at < 0) break;
+        entries.splice(at, 1);
+      }
+      return e.id;
+    },
+    setText(id, text) {
+      const e = find(id);
+      if (!e || e.text === text) return;
+      e.text = text;
+      e.pages = null;
+      if (e === entries[0]) settleHead();
+    },
+    setSpeaker(id, speaker) {
+      const e = find(id);
+      if (e) e.speaker = speaker.trim() || "DM";
+    },
+    finish(id) {
+      const e = find(id);
+      if (!e) return;
+      e.open = false;
+      e.pages = null;
+      if (e.text.trim() === "") return drop(id);
+      // A streamed reply is only known to repeat something once it is whole: the same words waiting ahead of it, or shown a moment ago, and it goes.
+      const at = entries.indexOf(e);
+      const repeats = entries.slice(0, at).some((x) => sameStory(x.text, e.text)) || (at === 0 && !!lastClosed && now() - lastClosed.at < DEDUPE_RECENT_MS && sameStory(lastClosed.text, e.text));
+      if (repeats) return drop(id);
+      if (at === 0) settleHead();
+    },
+    drop,
+    dismiss(opts = {}) {
+      const before = entries.length;
+      const headId = entries[0]?.id;
+      for (let i = entries.length - 1; i >= 0; i--) if (!opts.stickyOnly || entries[i]!.sticky) entries.splice(i, 1);
+      if (entries[0]?.id !== headId) resetProgress();
+      return before - entries.length;
+    },
+    clear() {
+      entries.length = 0;
+      resetProgress();
+      lastClosed = null;
+    },
+    tick(dtMs) {
+      const e = entries[0];
+      if (!e) return { changed: false, closed: false };
+      const pgs = pagesOf(e);
+      const pg = pgs[page];
+      if (!pg) return { changed: false, closed: false };
+      const total = pageLen(pg);
+      if (shownF < total) {
+        const before = Math.floor(shownF);
+        const cps = TEXT_SPEED_CPS[speed];
+        shownF = Number.isFinite(cps) ? Math.min(total, shownF + (Math.max(0, dtMs) / 1000) * cps) : total;
+        holdMs = 0;
+        return { changed: Math.floor(shownF) !== before, closed: false };
+      }
+      // All of this page is printed. The last entry, with nothing behind it and nothing more to come, may time out; anything else waits for a press.
+      if (page === pgs.length - 1 && !e.open && !e.sticky && entries.length === 1) {
+        holdMs += Math.max(0, dtMs);
+        if (holdMs >= reading(total)) {
+          closeHead();
+          return { changed: true, closed: true };
+        }
+      } else holdMs = 0;
+      return { changed: false, closed: false };
+    },
+    press() {
+      const e = entries[0];
+      if (!e) return "none";
+      const pgs = pagesOf(e);
+      const pg = pgs[page];
+      if (!pg) return "none";
+      if (shownF < pageLen(pg)) {
+        shownF = pageLen(pg);
+        return "finish";
+      }
+      if (page + 1 < pgs.length) {
+        page++;
+        shownF = 0;
+        holdMs = 0;
+        return "page";
+      }
+      if (e.open) return "none";
+      closeHead();
+      return entries.length > 0 ? "next" : "close";
+    },
+    needsTick() {
+      const e = entries[0];
+      if (!e) return false;
+      const pgs = pagesOf(e);
+      const pg = pgs[page];
+      if (!pg) return false;
+      if (shownF < pageLen(pg)) return true;
+      return page === pgs.length - 1 && !e.open && !e.sticky && entries.length === 1;
+    },
+    view() {
+      const e = entries[0];
+      if (!e) return null;
+      const pgs = pagesOf(e);
+      const pg = pgs[page];
+      const total = pageLen(pg);
+      const shown = Math.min(Math.floor(shownF), total);
+      const complete = !!pg && shown >= total;
+      return {
+        id: e.id,
+        speaker: e.speaker,
+        tone: e.tone,
+        sticky: e.sticky,
+        text: e.text,
+        open: e.open,
+        pages: pgs,
+        page,
+        shown,
+        pageChars: total,
+        complete,
+        thinking: !pg,
+        more: complete && (page + 1 < pgs.length || entries.length > 1),
+        queued: entries.length - 1,
+      };
+    },
+    size: () => entries.length,
+    setSpeed(next) {
+      speed = next;
+    },
+    relayout() {
+      const head = entries[0];
+      let abs = 0;
+      if (head?.pages) {
+        for (let i = 0; i < page; i++) abs += pageLen(head.pages[i]);
+        abs += shownF;
+      }
+      for (const e of entries) e.pages = null;
+      if (!head) return;
+      const pgs = pagesOf(head);
+      let i = 0;
+      let left = abs;
+      while (i < pgs.length - 1 && left > pageLen(pgs[i])) {
+        left -= pageLen(pgs[i]);
+        i++;
+      }
+      page = i;
+      shownF = Math.min(left, pageLen(pgs[i]));
+    },
+  };
 }
 
 /**
@@ -553,8 +913,9 @@ export const CARD_SUMMARY_MAX = 260;
 export const HOOK_MAX = 320;
 /** The most problems a card lists before "and N more". */
 export const PROBLEMS_SHOWN = 4;
-/** How long a location or scene card stays: this plus 45 ms a character, never more than LOCATION_MAX_MS. */
+/** How long a location or scene banner stays with text under it: this plus 45 ms a character, never more than LOCATION_MAX_MS. The banner now carries a title only (3 s). */
 export const LOCATION_BASE_MS = 3500;
+const LOCATION_PER_CHAR_MS = 45;
 export const LOCATION_MAX_MS = 14000;
 /** The most recent beats the journal prints. */
 export const JOURNAL_RECENT_MAX = 5;
@@ -695,10 +1056,10 @@ export function endingChoices(canContinue: boolean): ("continue" | "menu")[] {
   return canContinue ? ["continue", "menu"] : ["menu"];
 }
 
-/** How long a location or scene card stays up: 3.5 s plus 45 ms a character, never more than 14 s. No text means just the title: 3 s. */
+/** How long a location or scene banner stays up: 3 s for a title alone, else 3.5 s plus 45 ms a character, never more than 14 s. */
 export function locationHoldMs(chars: number): number {
   if (chars <= 0) return 3000;
-  return Math.min(LOCATION_MAX_MS, LOCATION_BASE_MS + NARRATION_PER_CHAR_MS * chars);
+  return Math.min(LOCATION_MAX_MS, LOCATION_BASE_MS + LOCATION_PER_CHAR_MS * chars);
 }
 
 /**
@@ -722,9 +1083,25 @@ export function titleLines(text: string, oneLine: boolean): string[] {
   return [parts.slice(0, best).join(" "), parts.slice(best).join(" ")];
 }
 
-/** How many columns the HUD's drawer tabs take: one each up to three, two columns of two when there are four (their labels need the room). */
+/** How many columns the HUD's drawer tabs take: one each up to three, two columns beyond that (their labels need the room; a last odd one takes the whole row). */
 export function drawerColumns(count: number): number {
   return count <= 3 ? Math.max(1, count) : 2;
+}
+
+/** The choices of each setting in the Settings tab, in order: its key, its heading and its (value, label) pairs. */
+export const SETTING_CHOICES: readonly { key: "textSpeed" | "textStyle" | "rollMyself" | "zoom"; label: string; choices: readonly { value: string; label: string }[] }[] = [
+  { key: "textSpeed", label: "Text speed", choices: [{ value: "slow", label: "Slow" }, { value: "normal", label: "Normal" }, { value: "fast", label: "Fast" }, { value: "instant", label: "Instant" }] },
+  { key: "textStyle", label: "Text style", choices: [{ value: "pixel", label: "Pixel" }, { value: "storybook", label: "Storybook" }] },
+  { key: "rollMyself", label: "Roll my own dice", choices: [{ value: "true", label: "On" }, { value: "false", label: "Off" }] },
+  { key: "zoom", label: "Zoom", choices: [{ value: "auto", label: "Auto" }, { value: "1", label: "1" }, { value: "2", label: "2" }, { value: "3", label: "3" }, { value: "4", label: "4" }] },
+];
+
+/** The value of a setting as its choice is named (the "set:" id's last part): which choice of SETTING_CHOICES is the one in use. */
+export function settingValue(settings: HudSettings, key: (typeof SETTING_CHOICES)[number]["key"]): string {
+  if (key === "textSpeed") return settings.textSpeed;
+  if (key === "textStyle") return settings.textStyle;
+  if (key === "rollMyself") return String(settings.rollMyself);
+  return settings.zoom === null ? "auto" : String(settings.zoom);
 }
 
 export interface JournalObjective {
@@ -798,6 +1175,25 @@ function serifWidth(text: string, px: number, weight = 800): number {
     return measureCtx.measureText(text).width;
   }
   return text.length * px * 0.62;
+}
+
+/** The dialogue box's storybook text: one font, one size, so the pages are cut by what the browser will really draw. */
+const DIALOGUE_FONT = `15.5px ${SERIF}`;
+
+/** Width of a line of text in a CSS font by the canvas's own measure, or a rough per-character guess when there is no canvas. */
+function ctxWidth(text: string, font: string, fallbackPerChar: number): number {
+  if (measureCtx === undefined) {
+    try {
+      measureCtx = document.createElement("canvas").getContext("2d");
+    } catch {
+      measureCtx = null;
+    }
+  }
+  if (measureCtx) {
+    measureCtx.font = font;
+    return measureCtx.measureText(text).width;
+  }
+  return text.length * fallbackPerChar;
 }
 
 // ---- the pixel windows: nine-slice frames drawn from data -------------------
@@ -898,8 +1294,6 @@ const CSS = `
 .lto-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .lto-top{position:absolute;left:8px;right:8px;top:8px;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
 .lto-bottom{position:absolute;left:8px;right:8px;bottom:8px;display:flex;flex-direction:column;align-items:center;pointer-events:none}
-.lto-narr-host{display:flex;flex-direction:column;align-items:center;width:100%;min-width:0;pointer-events:none}
-.lto-narr-host:not(:empty){margin-bottom:6px}
 .lto-banners{position:absolute;left:0;right:0;top:48px;display:flex;flex-direction:column;align-items:center;pointer-events:none}
 .lto-float{position:absolute;transform:translate(-50%,-100%);pointer-events:none;white-space:nowrap;will-change:transform,opacity}
 .lto-float-in{transform-origin:50% 100%}
@@ -920,9 +1314,6 @@ const CSS = `
 .lto-px .lto-chip .lto-caret{position:absolute;left:50%;bottom:-17px;transform:translateX(-50%)}
 .lto-px .lto-round{flex:none;padding:0 3px;display:flex;align-items:center}
 .lto-px .lto-toast{padding:0 3px}
-.lto-px .lto-dlg{width:min(760px,100%);padding:0 2px;pointer-events:auto;cursor:pointer;transform-origin:50% 100%}
-.lto-px .lto-dlg-scroll{max-height:calc(var(--lto-lines)*var(--lto-row,20px));overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:#4d5da6 #05061a}
-.lto-px .lto-line{overflow:hidden}
 .lto-px .lto-roll{padding:2px 4px;display:flex;flex-direction:column;align-items:center;gap:5px}
 .lto-px .lto-math{display:flex;align-items:flex-end;gap:12px}
 .lto-px .lto-math.is-tight{gap:6px}
@@ -954,11 +1345,6 @@ const CSS = `
   paint-order:stroke fill;-webkit-text-stroke:.6px rgb(0 0 0/.7);text-shadow:0 1px 0 rgb(0 0 0/.5),0 2px 4px rgb(0 0 0/.5);font-variant-numeric:lining-nums tabular-nums}
 .lto-sb .lto-toast{padding:6px 14px;font-size:14px;font-weight:700;border-radius:999px;border-color:var(--sb-bad);
   box-shadow:0 0 0 1px rgb(var(--sb-shade)/.55),0 6px 16px rgb(0 0 0/.45),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-bad)}
-.lto-sb .lto-dlg{width:min(760px,100%);padding:6px 12px 6px 14px;pointer-events:auto;border-radius:10px;cursor:pointer;transform-origin:50% 100%}
-.lto-sb .lto-dlg-scroll{max-height:calc(var(--lto-lines)*1.4em);font-size:15px;line-height:1.4;overflow-y:auto;overflow-x:hidden;padding-right:6px;scrollbar-width:thin;scrollbar-color:var(--sb-rule) transparent}
-.lto-sb .lto-line{color:var(--sb-ink);overflow-wrap:anywhere;overflow:hidden}
-.lto-sb .lto-line b{color:var(--sb-spk);font-variant:small-caps;letter-spacing:.06em;margin-right:.4em}
-.lto-sb .lto-line[data-tone="good"]{color:var(--sb-good)}.lto-sb .lto-line[data-tone="bad"]{color:var(--sb-bad)}
 .lto-sb .lto-roll{padding:9px 14px 10px;display:flex;flex-direction:column;align-items:center;gap:6px;max-width:100%}
 .lto-sb .lto-plate.is-crit{box-shadow:0 0 0 1px rgb(var(--sb-shade)/.55),0 0 22px rgb(255 200 70/.6),0 6px 16px rgb(0 0 0/.45),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px #f0b52c}
 .lto-sb .lto-cap{font-size:12px;font-style:italic;color:var(--sb-muted)}
@@ -977,30 +1363,47 @@ const CSS = `
   background:linear-gradient(90deg,transparent 0,rgb(12 8 22/.8) 14%,rgb(12 8 22/.88) 50%,rgb(12 8 22/.8) 86%,transparent 100%)}
 .lto-sb .lto-banner::before,.lto-sb .lto-banner::after{content:"";position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#d9ae4a 20%,#ffe9a0 50%,#d9ae4a 80%,transparent)}
 .lto-sb .lto-banner::before{top:0}.lto-sb .lto-banner::after{bottom:0}
-.lto-sb .lto-dlg:focus-visible,.lto-px .lto-dlg:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
 
-/* ---- the DM's narration box: a tag, then the framed text ---- */
-.lto-narr{--nl:5;display:flex;flex-direction:column;width:min(760px,100%);min-width:0;pointer-events:auto;cursor:pointer;touch-action:manipulation}
-.lto-root[data-size="s"] .lto-narr{--nl:4}
-.lto-narr:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
-.lto-narr-tag{position:relative;z-index:1;align-self:flex-start;margin-left:12px;width:max-content;max-width:calc(100% - 24px);overflow:hidden}
+/* ---- the ending's framed text box ---- */
 .lto-narr-box{min-width:0}
 .lto-narr-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;scrollbar-width:thin;scrollbar-gutter:stable}
-.lto-root:not([data-size="s"]) .lto-narr[data-full] .lto-narr-body{max-height:none;overflow:visible}
-.lto-narr-dots{display:flex;align-items:center;gap:6px}
-.lto-narr-dots i{display:block;width:6px;height:6px;background:currentColor;animation:lto-narr-dot 1.1s ease-in-out infinite}
-.lto-narr-dots i:nth-child(2){animation-delay:.18s}.lto-narr-dots i:nth-child(3){animation-delay:.36s}
 @keyframes lto-narr-dot{0%,75%,100%{opacity:.3;transform:translateY(0)}35%{opacity:1;transform:translateY(-3px)}}
-.lto-px .lto-narr-tag{margin-bottom:calc(-5px*var(--fs))}
 .lto-px .lto-narr-box{padding:0 2px}
 .lto-px .lto-narr-body{max-height:calc(var(--nl)*var(--lto-nrow,20px));scrollbar-color:#b8801a #05061a}
-.lto-px .lto-narr-dots{height:var(--lto-nrow,20px);color:#ffc72a}
-.lto-sb .lto-narr-tag{margin-bottom:-11px;padding:4px 11px;border-radius:999px;background:var(--sb-badge);color:var(--sb-badge-ink);border:1px solid var(--sb-gold);
-  font:700 11px/1.1 var(--lto-num);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;text-overflow:ellipsis;box-shadow:0 2px 6px rgb(0 0 0/.4)}
 .lto-sb .lto-narr-box{padding:14px 16px 10px 18px;border-radius:10px;border-left:4px solid var(--sb-gold)}
 .lto-sb .lto-narr-body{max-height:calc(var(--nl)*1.45em);font:italic 15.5px/1.45 var(--lto-serif);color:var(--sb-ink);white-space:pre-wrap;scrollbar-color:var(--sb-rule) transparent}
-.lto-sb .lto-narr-dots{height:1.45em;color:var(--sb-spk)}
-.lto-sb .lto-narr-dots i{border-radius:50%}
+
+/* ---- the dialogue box: the one place story text is drawn. A speaker tag in the corner, the framed text, a marker when more waits ---- */
+.lto-dlg{--dl:3;display:flex;flex-direction:column;width:min(760px,100%);min-width:0;pointer-events:auto;cursor:pointer;touch-action:manipulation;transform-origin:50% 100%}
+.lto-dlg:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
+.lto-dlg-tag{position:relative;z-index:1;align-self:flex-start;margin-left:12px;width:max-content;max-width:calc(100% - 24px);overflow:hidden}
+.lto-dlg-box{position:relative;min-width:0}
+.lto-dlg-body{min-width:0;overflow:hidden}
+.lto-dlg-more{position:absolute;pointer-events:none}
+.lto-dlg-dots{display:flex;align-items:center;gap:6px}
+.lto-dlg-dots i{display:block;width:6px;height:6px;background:currentColor;animation:lto-narr-dot 1.1s ease-in-out infinite}
+.lto-dlg-dots i:nth-child(2){animation-delay:.18s}.lto-dlg-dots i:nth-child(3){animation-delay:.36s}
+.lto-px .lto-dlg-tag{margin-bottom:calc(-5px*var(--fs))}
+.lto-px .lto-dlg-box{padding:0 22px 0 2px}
+.lto-px .lto-dlg-body canvas{display:block}
+.lto-px .lto-dlg-dots{height:20px;color:#ffc72a}
+.lto-px .lto-dlg-more{right:2px;bottom:1px}
+.lto-px .lto-dlg-more canvas{display:block}
+.lto-sb .lto-dlg-tag{margin-bottom:-11px;padding:4px 11px;border-radius:999px;background:var(--sb-badge);color:var(--sb-badge-ink);border:1px solid var(--sb-gold);
+  font:700 11px/1.1 var(--lto-num);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;text-overflow:ellipsis;box-shadow:0 2px 6px rgb(0 0 0/.4)}
+.lto-sb .lto-dlg-box{padding:14px 30px 10px 18px;border-radius:10px;border-left:4px solid var(--sb-gold)}
+.lto-sb .lto-dlg-body{font:15.5px/1.45 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-dlg-body[data-tone="good"]{color:var(--sb-good)}.lto-sb .lto-dlg-body[data-tone="bad"]{color:var(--sb-bad)}
+.lto-sb .lto-dlg-line{display:block;white-space:pre;height:1.45em;overflow:hidden}
+.lto-sb .lto-dlg-dots{height:1.45em;color:var(--sb-spk)}
+.lto-sb .lto-dlg-dots i{border-radius:50%}
+.lto-sb .lto-dlg-more{right:11px;bottom:9px;width:0;height:0;border:6px solid transparent;border-top:9px solid var(--sb-spk);border-bottom:0;animation:lto-dlg-bob 1s ease-in-out infinite}
+@keyframes lto-dlg-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(3px)}}
+.lto-px .lto-dlg-more{animation:lto-dlg-bob 1s ease-in-out infinite}
+
+/* ---- the arrival banners: a place's or a scene's title, nothing else ---- */
+.lto-arrival{display:flex;flex-direction:column;align-items:stretch;width:min(440px,100%);min-width:0;gap:4px;pointer-events:auto;cursor:pointer;touch-action:manipulation}
+.lto-arrival:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
 
 /* ---- buttons, the context menu and the loot window (they take the pointer) ---- */
 .lto-btn{appearance:none;font:inherit;color:inherit;margin:0;min-width:0;min-height:36px;padding:4px 12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation;pointer-events:auto}
@@ -1141,11 +1544,7 @@ const CSS = `
 .lto-px .lto-ribbon{padding:4px 8px}
 .lto-sb .lto-ribbon .lto-num{margin:-3px 0}
 .lto-cards{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;min-width:0;pointer-events:none}
-.lto-loc{--nl:6;width:min(600px,100%);gap:4px}
 .lto-root[data-size="s"] .lto-loc{--nl:4}
-.lto-loc .lto-narr-box{width:100%}
-.lto-root:not([data-size="s"]) .lto-loc .lto-narr-body{max-height:none;overflow:visible}
-.lto-px .lto-loc .lto-narr-box{padding:2px 5px}
 
 @media (prefers-reduced-motion: reduce){.lto-root *{animation:none!important;transition:none!important}}
 `;
@@ -1212,14 +1611,21 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
   dlg.hidden = true;
   dlg.tabIndex = 0;
   dlg.setAttribute("role", "group");
-  dlg.setAttribute("aria-label", "Story, activate to dismiss");
-  dlg.title = "Click to dismiss";
-  const dlgScroll = el("div", "lto-dlg-scroll");
-  dlg.append(dlgScroll);
-  const narrHost = el("div", "lto-narr-host");
-  bottom.append(narrHost, dlg);
+  dlg.setAttribute("aria-label", "Story");
+  const dlgTag = el("div", "lto-dlg-tag");
+  const dlgBox = el("div", "lto-dlg-box");
+  const dlgBody = el("div", "lto-dlg-body");
+  // The words are announced whole by the live region as each entry arrives; the typing is not read out letter by letter.
+  dlgBody.setAttribute("aria-hidden", "true");
+  const dlgMore = el("span", "lto-dlg-more");
+  dlgMore.dataset.ltoMore = "";
+  dlgMore.setAttribute("aria-hidden", "true");
+  dlgMore.hidden = true;
+  dlgBox.append(dlgBody, dlgMore);
+  dlg.append(dlgTag, dlgBox);
+  bottom.append(dlg);
   const bannersLayer = el("div", "lto-banners");
-  // Stacking, bottom to top: the strip and toasts, the dialogue, roll plates (they cover the dialogue for
+  // Stacking, bottom to top: toasts, the dialogue box, roll plates (they cover the dialogue for
   // their two seconds rather than the other way round, so a verdict is never hidden), floats, banners.
   root.append(defs, live, top, bottom, platesLayer, floatsLayer, bannersLayer);
   host.appendChild(root);
@@ -1233,16 +1639,6 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
   frameVars();
 
   // ---- state
-  /** The story strip: the lines on the board now, oldest first. A fading line stays in the list until it is gone. */
-  interface StripEntry {
-    line: DialogueLine;
-    node: HTMLElement;
-    fading: boolean;
-    epoch: number;
-  }
-  const strip: StripEntry[] = [];
-  /** The fade of the whole box, running while its last line leaves. */
-  let boxFade: Animation | null = null;
   let initState: { entries: readonly InitiativeEntry[]; activeId: string | null; round: number } = { entries: [], activeId: null, round: 1 };
   let recent: RecentFloat[] = [];
   let tier: "s" | "m" | "l" = "l";
@@ -1333,10 +1729,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
       relayoutQueued = false;
       if (destroyed) return;
       lastLayoutKey = layoutKey();
-      renderDialogue();
+      relayoutDialogue();
       renderInitiative();
-      if (narr && !narr.closed) renderNarration(narr);
-      enforceStripMax();
       if (menu) renderMenu(menu);
       if (loot) renderLoot(loot);
       for (const c of arrivals) renderArrival(c);
@@ -1685,7 +2079,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     const rootH = root.clientHeight;
     const tailPx = isPixel() ? PLATE_TAIL_PIXEL_PX : PLATE_TAIL_PX;
     const strip = safeTop();
-    const safeBottom = dlg.hidden && narrHost.childElementCount === 0 ? rootH - 8 : rootH - bottom.offsetHeight - 16;
+    const safeBottom = dlg.hidden ? rootH - 8 : rootH - bottom.offsetHeight - 16;
     const left = clamp(at.x - w / 2, 8, Math.max(8, rootW - w - 8));
     let above = true;
     let y = at.y - damageReach() - FLOAT_GAP_PX - tailPx - h;
@@ -1749,142 +2143,312 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     plateChain = plateChain.then(() => showPlate(at, readout, mine)).catch(() => {});
   }
 
-  // ---- dialogue
+  // ---- dialogue: the one box for story text. The queue is createDialogueQueue (pure); this draws it and runs its clock.
 
-  function lineNode(line: DialogueLine): HTMLElement {
-    const tone = line.tone ?? "plain";
-    const node = el("div", "lto-line");
-    node.dataset.ltoLine = "";
-    node.dataset.tone = tone;
-    if (line.speaker) node.dataset.speaker = line.speaker;
-    node.dataset.text = line.text;
-    if (isPixel()) {
-      node.append(srText(line.speaker ? `${line.speaker}: ${line.text}` : line.text));
-      const body = tone === "good" ? PX.good : tone === "bad" ? PX.bad : PX.ink;
-      const runs: PixelRun[] = [];
-      if (line.speaker) runs.push({ text: `${line.speaker}:`, color: PX.gold, weight: "bold" }, { text: " " });
-      runs.push({ text: line.text, color: body });
-      const ratio = deviceRatio();
-      const inner = Math.max(80, (dlgScroll.clientWidth || width - 40) - 8);
-      const canvas = px(runs, { scale: 2, shadow: PX.shade, maxWidth: wrapWidth(inner, 2, ratio) });
-      // Every entry is a whole number of text rows tall, so the box scrolls on row boundaries and never shows half a line.
-      // A row is what the text really takes: 20 CSS px only at whole ratios (see cssScale), and the scroll box's height follows it.
-      const row = (CELL_H + LINE_GAP) * cssScale(2, ratio);
-      root.style.setProperty("--lto-row", `${row}px`);
-      node.style.height = `${Number(canvas.dataset.lines ?? "1") * row}px`;
-      node.append(canvas);
-    } else {
-      if (line.speaker) node.append(el("b", undefined, line.speaker), srText(": "));
-      node.append(document.createTextNode(line.text));
-    }
-    return node;
-  }
-
-  /** Rebuild the strip for the current style and width (a resize, a style switch). Lines that were already leaving are dropped. */
-  function renderDialogue(): void {
-    for (let i = strip.length - 1; i >= 0; i--) if (strip[i]?.fading) strip.splice(i, 1);
-    boxFade?.cancel();
-    boxFade = null;
-    dlg.hidden = strip.length === 0;
-    if (strip.length === 0) {
-      dlgScroll.replaceChildren();
-      return;
-    }
-    frameDialogue();
-    for (const e of strip) e.node = lineNode(e.line);
-    dlgScroll.replaceChildren(...strip.map((e) => e.node));
-    dlgScroll.scrollTop = dlgScroll.scrollHeight;
-  }
+  /** The width of a storybook line is kept this much under the box, so a font that measures a hair wider never wraps in the browser. */
+  const DIALOGUE_SAFETY_PX = 8;
+  /** What the box drew last, so a frame that changes nothing touches nothing. */
+  let drawnLook = "";
+  let lastLook = "";
+  let drawnPage = "";
+  let drawnShown = -1;
+  let drawnMore: boolean | null = null;
+  let lineNodes: HTMLElement[] = [];
+  let fade: Animation | null = null;
+  let loopId = 0;
+  let loopLast = 0;
+  let textSpeed: TextSpeed = DEFAULT_TEXT_SPEED;
+  let roomKey = "";
+  let roomPx = 0;
 
   function frameDialogue(): void {
-    dlg.classList.remove("lto-fr", "fr-win", "fs1", "lto-plate");
-    if (isPixel()) frame(dlg, "win", tier === "s");
-    else dlg.classList.add("lto-plate");
+    dlgBox.classList.remove("lto-fr", "fr-win", "fs1", "lto-plate");
+    if (isPixel()) frame(dlgBox, "win", tier === "s");
+    else dlgBox.classList.add("lto-plate");
   }
 
-  /** Fade lines out until no more than the allowed number stay (see stripMaxLines): the oldest, ordinary ones first. */
-  function enforceStripMax(): void {
-    const live = strip.filter((e) => !e.fading);
-    const max = stripMaxLines(tier, !!narr && !narr.closed);
-    for (const i of stripOverflow(live.map((e) => !!e.line.sticky), max)) {
-      const e = live[i];
-      if (e) void retireLine(e, STRIP_EVICT_MS);
+  /** The width the box's text has, in CSS px, measured from the box itself (shown unseen for a moment when it is hidden). */
+  function dialogueRoom(): number {
+    const key = `${root.clientWidth}|${style}|${tier}|${deviceRatio()}`;
+    if (key === roomKey && roomPx > 0) return roomPx;
+    const wasHidden = dlg.hidden;
+    if (wasHidden) {
+      dlg.style.visibility = "hidden";
+      dlg.hidden = false;
     }
-  }
-
-  /** Fade one line and shrink it away. When it is the last one on the board the whole box goes with it. */
-  async function retireLine(entry: StripEntry, ms = STRIP_OUT_MS): Promise<void> {
-    if (destroyed || entry.fading || entry.epoch !== epoch || !strip.includes(entry)) return;
-    entry.fading = true;
-    const still = reduced();
-    const last = strip.every((e) => e.fading);
-    const h = entry.node.offsetHeight;
-    const out = still ? 120 : ms;
-    const ends: Promise<void>[] = [
-      play(
-        entry.node,
-        still ? [{ opacity: 1 }, { opacity: 0 }] : [{ opacity: 1, height: `${h}px` }, { opacity: 0, height: `${h}px`, offset: 0.7 }, { opacity: 0, height: "0px" }],
-        out,
-        "ease-in",
-      ),
-    ];
-    if (last) {
-      const fade = start(dlg, still ? [{ opacity: 1 }, { opacity: 0 }] : [{ opacity: 1, transform: "scale(1)" }, { opacity: 0, transform: "scale(0.92)" }], out, "ease-in");
-      boxFade = fade.anim;
-      ends.push(fade.done);
-    }
-    await Promise.all(ends);
-    // A clear(), a re-render or a newer line may have got there first.
-    const at = strip.indexOf(entry);
-    if (at < 0) return;
-    strip.splice(at, 1);
-    entry.node.remove();
-    if (strip.length === 0) {
-      boxFade?.cancel();
-      boxFade = null;
+    frameDialogue();
+    const w = dlgBody.clientWidth;
+    if (wasHidden) {
       dlg.hidden = true;
+      dlg.style.visibility = "";
     }
+    roomKey = key;
+    roomPx = w > 24 ? w : Math.max(80, (root.clientWidth || width) - 16 - 44);
+    return roomPx;
+  }
+
+  /** An entry's text as pages of lines that fit the box in the current text style and board width (see dialoguePages). */
+  function dialogueLayout(text: string): string[][] {
+    const per = dialogueLines(tier);
+    const room = dialogueRoom();
+    if (isPixel()) {
+      const ratio = deviceRatio();
+      return dialoguePages(normalizeText(text), (s) => textWidth(s), wrapWidth(room - 2 * cssScale(2, ratio), 2, ratio), per);
+    }
+    return dialoguePages(text, (s) => ctxWidth(s, DIALOGUE_FONT, 7.6), room - DIALOGUE_SAFETY_PX, per);
+  }
+
+  const dq: DialogueQueue = createDialogueQueue({ layout: dialogueLayout, reading: (chars) => stripHoldMs(chars, reduced()) });
+
+  function renderDialogueTag(speaker: string): void {
+    const label = speaker.length > NARRATION_TAG_MAX ? `${speaker.slice(0, NARRATION_TAG_MAX - 1)}.` : speaker;
+    dlgTag.classList.remove("lto-fr", "fr-gold", "fs1");
+    dlgTag.replaceChildren();
+    if (isPixel()) {
+      frame(dlgTag, "gold", true);
+      dlgTag.append(px(label.toUpperCase(), { scale: 2, weight: "bold", color: PX.gold, shadow: PX.shade }));
+    } else {
+      dlgTag.textContent = label;
+    }
+    dlgMore.replaceChildren();
+    if (isPixel()) dlgMore.append(spriteCanvas(CARET_DOWN, { o: PX.dark, C: FRAMES.gold.L }, 2));
+  }
+
+  /** Draw the entry on show: its tag, the part of its page printed so far, and the "more" marker. Does nothing when there is none. */
+  function renderDialogue(): void {
+    const v = dq.view();
+    if (!v || destroyed) return;
+    if (fade) {
+      fade.cancel();
+      fade = null;
+    }
+    const appearing = dlg.hidden;
+    dlg.hidden = false;
+    const pixel = isPixel();
+    const look = `${style}|${tier}|${deviceRatio()}|${v.id}|${v.speaker}`;
+    if (look !== drawnLook) {
+      drawnLook = look;
+      frameDialogue();
+      renderDialogueTag(v.speaker);
+      drawnPage = "";
+      drawnMore = null;
+    }
+    const lines = v.pages[v.page] ?? [];
+    let reflow = appearing || look !== lastLook;
+    lastLook = look;
+    dlgBody.dataset.tone = v.tone;
+    if (v.thinking) {
+      if (drawnPage !== "dots") {
+        const dots = el("span", "lto-dlg-dots");
+        dots.setAttribute("role", "img");
+        dots.setAttribute("aria-label", `${v.speaker} is thinking`);
+        dots.append(el("i"), el("i"), el("i"));
+        dlgBody.replaceChildren(dots);
+        dlgBody.style.height = "";
+        lineNodes = [];
+        drawnPage = "dots";
+        drawnShown = -1;
+        reflow = true;
+      }
+    } else {
+      const pageSig = `${v.id}|${v.page}|${v.tone}|${lines.join("\n")}`;
+      const samePage = drawnPage === pageSig;
+      if (!samePage) reflow = true;
+      if (pixel) {
+        const ratio = deviceRatio();
+        const row = (CELL_H + LINE_GAP) * cssScale(2, ratio);
+        dlgBody.style.height = `${lines.length * row}px`;
+        if (!samePage || drawnShown !== v.shown) {
+          const part = lines.join("\n").slice(0, v.shown);
+          const colour = v.tone === "good" ? PX.good : v.tone === "bad" ? PX.bad : PX.ink;
+          dlgBody.replaceChildren(...(part === "" ? [] : [px(part, { scale: 2, color: colour, shadow: PX.shade })]));
+        }
+      } else {
+        if (!samePage || lineNodes.length !== lines.length) {
+          dlgBody.replaceChildren();
+          lineNodes = lines.map(() => {
+            const d = el("div", "lto-dlg-line");
+            dlgBody.append(d);
+            return d;
+          });
+          dlgBody.style.height = `${lines.length * 1.45}em`;
+        }
+        if (!samePage || drawnShown !== v.shown) {
+          let left = v.shown;
+          lines.forEach((l, i) => {
+            const node = lineNodes[i];
+            if (node) node.textContent = l.slice(0, Math.max(0, left));
+            left -= l.length + 1;
+          });
+        }
+      }
+      drawnPage = pageSig;
+      drawnShown = v.shown;
+    }
+    if (drawnMore !== v.more) {
+      drawnMore = v.more;
+      dlgMore.hidden = !v.more;
+    }
+    dlg.dataset.speaker = v.speaker;
+    dlg.dataset.text = v.text;
+    dlg.dataset.tone = v.tone;
+    dlg.dataset.page = String(v.page + 1);
+    dlg.dataset.pages = String(Math.max(1, v.pages.length));
+    dlg.dataset.queued = String(v.queued);
+    dlg.dataset.shown = String(v.shown);
+    dlg.dataset.complete = String(v.complete);
+    dlg.dataset.thinking = String(v.thinking);
+    dlg.dataset.more = String(v.more);
+    const hint = !v.complete ? "click to show all of it" : v.more ? "click for more" : v.open ? "" : "click to close";
+    dlg.title = hint ? hint.charAt(0).toUpperCase() + hint.slice(1) : "";
+    dlg.setAttribute("aria-label", hint ? `${v.speaker}, ${hint}` : v.speaker);
+    if (appearing && !reduced() && typeof dlg.animate === "function") {
+      void play(dlg, [{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "translateY(0)" }], DIALOGUE_IN_MS, "ease-out");
+    }
+    if (reflow) layoutLoot();
+  }
+
+  /** The box goes: a short fade, then hidden (unless a newer entry arrived meanwhile and took it back). */
+  function fadeOutDialogue(): void {
+    if (destroyed || dlg.hidden) return;
+    const a = start(dlg, [{ opacity: 1 }, { opacity: 0 }], reduced() ? 120 : DIALOGUE_OUT_MS, "ease-in");
+    fade = a.anim;
+    void a.done.then(() => {
+      if (destroyed || fade !== a.anim) return;
+      fade = null;
+      if (dq.view()) return;
+      dlg.hidden = true;
+      drawnLook = "";
+      layoutLoot();
+    });
+  }
+
+  function cancelLoop(): void {
+    if (loopId === 0) return;
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(loopId);
+    window.clearTimeout(loopId);
+    loopId = 0;
+  }
+
+  /** The typewriter's clock: one frame at a time while a box is up. */
+  function loopStep(now: number): void {
+    loopId = 0;
+    if (destroyed) return;
+    const dt = Math.min(250, Math.max(0, now - loopLast));
+    loopLast = now;
+    const r = dq.tick(dt);
+    if (r.closed) {
+      fadeOutDialogue();
+      return;
+    }
+    if (r.changed) renderDialogue();
+    if (dq.needsTick()) loopId = typeof requestAnimationFrame === "function" ? requestAnimationFrame(loopStep) : window.setTimeout(() => loopStep(performance.now()), 33);
+  }
+
+  /** Run the clock if there is something for it to do (it stops by itself while a box only waits for a click). */
+  function runClock(): void {
+    if (loopId !== 0 || !dq.needsTick()) return;
+    loopLast = performance.now();
+    loopId = typeof requestAnimationFrame === "function" ? requestAnimationFrame(loopStep) : window.setTimeout(() => loopStep(performance.now()), 33);
+  }
+
+  /** After the queue changed: draw what is on show now and keep the clock running (or fade the box when nothing is left). */
+  function afterQueueChange(): void {
+    if (destroyed) return;
+    dq.setSpeed(reduced() ? "instant" : textSpeed);
+    if (!dq.view()) {
+      cancelLoop();
+      fadeOutDialogue();
+      return;
+    }
+    renderDialogue();
+    runClock();
+  }
+
+  /** Cut the pages again for the board as it is now (a resize, another text style), keeping the reader's place. */
+  function relayoutDialogue(): void {
+    roomKey = "";
+    drawnLook = "";
+    dq.relayout();
+    if (dq.view()) renderDialogue();
+    runClock();
+  }
+
+  /** A press on the box: finish the page, or the next page, or the next entry, or close. False when there is no box to press. */
+  function pressDialogue(): boolean {
+    if (destroyed || !dq.view()) return false;
+    const r = dq.press();
+    if (r === "close") {
+      cancelLoop();
+      fadeOutDialogue();
+    } else afterQueueChange();
+    return true;
   }
 
   function say(line: DialogueLine): void {
     if (destroyed) return;
+    const id = dq.push({ speaker: line.speaker, text: line.text, tone: line.tone, sticky: line.sticky });
+    if (id === null) return;
     announce(line.speaker ? `${line.speaker}: ${line.text}` : line.text);
-    // A newer line saves the box from a fade that was only waiting on the old last line.
-    boxFade?.cancel();
-    boxFade = null;
-    if (dlg.hidden) {
-      dlg.hidden = false;
-      frameDialogue();
-    }
-    const entry: StripEntry = { line, node: lineNode(line), fading: false, epoch };
-    strip.push(entry);
-    dlgScroll.appendChild(entry.node);
-    dlgScroll.scrollTop = dlgScroll.scrollHeight;
-    enforceStripMax();
-    if (!reduced() && typeof entry.node.animate === "function") {
-      void play(entry.node, [{ opacity: 0, transform: "translateY(5px)" }, { opacity: 1, transform: "translateY(0)" }], 160, "ease-out");
-    }
-    if (!line.sticky) {
-      const chars = (line.speaker ? line.speaker.length + 2 : 0) + line.text.length;
-      void wait(stripHoldMs(chars, reduced())).then(() => {
-        if (!destroyed && entry.epoch === epoch) void retireLine(entry);
-      });
-    }
+    afterQueueChange();
   }
 
   function dismissStory(opts: { stickyOnly?: boolean } = {}): void {
     if (destroyed) return;
-    for (const e of strip.filter((x) => !x.fading && (!opts.stickyOnly || x.line.sticky))) void retireLine(e);
+    if (dq.dismiss(opts) > 0) afterQueueChange();
   }
 
-  // A click (or Enter, Space, Escape on the focused strip) sends the lines away; the bench's own keys never see those presses.
-  dlg.addEventListener("click", () => dismissStory());
+  function setTextSpeed(next: TextSpeed): void {
+    textSpeed = textSpeedOf(next);
+    dq.setSpeed(reduced() ? "instant" : textSpeed);
+  }
+
+  // A click (or Enter or Space on the focused box) is a press; Escape sends the whole box away. The board's own keys never see those presses.
+  dlg.addEventListener("click", () => void pressDialogue());
   dlg.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" && e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
     e.stopPropagation();
-    dismissStory();
+    if (e.key === "Escape") dismissStory();
+    else pressDialogue();
   });
+
+  /** A DM narration entry: "..." until its text starts, then the typewriter follows the stream. See NarrationHandle. */
+  function narrate(opts: { speaker?: string; text: string; full?: boolean }): NarrationHandle {
+    const dead: NarrationHandle = { update() {}, done() {}, close() {}, setSpeaker() {} };
+    if (destroyed) return dead;
+    let text = opts.text ?? "";
+    let speaker = opts.speaker?.trim() || "DM";
+    const id = dq.push({ speaker, text, open: true });
+    if (id === null) return dead;
+    let finished = false;
+    afterQueueChange();
+    return {
+      update(t: string): void {
+        if (finished) return;
+        text = t;
+        dq.setText(id, t);
+        afterQueueChange();
+      },
+      done(): void {
+        if (finished) return;
+        finished = true;
+        dq.finish(id);
+        if (text.trim() !== "" && !destroyed) announce(`${speaker}: ${text}`);
+        afterQueueChange();
+      },
+      close(): void {
+        finished = true;
+        dq.drop(id);
+        afterQueueChange();
+      },
+      setSpeaker(name: string): void {
+        speaker = name.trim() || "DM";
+        dq.setSpeaker(id, speaker);
+        afterQueueChange();
+      },
+    };
+  }
 
   // ---- initiative strip
 
@@ -1994,152 +2558,6 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     await done;
     if (anim && fades.get(node) === anim) fades.delete(node);
     if (node.isConnected && Number(node.dataset.lease ?? "0") === lease) node.remove();
-  }
-
-  // ---- DM narration
-
-  /** One narration box: the tag and the framed body are built once, and renderNarration fills them for the current style. */
-  interface Narr {
-    node: HTMLElement;
-    tag: HTMLElement;
-    box: HTMLElement;
-    body: HTMLElement;
-    speaker: string;
-    text: string;
-    /** done() was called: the text is complete. */
-    done: boolean;
-    /** Dismissed, replaced or cleared: nothing more is drawn. The text is still kept, so done() can announce it. */
-    closed: boolean;
-    announced: boolean;
-    renderQueued: boolean;
-    epoch: number;
-  }
-  let narr: Narr | null = null;
-  const narrAlive = (n: Narr): boolean => !destroyed && n.epoch === epoch && !n.closed && narr === n;
-
-  function renderNarration(n: Narr): void {
-    const pixel = isPixel();
-    // Keep the reader at the newest line while text streams in, unless they have scrolled up.
-    const stick = n.body.childElementCount === 0 || n.body.scrollHeight - n.body.scrollTop - n.body.clientHeight < 14;
-    n.node.dataset.text = n.text;
-    n.node.dataset.speaker = n.speaker;
-    n.node.dataset.thinking = String(n.text === "");
-    n.node.setAttribute("aria-label", `${n.speaker} narration`);
-    n.box.classList.remove("lto-fr", "fr-gold", "fs1", "lto-plate");
-    n.tag.classList.remove("lto-fr", "fr-gold", "fs1");
-    n.tag.replaceChildren();
-    const label = n.speaker.length > NARRATION_TAG_MAX ? `${n.speaker.slice(0, NARRATION_TAG_MAX - 1)}.` : n.speaker;
-    if (pixel) {
-      frame(n.box, "gold", tier === "s");
-      frame(n.tag, "gold", true);
-      n.tag.append(px(label.toUpperCase(), { scale: 2, weight: "bold", color: PX.gold, shadow: PX.shade }));
-    } else {
-      n.box.classList.add("lto-plate");
-      n.tag.textContent = label;
-    }
-    // A row is what the text really takes at this ratio (see cssScale), so the box shows whole rows and never half a line.
-    if (pixel) n.node.style.setProperty("--lto-nrow", `${(CELL_H + LINE_GAP) * cssScale(2, deviceRatio())}px`);
-    if (n.text === "") {
-      const dots = el("span", "lto-narr-dots");
-      dots.setAttribute("role", "img");
-      dots.setAttribute("aria-label", `${n.speaker} is thinking`);
-      dots.append(el("i"), el("i"), el("i"));
-      n.body.replaceChildren(dots);
-    } else if (pixel) {
-      const ratio = deviceRatio();
-      // The scrollbar gutter and a little air come off the width the text may use.
-      const inner = Math.max(80, (n.body.clientWidth || (root.clientWidth || width) - 48) - 12);
-      n.body.replaceChildren(srText(n.text), px(n.text, { scale: 2, color: PX.ink, shadow: PX.shade, maxWidth: wrapWidth(inner, 2, ratio) }));
-    } else {
-      n.body.textContent = n.text;
-    }
-    // Written text (`full`) is read from its first word; a reply that streams in is followed to its newest line.
-    if (stick && n.node.dataset.full === undefined) n.body.scrollTop = n.body.scrollHeight;
-  }
-
-  function queueNarrationRender(n: Narr): void {
-    if (n.renderQueued) return;
-    if (typeof requestAnimationFrame !== "function") {
-      renderNarration(n);
-      return;
-    }
-    n.renderQueued = true;
-    requestAnimationFrame(() => {
-      n.renderQueued = false;
-      if (narrAlive(n)) renderNarration(n);
-    });
-  }
-
-  /** Take a narration box down: a quick fade, then gone. Does nothing if it is already closed or was replaced. */
-  async function retireNarration(n: Narr, ms: number): Promise<void> {
-    if (!narrAlive(n)) return;
-    n.closed = true;
-    await play(n.node, [{ opacity: 1 }, { opacity: 0 }], reduced() ? 120 : ms);
-    if (narr === n) {
-      narr = null;
-      delete root.dataset.narrating;
-    }
-    n.node.remove();
-  }
-
-  function narrate(opts: { speaker?: string; text: string; full?: boolean }): NarrationHandle {
-    const dead: NarrationHandle = { update() {}, done() {}, close() {} };
-    if (destroyed) return dead;
-    // A new narration replaces the old one at once (a fading one included).
-    narrHost.replaceChildren();
-    if (narr) narr.closed = true;
-    const node = el("div", "lto-narr");
-    node.dataset.ltoNarration = "";
-    // `full`: written text that is read from its first word (an adventure's own beat), not a reply that streams in: the box grows to hold all of it.
-    if (opts.full) node.dataset.full = "";
-    node.tabIndex = 0;
-    node.setAttribute("role", "group");
-    node.title = "Click to dismiss";
-    const tag = el("div", "lto-narr-tag");
-    const box = el("div", "lto-narr-box");
-    const body = el("div", "lto-narr-body");
-    box.append(body);
-    node.append(tag, box);
-    const n: Narr = { node, tag, box, body, speaker: opts.speaker?.trim() || "DM", text: opts.text ?? "", done: false, closed: false, announced: false, renderQueued: false, epoch };
-    narr = n;
-    root.dataset.narrating = "1";
-    narrHost.append(node);
-    renderNarration(n);
-    enforceStripMax();
-    const closeNow = (): void => void retireNarration(n, NARRATION_CLOSE_MS);
-    node.addEventListener("click", closeNow);
-    node.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" && e.key !== "Enter" && e.key !== " ") return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeNow();
-    });
-    if (reduced()) void play(node, [{ opacity: 0 }, { opacity: 1 }], 120);
-    else void play(node, [{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "translateY(0)" }], NARRATION_IN_MS, "ease-out");
-    return {
-      update(text: string): void {
-        if (n.done) return;
-        n.text = text;
-        if (narrAlive(n)) queueNarrationRender(n);
-      },
-      done(): void {
-        if (n.done) return;
-        n.done = true;
-        if (n.text !== "" && !n.announced && !destroyed && n.epoch === epoch) {
-          n.announced = true;
-          announce(`${n.speaker}: ${n.text}`);
-        }
-        if (!narrAlive(n)) return;
-        // The text is complete: draw it now (a render may still be queued), then give the reader their time.
-        renderNarration(n);
-        if (n.text === "") {
-          void retireNarration(n, NARRATION_CLOSE_MS);
-          return;
-        }
-        void wait(narrationHoldMs(n.text.length)).then(() => retireNarration(n, NARRATION_OUT_MS));
-      },
-      close: closeNow,
-    };
   }
 
   // ---- context menu
@@ -3124,13 +3542,12 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     return { close: () => closeScreen(s) };
   }
 
-  // ---- the arrival cards: a location's name and read-aloud, a scene's title and opening
+  // ---- the arrival banners: a place's name or a scene's title. Their words go to the dialogue box, not to a second box here.
 
   interface ArrivalCard {
     kind: "location" | "scene";
     node: HTMLElement;
     title: string;
-    text: string;
     closed: boolean;
     epoch: number;
   }
@@ -3141,20 +3558,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
   top.insertBefore(cardsHost, toasts);
 
   function renderArrival(c: ArrivalCard): void {
-    const pixel = isPixel();
     c.node.replaceChildren();
-    if (pixel) c.node.style.setProperty("--lto-nrow", `${(CELL_H + LINE_GAP) * cssScale(2, deviceRatio())}px`);
-    ribbon(c.node, c.title, c.kind === "location" ? "turn" : "initiative", { pxMax: 3, sbMax: tier === "s" ? 24 : 30 });
-    if (c.text) {
-      const box = el("div", "lto-narr-box");
-      c.node.append(box);
-      if (pixel) frame(box, c.kind === "location" ? "gold" : "blue", tier === "s");
-      else box.classList.add("lto-plate");
-      const body = el("div", "lto-narr-body");
-      box.append(body);
-      if (pixel) body.append(srText(c.text), px(c.text, { scale: 2, color: PX.ink, shadow: PX.shade, maxWidth: wrapWidth(roomOf(body, 14), 2, deviceRatio()) }));
-      else body.textContent = c.text;
-    }
+    ribbon(c.node, c.title, c.kind === "location" ? "turn" : "initiative", { pxMax: 2, sbMax: tier === "s" ? 20 : 26 });
   }
 
   function dropArrival(c: ArrivalCard): void {
@@ -3182,22 +3587,25 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     const text = (textIn ?? "").trim();
     if (!title && !text) return;
     for (const old of arrivals.filter((a) => a.kind === kind)) dropArrival(old);
-    const node = el("div", "lto-narr lto-loc");
+    const node = el("div", "lto-arrival");
     node.dataset.ltoCard = kind;
     node.dataset.text = title;
+    // Kept as data for the hooks; it is drawn only in the dialogue box.
     node.dataset.readAloud = text;
     node.tabIndex = 0;
     node.setAttribute("role", "group");
     node.setAttribute("aria-label", `${title}, activate to dismiss`);
     node.title = "Click to dismiss";
-    const c: ArrivalCard = { kind, node, title: title || (kind === "scene" ? "A new scene" : "A new place"), text, closed: false, epoch };
+    const c: ArrivalCard = { kind, node, title: title || (kind === "scene" ? "A new scene" : "A new place"), closed: false, epoch };
     // A scene card stands above a location card: the new scene is what is happening.
     if (kind === "scene") cardsHost.prepend(node);
     else cardsHost.append(node);
     arrivals.push(c);
     cardsHost.hidden = false;
     renderArrival(c);
-    announce(text ? `${c.title}. ${text}` : c.title);
+    announce(c.title);
+    // The words go in the dialogue box: a place speaks under its own name, a scene's opening is the DM's.
+    if (text) say({ speaker: kind === "location" ? c.title : "DM", text });
     const closeNow = (): void => void retireArrival(c, NARRATION_CLOSE_MS);
     node.addEventListener("click", closeNow);
     node.addEventListener("keydown", (e) => {
@@ -3209,7 +3617,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (reduced()) void play(node, [{ opacity: 0 }, { opacity: 1 }], 120);
     else void play(node, [{ opacity: 0, transform: "translateY(-8px)" }, { opacity: 1, transform: "translateY(0)" }], NARRATION_IN_MS, "ease-out");
     layoutLoot();
-    void wait(locationHoldMs(text.length)).then(() => retireArrival(c, NARRATION_OUT_MS));
+    void wait(locationHoldMs(0)).then(() => retireArrival(c, NARRATION_OUT_MS));
   }
 
   function locationCard(o: { name: string; readAloud: string }): void {
@@ -3245,14 +3653,17 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     arrivals.length = 0;
     cardsHost.replaceChildren();
     cardsHost.hidden = true;
-    narrHost.replaceChildren();
-    if (narr) narr.closed = true;
-    narr = null;
-    delete root.dataset.narrating;
-    dlgScroll.replaceChildren();
+    cancelLoop();
+    dq.clear();
+    fade = null;
+    dlgBody.replaceChildren();
+    dlgMore.hidden = true;
     dlg.hidden = true;
-    strip.length = 0;
-    boxFade = null;
+    drawnLook = "";
+    drawnPage = "";
+    drawnShown = -1;
+    drawnMore = null;
+    lineNodes = [];
     initState = { entries: [], activeId: null, round: 1 };
     renderInitiative();
     live.replaceChildren();
@@ -3266,9 +3677,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (destroyed || next === style) return;
     style = next;
     applyStyleClass();
-    renderDialogue();
+    relayoutDialogue();
     renderInitiative();
-    if (narr && !narr.closed) renderNarration(narr);
     if (menu) renderMenu(menu);
     if (loot) renderLoot(loot);
     for (const c of arrivals) renderArrival(c);
@@ -3287,7 +3697,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     internals.delete(api);
   }
 
-  const api: Overlay = { setStyle, banner, float, rollPlate, say, dismissStory, narrate, initiative, toast, contextMenu, lootWindow, startScreen, startHero, locationCard, sceneCard, endingCard, clear, destroy };
+  const api: Overlay = { setStyle, banner, float, rollPlate, say, dismissStory, narrate, setTextSpeed, advanceStory: pressDialogue, initiative, toast, contextMenu, lootWindow, startScreen, startHero, locationCard, sceneCard, endingCard, clear, destroy };
   internals.set(api, { host, root });
   applyStyleClass();
   measure();
@@ -3468,12 +3878,26 @@ export interface HudState {
    * objectives with a tick on the done ones, and the last few beats. `recent` is oldest first, like the log; the tab shows the newest first.
    */
   journal?: HudJournal;
+  /** The game's settings. With it the HUD has a "Settings" tab (text speed, text style, who rolls the dice, zoom); see HudSettings. */
+  settings?: HudSettings;
   /** A small line under the export button in the Saves drawer: "Saved.", "Copied to the clipboard.", or why it did not work. */
   exportStatus?: string;
   /** Show a second button, "Copy adventure JSON", beside the export one (the fallback when the file cannot be saved). Pressing it calls onAction("export-copy"). */
   exportCopy?: boolean;
 }
-export type DrawerTab = "pack" | "journal" | "log" | "saves";
+/**
+ * What the Settings tab shows and sets. Pressing a choice calls onAction("set:<key>:<value>"): set:textSpeed:slow|normal|fast|instant,
+ * set:textStyle:pixel|storybook, set:rollMyself:true|false, set:zoom:auto|1|2|3|4. The HUD changes nothing itself: the host applies
+ * the setting and renders the state again.
+ */
+export interface HudSettings {
+  textSpeed: TextSpeed;
+  textStyle: TextStyle;
+  rollMyself: boolean;
+  /** The board zoom 1 to 4, or null for "Auto" (the window picks from the screen). */
+  zoom: number | null;
+}
+export type DrawerTab = "pack" | "journal" | "log" | "saves" | "settings";
 export interface Hud {
   setStyle(style: TextStyle): void;
   render(state: HudState): void;
@@ -3570,6 +3994,7 @@ const HUD_CSS = `
 .lto-sb .lto-hud-opt-label{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .lto-hud-actions>.lto-hud-btn:last-child:nth-child(odd){grid-column:1/-1}
 .lto-hud-drawer-btns{display:grid;grid-template-columns:repeat(var(--n,3),minmax(0,1fr));gap:6px}
+.lto-hud-drawer-btns[data-cols="2"]>.lto-hud-tab:last-child:nth-child(odd){grid-column:1/-1}
 .lto-hud-tab{position:relative;min-height:36px;padding:4px 8px}
 .lto-px .lto-hud-tab{padding:4px 6px}
 .lto-hud-tab[data-new="true"]::after{position:absolute;top:2px;right:2px;width:7px;height:7px}
@@ -3588,6 +4013,11 @@ const HUD_CSS = `
 .lto-hud-load{min-height:34px;padding:4px 12px;justify-content:center}
 .lto-hud-row[data-lt-card]{cursor:pointer}
 .lto-hud-exportrow{display:flex;flex-wrap:wrap;gap:6px}
+.lto-hud-settingsview{display:flex;flex-direction:column;gap:10px;min-width:0}
+.lto-hud-setting{display:flex;flex-direction:column;gap:4px;min-width:0}
+.lto-hud-choices{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.lto-hud-choice{flex:1 1 auto;justify-content:center;min-height:38px;padding:4px 6px;text-align:center}
+.lto-px .lto-hud-choice canvas{display:block}
 .lto-hud-export{flex:1 1 auto;justify-content:center;min-height:38px;padding:4px 12px;text-align:center}
 .lto-px .lto-hud-export canvas{display:block}
 .lto-hud-export-status{min-width:0;padding:0 2px}
@@ -3610,7 +4040,7 @@ const HUD_CSS = `
 
 // ---- the HUD's pure helpers (unit tested) ------------------------------------
 
-export const DRAWER_TABS: readonly DrawerTab[] = ["pack", "journal", "log", "saves"];
+export const DRAWER_TABS: readonly DrawerTab[] = ["pack", "journal", "log", "saves", "settings"];
 
 /** The drawer after a tab's button is pressed: the open tab closes it, any other tab opens (switching from the one showing). */
 export function toggleDrawerTab(open: DrawerTab | null, tab: DrawerTab): DrawerTab | null {
@@ -3764,7 +4194,7 @@ export function createHud(
   tabs.dataset.hudTabs = "";
   tabs.hidden = true;
   tabs.setAttribute("role", "toolbar");
-  tabs.setAttribute("aria-label", "Pack, journal, log and saves");
+  tabs.setAttribute("aria-label", "Pack, journal, log, saves and settings");
   const noticeBox = el("div", "lto-hud-notices");
   noticeBox.dataset.hudNotices = "";
   noticeBox.hidden = true;
@@ -3842,7 +4272,7 @@ export function createHud(
     return node;
   };
 
-  const has = (s: HudState | null): Record<DrawerTab, boolean> => ({ pack: !!s?.pack, journal: !!s?.journal, log: !!s?.log, saves: !!s?.saves });
+  const has = (s: HudState | null): Record<DrawerTab, boolean> => ({ pack: !!s?.pack, journal: !!s?.journal, log: !!s?.log, saves: !!s?.saves, settings: !!s?.settings });
   /** The tab that really shows now. */
   const openTab = (): DrawerTab | null => usableDrawerTab(drawer, has(last));
 
@@ -3977,13 +4407,14 @@ export function createHud(
 
   // ---- the drawer: Pack, Log, Saves
 
-  const TAB_WORDS: Record<DrawerTab, { label: string; key?: string }> = { pack: { label: "Pack", key: "I" }, journal: { label: "Journal", key: "J" }, log: { label: "Log", key: "L" }, saves: { label: "Saves" } };
+  const TAB_WORDS: Record<DrawerTab, { label: string; key?: string }> = { pack: { label: "Pack", key: "I" }, journal: { label: "Journal", key: "J" }, log: { label: "Log", key: "L" }, saves: { label: "Saves" }, settings: { label: "Settings" } };
 
   function drawTabs(s: HudState, tab: DrawerTab | null): void {
     const have = has(s);
     const shown = DRAWER_TABS.filter((t) => have[t]);
     tabs.hidden = shown.length === 0;
     tabs.style.setProperty("--n", String(drawerColumns(shown.length)));
+    tabs.dataset.cols = String(drawerColumns(shown.length));
     tabs.replaceChildren();
     for (const t of shown) {
       const { label, key } = TAB_WORDS[t];
@@ -4027,6 +4458,45 @@ export function createHud(
     else if (tab === "journal" && s.journal) drawerBox.append(journalView(s.journal, keep.sameTab ? keep.scroll : 0));
     else if (tab === "log" && s.log) drawerBox.append(logView(s.log, keep));
     else if (tab === "saves" && s.saves) drawerBox.append(savesView(s.saves, keep.sameTab ? keep.scroll : 0, { status: s.exportStatus, copy: s.exportCopy }));
+    else if (tab === "settings" && s.settings) drawerBox.append(settingsView(s.settings));
+  }
+
+  /** The Settings tab: a heading and a row of choices for each setting, the one in use pressed. Each press goes to onAction("set:<key>:<value>"). */
+  function settingsView(cur: HudSettings): HTMLElement {
+    const wrap = el("div", "lto-hud-settingsview");
+    wrap.dataset.hudSettingsView = "";
+    wrap.setAttribute("role", "group");
+    wrap.setAttribute("aria-label", "Settings");
+    for (const g of SETTING_CHOICES) {
+      const box = el("div", "lto-hud-setting");
+      box.dataset.setting = g.key;
+      box.append(text(g.label, "seclabel"));
+      const row = el("div", "lto-hud-choices");
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", g.label);
+      const now = settingValue(cur, g.key);
+      for (const c of g.choices) {
+        const on = c.value === now;
+        const btn = el("button", "lto-hud-btn lto-hud-choice");
+        btn.type = "button";
+        btn.dataset.settingChoice = `${g.key}:${c.value}`;
+        btn.dataset.settingValue = c.value;
+        btn.setAttribute("aria-label", `${g.label}: ${c.label}`);
+        btn.setAttribute("aria-pressed", String(on));
+        if (isPixel()) {
+          btn.classList.add("lto-fr", "fs1", on ? "fr-gold" : "fr-win");
+          btn.append(px(c.label, { scale: 2, weight: "bold", color: on ? PX.gold : PX.ink, outline: PX.dark }));
+        } else {
+          btn.append(el("span", undefined, c.label));
+          if (on) btn.classList.add("is-open");
+        }
+        btn.onclick = () => onAction(`set:${g.key}:${c.value}`);
+        row.append(btn);
+      }
+      box.append(row);
+      wrap.append(box);
+    }
+    return wrap;
   }
 
   /** The pack list: a heading per section, its items under it, scrolling inside when long. Items in `freshNow` get a brief highlight. */
@@ -4284,7 +4754,7 @@ export function createHud(
     const at = document.activeElement as HTMLElement | null;
     let focusKey: [string, string] | null = null;
     if (at && root.contains(at)) {
-      for (const k of ["action", "option", "hudDrawer", "save", "export", "exportCopy"]) {
+      for (const k of ["action", "option", "hudDrawer", "save", "export", "exportCopy", "settingChoice"]) {
         const v = at.dataset[k];
         if (v !== undefined) {
           focusKey = [k, v];
@@ -4530,8 +5000,8 @@ export interface OverlayDemoOptions {
 /**
  * Cycles every element once: the initiative strip, each banner, floating
  * numbers of every kind, two stacked roll plates, dialogue in each tone, a
- * toast. It leaves the story lines (until they fade) and the strip on screen (call clear()
- * to wipe them). Resolves when the last banner is gone.
+ * toast. It queues a few story entries in the dialogue box (click it to read on) and leaves
+ * the initiative strip on screen (call clear() to wipe them). Resolves when the last banner is gone.
  */
 export async function overlayDemo(overlay: Overlay, opts: OverlayDemoOptions = {}): Promise<void> {
   const inner = internals.get(overlay);

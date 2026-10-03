@@ -27,7 +27,13 @@ import type { RenderManifest, SpriteAsset } from "../render/canvasRenderer";
 import { isUsableSpriteSize } from "../render/spritePixels";
 import { isRenderOnlyAssetId } from "../render/wallProfiles";
 import { isOpaqueAssetId } from "../world/visibility";
-import type { AvailableAssetIds } from "../dm/promptBuilder";
+
+/** Every tile, token and prop id a library has, as flat lists (the ids a written adventure or the DM may name). */
+export interface AvailableAssetIds {
+  tiles: string[];
+  tokens: string[];
+  props: string[];
+}
 
 export interface LoadedManifest {
   template: LtTemplate;
@@ -35,7 +41,7 @@ export interface LoadedManifest {
   world: AssetManifest;
   /** Feeds render/canvasRenderer.ts's renderCell. */
   render: RenderManifest;
-  /** Feeds dm/promptBuilder.ts's DmPromptArgs.availableAssetIds directly. */
+  /** The flat id lists the DM is offered. */
   availableAssetIds: AvailableAssetIds;
 }
 
@@ -104,7 +110,7 @@ export function adaptPalette(wirePalette: unknown): string[] {
  * Turn `ltAssetManifest`'s flat `assets` array (one entry per sprite,
  * `kind` telling tile/token/prop apart) plus its palette into the three
  * things the rest of the game actually consumes: the two manifest shapes
- * above, and the flat id lists dm/promptBuilder.ts's AvailableAssetIds
+ * above, and the flat id lists (AvailableAssetIds) the DM
  * needs (the DM is only allowed to reference an id that's actually here).
  */
 export function adaptManifest(wire: WireManifest): LoadedManifest {

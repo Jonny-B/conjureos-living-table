@@ -212,10 +212,14 @@ export interface TableHeroes {
 // ---- settings ---------------------------------------------------------------
 
 export type TextStyle = "pixel" | "storybook";
+/** How fast story text prints in the dialogue box: about 22, 45 and 90 characters a second, or a whole page at once. Reduced motion always prints at once. */
+export type TextSpeed = "slow" | "normal" | "fast" | "instant";
 export type RoomChoice = "one" | "two";
 
 export interface TableSettings {
   textStyle: TextStyle;
+  /** How fast the dialogue box prints story text. Default "normal". */
+  textSpeed: TextSpeed;
   /** True: the player throws their own dice. False: the tray rolls for them. */
   rollMyself: boolean;
   diceSkin: string;

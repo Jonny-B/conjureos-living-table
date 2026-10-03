@@ -52,11 +52,17 @@ import {
   OPTION_LABEL_MAX,
   PREMISE_MAX,
   PROBLEMS_SHOWN,
-  STRIP_MAX_LINES,
+  DEFAULT_TEXT_SPEED,
+  SETTING_CHOICES,
+  TEXT_SPEEDS,
+  TEXT_SPEED_CPS,
   authorBadge,
   clipOptionLabel,
+  createDialogueQueue,
   createHud,
   createOverlay,
+  dialogueLines,
+  dialoguePages,
   draftNote,
   drawerColumns,
   endingBannerKind,
@@ -75,27 +81,33 @@ import {
   menuEntryName,
   menuPlacement,
   menuWidth,
-  narrationHoldMs,
   newPackItems,
   nextWriteStage,
   noticeOverflow,
   optionsLayout,
   overlayDemo,
   packItemText,
+  paginateLines,
   premiseReady,
   problemLines,
+  sameStory,
+  settingValue,
   sizeTier,
   startCards,
   startRooms,
   stripHoldMs,
-  stripMaxLines,
-  stripOverflow,
+  textSpeedOf,
   titleLines,
   toggleDrawerTab,
+  typedChars,
   usableDrawerTab,
   verdictWords,
   wrapClamp,
+  wrapWords,
   writingLine,
+  type DialogueQueue,
+  type DialogueView,
+  type HudSettings,
   type DrawerTab,
   type WriteStage,
   type PackItem,
@@ -526,15 +538,6 @@ test("verdictWords uses the game's own sentences", () => {
   assert.equal(verdictWords({ hit: false, fumble: true }), "NATURAL 1, AUTOMATIC MISS");
 });
 
-test("narrationHoldMs: about 2.5 s plus 45 ms a character, capped at 12 s", () => {
-  assert.equal(narrationHoldMs(0), 2500);
-  assert.equal(narrationHoldMs(100), 7000);
-  assert.equal(narrationHoldMs(211), 11995);
-  assert.equal(narrationHoldMs(212), 12000);
-  assert.equal(narrationHoldMs(5000), 12000);
-  assert.equal(narrationHoldMs(-4), 2500);
-});
-
 test("newPackItems: new by text, nothing new on the first look", () => {
   const before = [
     { label: "Worn", items: ["Leather armor"] },
@@ -700,41 +703,22 @@ test("stripHoldMs: 3.5 s plus 40 ms a character, capped at 9 s; longer under red
   }
 });
 
-test("stripMaxLines: two story lines, one on a phone while the DM narration is up", () => {
-  assert.equal(STRIP_MAX_LINES, 2);
-  assert.equal(stripMaxLines("l", false), 2);
-  assert.equal(stripMaxLines("l", true), 2);
-  assert.equal(stripMaxLines("m", true), 2);
-  assert.equal(stripMaxLines("s", false), 2);
-  assert.equal(stripMaxLines("s", true), 1);
-});
-
-test("stripOverflow: the oldest fades first, and a kept line outlasts an ordinary one", () => {
-  assert.deepEqual(stripOverflow([], 2), []);
-  assert.deepEqual(stripOverflow([false, false], 2), []);
-  assert.deepEqual(stripOverflow([false, false, false], 2), [0]);
-  assert.deepEqual(stripOverflow([false, false, false, false], 2), [0, 1]);
-  assert.deepEqual(stripOverflow([true, false, false], 2), [1], "the sticky line stays, the oldest ordinary one goes");
-  assert.deepEqual(stripOverflow([true, true, false], 2), [2], "a sticky line is never chosen while an ordinary one is left");
-  assert.deepEqual(stripOverflow([true, true, true], 2), [0], "all sticky: the oldest still goes");
-  assert.deepEqual(stripOverflow([false, false], 1), [0], "one line on a phone under the narration");
-  assert.deepEqual(stripOverflow([false], 0), [0]);
-});
-
 test("toggleDrawerTab and usableDrawerTab: one tab at a time, the open one closes it, a missing part shows nothing", () => {
-  assert.deepEqual(DRAWER_TABS, ["pack", "journal", "log", "saves"]);
+  assert.deepEqual(DRAWER_TABS, ["pack", "journal", "log", "saves", "settings"]);
   assert.equal(toggleDrawerTab(null, "pack"), "pack");
   assert.equal(toggleDrawerTab("pack", "pack"), null);
   assert.equal(toggleDrawerTab("pack", "log"), "log");
   assert.equal(toggleDrawerTab("log", "saves"), "saves");
   assert.equal(toggleDrawerTab("saves", "saves"), null);
-  const all = { pack: true, journal: true, log: true, saves: true };
+  const all = { pack: true, journal: true, log: true, saves: true, settings: true };
   assert.equal(usableDrawerTab("log", all), "log");
   assert.equal(usableDrawerTab(null, all), null);
-  assert.equal(usableDrawerTab("log", { pack: true, journal: true, log: false, saves: true }), null);
-  assert.equal(usableDrawerTab("journal", { pack: true, journal: false, log: true, saves: true }), null);
+  assert.equal(usableDrawerTab("log", { pack: true, journal: true, log: false, saves: true, settings: true }), null);
+  assert.equal(usableDrawerTab("journal", { pack: true, journal: false, log: true, saves: true, settings: true }), null);
   assert.equal(usableDrawerTab("journal", all), "journal");
-  assert.equal(usableDrawerTab("saves", { pack: false, journal: false, log: false, saves: false }), null);
+  assert.equal(usableDrawerTab("saves", { pack: false, journal: false, log: false, saves: false, settings: false }), null);
+  assert.equal(usableDrawerTab("settings", { pack: true, journal: false, log: true, saves: true, settings: false }), null);
+  assert.equal(usableDrawerTab("settings", all), "settings");
   // Pressing every tab twice in turn walks open, closed, open, closed.
   let open: DrawerTab | null = null;
   const seen: (DrawerTab | null)[] = [];
@@ -744,7 +728,7 @@ test("toggleDrawerTab and usableDrawerTab: one tab at a time, the open one close
       seen.push(open);
     }
   }
-  assert.deepEqual(seen, ["pack", null, "journal", null, "log", null, "saves", null]);
+  assert.deepEqual(seen, ["pack", null, "journal", null, "log", null, "saves", null, "settings", null]);
 });
 
 test("clipOptionLabel: one run of words, at most 32 characters, cut with two dots", () => {
@@ -1131,6 +1115,25 @@ test("drawerColumns: a tab each up to three, two columns of two for four", () =>
   assert.equal(drawerColumns(1), 1);
   assert.equal(drawerColumns(3), 3);
   assert.equal(drawerColumns(4), 2);
+  assert.equal(drawerColumns(5), 2, "five tabs: two columns, the last one across the row");
+  assert.equal(drawerColumns(6), 2);
+});
+
+test("the Settings tab: four settings, each with its choices, and the one in use is found by value", () => {
+  assert.deepEqual(SETTING_CHOICES.map((g) => g.key), ["textSpeed", "textStyle", "rollMyself", "zoom"]);
+  assert.deepEqual(SETTING_CHOICES[0]!.choices.map((c) => c.value), [...TEXT_SPEEDS], "every text speed is offered, in order");
+  const now: HudSettings = { textSpeed: "fast", textStyle: "storybook", rollMyself: false, zoom: null };
+  assert.equal(settingValue(now, "textSpeed"), "fast");
+  assert.equal(settingValue(now, "textStyle"), "storybook");
+  assert.equal(settingValue(now, "rollMyself"), "false");
+  assert.equal(settingValue(now, "zoom"), "auto");
+  assert.equal(settingValue({ ...now, zoom: 3, rollMyself: true }, "zoom"), "3");
+  assert.equal(settingValue({ ...now, rollMyself: true }, "rollMyself"), "true");
+  for (const g of SETTING_CHOICES) {
+    for (const probe of [now, { ...now, zoom: 2, rollMyself: true, textStyle: "pixel" as const, textSpeed: "slow" as const }]) {
+      assert.equal(g.choices.filter((c) => c.value === settingValue(probe, g.key)).length, 1, `${g.key} has exactly one choice in use`);
+    }
+  }
 });
 
 test("journal helpers: objectives tidied, progress counted, recent beats newest first and capped", () => {
@@ -1154,6 +1157,349 @@ test("the adventure screens are part of the Overlay and the Hud, and need no DOM
   assert.equal(typeof createHud, "function");
   const text = readFileSync(new URL("../src/games/livingtable/table/ui/overlay.ts", import.meta.url), "utf8");
   for (const name of ["startScreen", "startHero", "locationCard", "sceneCard", "endingCard", "toggleJournal"]) assert.ok(text.includes(name), name);
+});
+
+// ---- the dialogue box: one queue for all story text ---------------------------------------------------------------------
+
+test("text speeds: slow, normal and fast print about 22, 45 and 90 characters a second, instant prints a page at once, anything else is normal", () => {
+  assert.deepEqual([...TEXT_SPEEDS], ["slow", "normal", "fast", "instant"]);
+  assert.equal(TEXT_SPEED_CPS.slow, 22);
+  assert.equal(TEXT_SPEED_CPS.normal, 45);
+  assert.equal(TEXT_SPEED_CPS.fast, 90);
+  assert.equal(TEXT_SPEED_CPS.instant, Number.POSITIVE_INFINITY);
+  assert.equal(DEFAULT_TEXT_SPEED, "normal");
+  assert.equal(typedChars(1000, "slow"), 22);
+  assert.equal(typedChars(1000, "normal"), 45);
+  assert.equal(typedChars(1000, "fast"), 90);
+  assert.equal(typedChars(100, "normal"), 4);
+  assert.equal(typedChars(0, "fast"), 0);
+  assert.equal(typedChars(-50, "fast"), 0);
+  assert.equal(typedChars(1, "instant"), Number.POSITIVE_INFINITY);
+  for (const s of TEXT_SPEEDS) assert.equal(textSpeedOf(s), s);
+  for (const bad of [undefined, null, "", "turbo", 3, {}]) assert.equal(textSpeedOf(bad), "normal");
+});
+
+test("dialogueLines: three rows on a phone-width board, four everywhere else, never more", () => {
+  assert.equal(dialogueLines("s"), 3);
+  assert.equal(dialogueLines("m"), 4);
+  assert.equal(dialogueLines("l"), 4);
+});
+
+test("wrapWords: no line is wider than the box, every word survives in order, a word is never split unless it is wider than a whole line", () => {
+  const len = (s: string) => s.length;
+  const text = "The goblin snarls and lunges at you with a rusty dagger, shrieking something about shiny things.";
+  for (let width = 10; width <= 60; width += 3) {
+    const lines = wrapWords(text, len, width);
+    for (const l of lines) assert.ok(len(l) <= width, `"${l}" fits ${width}`);
+    assert.equal(lines.join(" "), text, "every word, in order, nothing cut");
+  }
+  assert.deepEqual(wrapWords("one two\nthree", len, 40), ["one two", "three"], "a newline always breaks");
+  assert.deepEqual(wrapWords("  spaced   out \n\n  more ", len, 40), ["spaced out", "more"], "spaces collapse and blank lines go");
+  assert.deepEqual(wrapWords("", len, 10), []);
+  assert.deepEqual(wrapWords("abcdefghij", len, 4), ["abcd", "efgh", "ij"], "a word wider than a line has to break between letters");
+  assert.deepEqual(wrapWords("go abcdefghij now", len, 4), ["go", "abcd", "efgh", "ij", "now"]);
+});
+
+test("paginateLines and dialoguePages: pages of at most N lines, in order, with nothing lost", () => {
+  assert.deepEqual(paginateLines(["a", "b", "c", "d", "e"], 2), [["a", "b"], ["c", "d"], ["e"]]);
+  assert.deepEqual(paginateLines([], 3), []);
+  assert.deepEqual(paginateLines(["a", "b"], 0), [["a"], ["b"]], "at least a line a page");
+  const text = "The cellar door is open. A cold draft carries the smell of wet stone and something older. Far below, a rat scratches.";
+  for (const per of [1, 3, 4]) {
+    for (const width of [12, 24, 40]) {
+      const pages = dialoguePages(text, (s) => s.length, width, per);
+      for (const pg of pages) {
+        assert.ok(pg.length >= 1 && pg.length <= per, "a page never has more lines than the box");
+        for (const l of pg) assert.ok(l.length <= width);
+      }
+      assert.equal(pages.flat().join(" "), text);
+    }
+  }
+});
+
+test("sameStory: equal ignoring case and punctuation, or a long text wholly inside another; short or different texts are not the same", () => {
+  assert.equal(sameStory("The door creaks open.", "the door creaks open"), true);
+  assert.equal(sameStory("Hey! Thief!", "hey thief"), true);
+  const place = "A low cellar smelling of damp straw and old apples, with a stout door to the north.";
+  assert.equal(sameStory(place, `The DM says: ${place} You hear scratching.`), true, "the DM restating the read-aloud");
+  assert.equal(sameStory("Hello there", "Hello there, friend of the road"), false, "a short text inside a longer one is not enough");
+  assert.equal(sameStory("The goblin lunges.", "The skeleton lunges."), false);
+  assert.equal(sameStory("", ""), false);
+  assert.equal(sameStory("...", "!!!"), false);
+});
+
+/** A queue that cuts pages by character count, with a clock the test moves. */
+function makeQueue(width = 20, perPage = 2, extra: { maxQueued?: number; reading?: (n: number) => number } = {}): { q: DialogueQueue; clock: { t: number }; setWidth(w: number): void } {
+  const clock = { t: 0 };
+  let w = width;
+  const q = createDialogueQueue({ layout: (t) => dialoguePages(t, (s) => s.length, w, perPage), now: () => clock.t, ...extra });
+  return { q, clock, setWidth: (n) => void (w = n) };
+}
+const must = (v: DialogueView | null): DialogueView => {
+  assert.ok(v, "a box is showing");
+  return v;
+};
+
+test("the typewriter prints one character at a time at the chosen speed, and a press finishes the page", () => {
+  const { q } = makeQueue(40, 3);
+  q.setSpeed("normal");
+  assert.ok(q.push({ speaker: "Marta", text: "Welcome to the Rat Cellar, friend." }) !== null);
+  assert.equal(must(q.view()).shown, 0);
+  assert.equal(must(q.view()).complete, false);
+  assert.equal(must(q.view()).speaker, "Marta");
+  assert.equal(q.tick(100).changed, true);
+  assert.equal(must(q.view()).shown, 4, "45 characters a second: 4 after a tenth of a second");
+  assert.equal(q.tick(5).changed, false, "a frame that adds no whole character changes nothing");
+  q.tick(500);
+  assert.equal(must(q.view()).shown, 27);
+  assert.equal(q.press(), "finish", "a click while printing shows the rest at once");
+  assert.equal(must(q.view()).complete, true);
+  assert.equal(must(q.view()).shown, must(q.view()).pageChars);
+  assert.equal(q.press(), "close", "a click on the finished last page closes the box");
+  assert.equal(q.view(), null);
+  assert.equal(q.press(), "none");
+});
+
+test("instant prints the whole page on the first tick; slow is slower than fast", () => {
+  const a = makeQueue(40, 3);
+  a.q.setSpeed("instant");
+  a.q.push({ text: "All of it, at once." });
+  a.q.tick(1);
+  assert.equal(must(a.q.view()).complete, true);
+  const slow = makeQueue(80, 3);
+  const fast = makeQueue(80, 3);
+  slow.q.setSpeed("slow");
+  fast.q.setSpeed("fast");
+  for (const x of [slow, fast]) x.q.push({ text: "x".repeat(70) });
+  slow.q.tick(1000);
+  fast.q.tick(1000);
+  assert.ok(must(slow.q.view()).shown < must(fast.q.view()).shown);
+});
+
+test("a long entry is split into pages that fit, never scrolls, and every page waits for a click", () => {
+  const { q } = makeQueue(20, 2, { reading: () => 1e9 });
+  q.setSpeed("instant");
+  q.push({ text: "The cellar door is open and a cold draft carries the smell of wet stone from far below." });
+  q.tick(1);
+  const v0 = must(q.view());
+  assert.ok(v0.pages.length >= 3, "more than one page");
+  for (const pg of v0.pages) assert.ok(pg.length <= 2, "a page holds at most the box's rows");
+  const seen: string[] = [];
+  for (let i = 0; i < v0.pages.length; i++) {
+    const v = must(q.view());
+    assert.equal(v.page, i);
+    assert.equal(v.complete, true);
+    assert.equal(v.more, i < v0.pages.length - 1, "the marker shows while another page waits, and not on the last");
+    seen.push(...(v.pages[i] ?? []));
+    q.tick(60000);
+    assert.equal(must(q.view()).page, i, "it never moves past an unread page by itself");
+    if (i < v0.pages.length - 1) {
+      assert.equal(q.press(), "page");
+      q.tick(1);
+    }
+  }
+  assert.equal(seen.join(" "), "The cellar door is open and a cold draft carries the smell of wet stone from far below.");
+  assert.equal(q.press(), "close");
+});
+
+test("entries show one at a time and move on only by a press; the marker shows while one is waiting", () => {
+  const { q } = makeQueue(40, 3);
+  q.setSpeed("instant");
+  q.push({ speaker: "DM", text: "You enter the cellar." });
+  q.push({ speaker: "Rat", text: "Squeak squeak squeak squeak." });
+  q.push({ speaker: "Marta", text: "Mind the stairs, dear." });
+  q.tick(1);
+  assert.equal(must(q.view()).speaker, "DM");
+  assert.equal(must(q.view()).queued, 2);
+  assert.equal(must(q.view()).more, true);
+  q.tick(100000);
+  assert.equal(must(q.view()).speaker, "DM", "nothing advances by itself while more is queued");
+  assert.equal(q.press(), "next");
+  assert.equal(must(q.view()).speaker, "Rat");
+  assert.equal(must(q.view()).complete, false, "the next entry prints from its first character");
+  q.tick(1);
+  assert.equal(q.press(), "next");
+  assert.equal(must(q.view()).speaker, "Marta");
+  assert.equal(must(q.view()).more, false, "the last one has nothing waiting");
+  assert.equal(q.press(), "finish");
+  assert.equal(q.press(), "close");
+  assert.equal(q.size(), 0);
+});
+
+test("only the last entry fades after its reading time; a sticky one waits for a click", () => {
+  const { q } = makeQueue(40, 3, { reading: () => 5000 });
+  q.setSpeed("instant");
+  q.push({ text: "A short one." });
+  q.tick(1);
+  assert.equal(q.tick(4000).closed, false);
+  assert.equal(q.tick(1500).closed, true, "it closes once its reading time has passed");
+  assert.equal(q.view(), null);
+  q.push({ text: "You are down.", sticky: true });
+  q.tick(1);
+  assert.equal(q.tick(60000).closed, false, "a sticky entry never fades by itself");
+  assert.equal(must(q.view()).sticky, true);
+  assert.equal(q.dismiss({ stickyOnly: true }), 1);
+  assert.equal(q.view(), null);
+  // The clock does not run while something else is queued behind it.
+  q.push({ text: "First thing to read." });
+  q.tick(1);
+  q.tick(4000);
+  q.push({ text: "Second thing to read." });
+  assert.equal(q.tick(60000).closed, false, "with another entry waiting nothing times out");
+});
+
+test("the clock runs only while there is something for it to do: text printing, or the last entry counting down", () => {
+  const { q } = makeQueue(40, 3);
+  assert.equal(q.needsTick(), false, "an empty box needs no clock");
+  q.push({ text: "Something to read here." });
+  assert.equal(q.needsTick(), true, "text is printing");
+  q.setSpeed("instant");
+  q.tick(1);
+  assert.equal(q.needsTick(), true, "all printed and last: the reading time counts down");
+  q.push({ text: "And one more behind it." });
+  assert.equal(q.needsTick(), false, "an entry waiting for a click needs no clock");
+  q.press();
+  q.tick(1);
+  q.press();
+  q.push({ text: "You are down.", sticky: true });
+  q.tick(1);
+  assert.equal(q.needsTick(), false, "a kept entry waits for a click as well");
+  const open = q.push({ text: "", open: true })!;
+  q.dismiss();
+  q.push({ text: "", open: true });
+  assert.equal(q.needsTick(), false, "the dots need no clock; the stream's own updates wake it");
+  q.setText(open, "ignored: that entry was dismissed");
+  assert.equal(q.needsTick(), false);
+});
+
+test("a streaming entry shows the dots, then follows the text as it arrives, and waits on the stream rather than closing", () => {
+  const { q } = makeQueue(40, 3);
+  q.setSpeed("instant");
+  const id = q.push({ speaker: "DM", text: "", open: true });
+  assert.ok(id !== null);
+  assert.equal(must(q.view()).thinking, true, "no text yet: the dots");
+  assert.equal(q.press(), "none");
+  q.setText(id, "The");
+  assert.equal(must(q.view()).thinking, true, "a word still being typed is held back until it is whole");
+  q.setText(id, "The gob");
+  assert.equal(must(q.view()).pages.flat().join(" "), "The", "and so is the last word of a longer text");
+  q.setText(id, "The goblin snarls ");
+  q.tick(1);
+  assert.equal(must(q.view()).thinking, false);
+  assert.equal(must(q.view()).pages.flat().join(" "), "The goblin snarls");
+  assert.equal(must(q.view()).complete, true);
+  assert.equal(q.press(), "none", "all printed but the stream is still open: nothing to close yet");
+  assert.equal(q.tick(60000).closed, false, "an open entry never times out");
+  q.setText(id, "The goblin snarls and lunges at you with a rusty knife in its fist.");
+  q.finish(id);
+  q.tick(1);
+  assert.equal(must(q.view()).pages.flat().join(" "), "The goblin snarls and lunges at you with a rusty knife in its fist.");
+  assert.equal(must(q.view()).open, false);
+});
+
+test("a stream that ends with nothing in it leaves no entry; the speaker can change while it streams", () => {
+  const { q } = makeQueue();
+  const id = q.push({ text: "", open: true })!;
+  q.setSpeaker(id, "  Old Marta ");
+  assert.equal(must(q.view()).speaker, "Old Marta");
+  q.setSpeaker(id, "   ");
+  assert.equal(must(q.view()).speaker, "DM");
+  q.finish(id);
+  assert.equal(q.view(), null);
+  assert.equal(q.push({ text: "   " }), null, "nothing to say is not an entry");
+  const b = q.push({ text: "words", open: true })!;
+  q.drop(b);
+  assert.equal(q.size(), 0);
+});
+
+test("duplicates are dropped: the same words waiting, or just shown, or the DM restating a place; the same words much later are fine", () => {
+  const { q, clock } = makeQueue(40, 3);
+  q.setSpeed("instant");
+  const place = "A low cellar smelling of damp straw and old apples, with a stout door to the north.";
+  assert.ok(q.push({ speaker: "The Rat Cellar", text: place }) !== null);
+  assert.equal(q.push({ speaker: "DM", text: place }), null, "waiting already");
+  assert.equal(q.push({ speaker: "DM", text: `You arrive. ${place.toLowerCase()}` }), null, "the DM restating it");
+  assert.ok(q.push({ speaker: "DM", text: "Something skitters in the dark." }) !== null);
+  assert.equal(q.size(), 2);
+  q.tick(1);
+  q.press();
+  q.tick(1);
+  q.press();
+  q.press();
+  assert.equal(q.size(), 0);
+  clock.t += 1000;
+  assert.equal(q.push({ text: "Something skitters in the dark." }), null, "just shown a second ago");
+  clock.t += 3000;
+  assert.ok(q.push({ text: "Something skitters in the dark." }) !== null, "said again much later: it is a new entry");
+});
+
+test("a streamed reply that turns out to repeat the entry ahead of it, or the one just shown, is dropped when it ends", () => {
+  const { q, clock } = makeQueue(40, 3, { reading: () => 1e9 });
+  q.setSpeed("instant");
+  const first = q.push({ text: "", open: true })!;
+  q.setText(first, "The rats watch you in silence.");
+  q.finish(first);
+  q.tick(1);
+  const second = q.push({ text: "", open: true })!;
+  q.setText(second, "The rats watch you in silence.");
+  assert.equal(q.size(), 2, "while it streams it is an entry like any other");
+  q.finish(second);
+  assert.equal(q.size(), 1, "whole, it repeats the one ahead of it and goes");
+  assert.equal(q.press(), "close");
+  clock.t += 500;
+  const third = q.push({ text: "", open: true })!;
+  q.setText(third, "The rats watch you in silence.");
+  q.finish(third);
+  assert.equal(q.view(), null, "and one that repeats what was just shown goes too");
+});
+
+test("too many waiting: the oldest waiting ones go first, the one on show and a streaming one stay", () => {
+  const { q } = makeQueue(40, 3, { maxQueued: 3 });
+  const ids = ["one", "two", "three", "four", "five", "six"].map((t) => q.push({ text: `Entry number ${t} is here.` }));
+  assert.ok(ids.every((i) => i !== null));
+  assert.equal(q.size(), 3);
+  assert.equal(must(q.view()).text, "Entry number one is here.", "the one on show is never taken away");
+  const streaming = createDialogueQueue({ layout: (t) => dialoguePages(t, (s) => s.length, 40, 3), maxQueued: 2 });
+  streaming.push({ text: "On show now." });
+  streaming.push({ text: "", open: true });
+  streaming.push({ text: "Another waiting entry." });
+  assert.equal(streaming.size(), 2);
+  assert.equal(streaming.view()?.text, "On show now.");
+  assert.equal(streaming.dismiss(), 2);
+});
+
+test("a resize or a change of text style cuts the pages again and the reader keeps their place", () => {
+  const { q, setWidth } = makeQueue(40, 2);
+  q.setSpeed("instant");
+  const text = "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango.";
+  q.push({ text });
+  q.tick(1);
+  const wide = must(q.view());
+  assert.ok(wide.pages.length >= 2);
+  q.press();
+  q.tick(1);
+  setWidth(16);
+  q.relayout();
+  const narrow = must(q.view());
+  assert.ok(narrow.pages.length > wide.pages.length, "narrower means more pages");
+  assert.ok(narrow.shown > 0 || narrow.page > 0, "the reader is not sent back to the start");
+  for (const pg of narrow.pages) for (const l of pg) assert.ok(l.length <= 16);
+  assert.equal(narrow.pages.flat().join(" "), text, "nothing lost in the new layout");
+});
+
+test("clear and dismiss: everything goes, or only the kept ones", () => {
+  const { q } = makeQueue();
+  q.push({ text: "Plain one." });
+  q.push({ text: "Kept one.", sticky: true });
+  q.push({ text: "Plain two." });
+  assert.equal(q.dismiss({ stickyOnly: true }), 1);
+  assert.equal(q.size(), 2);
+  assert.equal(q.dismiss(), 2);
+  assert.equal(q.view(), null);
+  q.push({ text: "Again." });
+  q.clear();
+  assert.equal(q.size(), 0);
+  assert.equal(q.view(), null);
 });
 
 // ---- hygiene ----------------------------------------------------------------

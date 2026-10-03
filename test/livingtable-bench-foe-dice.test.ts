@@ -1,6 +1,6 @@
 /**
- * Tests for the foe dice ladder (scripts/asset-bench/foeDice.ts) and the way the
- * bench's dice tray wears a foe's look for one throw (scripts/asset-bench/dice.ts):
+ * Tests for the foe dice ladder (src/games/livingtable/table/ui/foeDice.ts) and the way the
+ * bench's dice tray wears a foe's look for one throw (src/games/livingtable/table/ui/dice.ts):
  * which tier a challenge rating gets, that every bestiary creature (and the sci-fi
  * tokens) maps to a skin and a tray that exist, the undead and dragon accents, that
  * foe skins keep a legible numeral on every face of every die, and that a roll with
@@ -33,8 +33,8 @@ import {
   skinById,
   trayLookById,
   type DiceSkin,
-} from "../scripts/asset-bench/dice";
-import { FOE_TIER_WORDS, foeDiceFor, foeDiceForToken, tierForCr, type FoeTier } from "../scripts/asset-bench/foeDice";
+} from "../src/games/livingtable/table/ui/dice";
+import { FOE_TIER_WORDS, foeDiceFor, foeDiceForToken, tierForCr, type FoeTier } from "../src/games/livingtable/table/ui/foeDice";
 
 const beast = (id: string) => beastById(id) as NonNullable<ReturnType<typeof beastById>>;
 const skin = (id: string) => skinById(id) as DiceSkin;

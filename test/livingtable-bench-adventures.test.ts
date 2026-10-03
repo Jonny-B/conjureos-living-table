@@ -12,8 +12,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import bench, { ADVENTURE_RULES as R, PLAY_RULES as P } from "../scripts/asset-bench/assets";
-import { ADVENTURE_FILES } from "../scripts/asset-bench/adventuresData";
-import { buildDmInput, validateDmReply, validationContextFor } from "../scripts/asset-bench/dm";
+import { ADVENTURE_FILES } from "../src/games/livingtable/table/adventures/data";
+import { buildDmInput, validateDmReply, validationContextFor } from "../src/games/livingtable/table/dmCore";
 // @ts-expect-error a plain ES module with no types: the generator the bench build runs.
 import { buildModule } from "../scripts/asset-bench/gen-adventures.mjs";
 import { exitDestination } from "../src/games/livingtable/adventures/validate";

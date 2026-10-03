@@ -14,7 +14,7 @@
  */
 import { adventureBrief } from "../adventures/brief";
 import { allowedDmSteps } from "../adventures/progress";
-import { type Adventure, type Chassis, itemOf } from "../adventures/types";
+import { type Adventure, type Chassis, itemOf, sceneOf } from "../adventures/types";
 import { GEAR_ROLES, LOOT_CAP_LINE } from "../characters/equipmentTypes";
 import type { TemplateGenre } from "../characters/templates";
 import { packInfo } from "../inventory/itemInfo";
@@ -286,6 +286,41 @@ export function dmAdventureView(p: PlayState): DmSceneView["adventure"] | undefi
   };
 }
 
+/**
+ * The story text the player has read on screen since the DM last answered, oldest first, so the DM never says it twice. The log's "dm" lines
+ * are the DM's own answer (the last one marks where it stopped) and the story's beats; a place's read-aloud and a scene's opening are shown on
+ * a card and never logged, so they are read back from the adventure: on a new game, and again after a way out was taken. Undefined when
+ * nothing was shown, so the view (and the prompt) is what it was.
+ */
+export function dmShownStory(p: PlayState): string[] | undefined {
+  const lastAnswer = [...p.dmRecent].reverse().find((r) => r.who === "dm" && !r.text.startsWith("["))?.text;
+  let from = 0;
+  if (lastAnswer !== undefined) {
+    from = p.log.length;
+    for (let i = p.log.length - 1; i >= 0; i--) {
+      const l = p.log[i]!;
+      if (l.tone === "dm" && l.text.length > 0 && lastAnswer.includes(l.text)) {
+        from = i + 1;
+        break;
+      }
+    }
+  }
+  const since = p.log.slice(from);
+  const beats = since.filter((l) => l.tone === "dm").map((l) => l.text);
+  const arrived = lastAnswer === undefined || since.some((l) => /^You go through: /.test(l.text));
+  const out: string[] = [];
+  const a = adventureOf(p);
+  const loc = a ? currentLocation(p) : undefined;
+  if (a && loc && arrived) {
+    if (loc.readAloud) out.push(loc.readAloud);
+    const opening = p.progress ? sceneOf(a, p.progress.sceneId)?.opening : undefined;
+    if (opening) out.push(opening);
+  }
+  out.push(...beats);
+  const shown = out.map((t) => t.trim()).filter(Boolean).slice(-DM_RECENT_SHOWN);
+  return shown.length > 0 ? shown : undefined;
+}
+
 /** The whole scene for one DM call, rebuilt from the state every time. */
 export function dmViewFor(p: PlayState): DmSceneView {
   const kit = SCENE_KIT[p.template];
@@ -352,6 +387,7 @@ export function dmViewFor(p: PlayState): DmSceneView {
   else if (h.stable) conditions.push("stable at 0 hit points");
   const potions = p.potions;
   const adventure = dmAdventureView(p);
+  const shown = dmShownStory(p);
   return {
     template: p.template,
     cols: CELL_WIDTH,
@@ -402,6 +438,7 @@ export function dmViewFor(p: PlayState): DmSceneView {
     visibleToHero: `${inSight.length ? `ids in sight now: ${inSight.join(", ")}` : "no feature or creature in particular"}; the hero stands ${p.adventureId ? `in ${currentLocation(p)?.name ?? "the place"}` : `in the ${p.heroAt.x < DIVIDER_X ? "west" : "east"} room`}`,
     memory: [...p.dmMemory],
     recent: p.dmRecent.slice(-DM_RECENT_SHOWN),
+    ...(shown ? { shown } : {}),
     log: p.log.slice(-6).map((l) => l.text),
     assets: dmAssetsFor(p.template),
     // Only when there are any, so a scene without them reads exactly as it did.

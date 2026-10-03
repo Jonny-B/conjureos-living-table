@@ -125,6 +125,11 @@ export interface DmSceneView {
   memory: string[];
   /** Last exchanges, oldest first, capped by the caller. */
   recent: { who: "player" | "dm"; text: string }[];
+  /**
+   * The story text the player has read on screen since your last answer (a place's read-aloud on arrival, a scene opening, a beat of the
+   * story, a creature's words), oldest first, capped by the caller. Left out or empty renders nothing, so a view without it reads exactly as before.
+   */
+  shown?: string[];
   /** Last engine log lines (attacks, loot, doors). */
   log: string[];
   /** Ids the DM may place. */
@@ -316,6 +321,9 @@ export const DM_LIMITS = Object.freeze({
   harmSides: [4, 6, 8, 10] as readonly number[],
   maxHarmModifier: 4,
   maxAskChars: 500,
+  /** The story text already on the player's screen that the DM is shown (ALREADY SHOWN): how many entries, and how long each. */
+  maxShownLines: 5,
+  maxShownChars: 450,
   /** Suggested next moves per list; a longer list is trimmed, not refused. */
   maxOptions: 4,
   maxOptionLabel: 32,
@@ -1416,6 +1424,13 @@ function renderWorld(view: DmSceneView): string {
   out.push("");
   out.push("RECENT TABLE TALK (oldest first)");
   out.push(view.recent.length ? view.recent.map((r) => `${r.who === "player" ? "Player" : "DM"}: ${r.text}`).join("\n") : "(nothing yet)");
+  const shown = (view.shown ?? []).map((t) => playerLine(t, DM_LIMITS.maxShownChars)).filter(Boolean).slice(-DM_LIMITS.maxShownLines);
+  if (shown.length) {
+    out.push("");
+    out.push("ALREADY SHOWN (the story text on the player's screen right now, oldest first)");
+    out.push("The player has just read the lines under ALREADY SHOWN; do not repeat or paraphrase them; continue from them.");
+    for (const t of shown) out.push(`- ${t}`);
+  }
   out.push("");
   out.push("ENGINE LOG (what the rules engine just did)");
   out.push(view.log.length ? view.log.map((l) => `- ${l}`).join("\n") : "(nothing yet)");

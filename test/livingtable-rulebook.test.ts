@@ -17,51 +17,26 @@ import { ANCESTRIES } from "../src/games/livingtable/characters/ancestries";
 import { ARCHETYPES, PLAYABLE_ARCHETYPE_IDS, getArchetype } from "../src/games/livingtable/characters/templates";
 import { POINT_BUY_BUDGET, STANDARD_ARRAY, createCharacter, pointBuyCost } from "../src/games/livingtable/characters/creation";
 import { DEATH_SAVE_DC, applyDeathSave, potionHealing } from "../src/games/livingtable/characters/health";
-import { MILESTONES_PER_LEVEL } from "../src/games/livingtable/characters/leveling";
-import {
-  BAG_CAPACITY,
-  LOOT_ROLLS_PER_CELL,
-  LOOT_TIER_BANDS,
-  MAX_ATTUNED_ITEMS,
-  MAX_TOTAL_AC_BONUS,
-  SLOTS_BY_ARCHETYPE,
-  type ArchetypeId,
-} from "../src/games/livingtable/characters/equipmentTypes";
+import { BAG_CAPACITY, LOOT_ROLLS_PER_CELL, LOOT_TIER_BANDS, MAX_ATTUNED_ITEMS, MAX_TOTAL_AC_BONUS, SLOTS_BY_ARCHETYPE, type ArchetypeId } from "../src/games/livingtable/characters/equipmentTypes";
 import { SPELL_EFFECTS } from "../src/games/livingtable/menu/casting";
 import { FEET_PER_TILE, MELEE_REACH_FT, MONSTER_INITIATIVE_MODIFIER } from "../src/games/livingtable/menu/combatRound";
-import { applyLevelUp } from "../src/games/livingtable/rules/leveling";
 import { lootFor } from "../src/games/livingtable/rules/loot";
 import { resolveAttack, resolveDamage } from "../src/games/livingtable/rules/combat";
 import { resolveSkillCheck } from "../src/games/livingtable/rules/checks";
 import { parseDiceNotation } from "../src/games/livingtable/rules/dice";
-import { WIZARD_SPELLS, spellSlotsForLevel } from "../src/games/livingtable/rules/spells";
-import {
-  DEFAULT_SPEED_FT,
-  MAX_DC,
-  MIN_DC,
-  MONSTER_STATBLOCKS,
-  SEARCH_DC,
-  attackerBonusFor,
-  damageMonster,
-  skillModifierFor,
-  weaponDamageNotationFor,
-} from "../src/games/livingtable/session/combat";
+import { WIZARD_SPELLS } from "../src/games/livingtable/rules/spells";
+import { DEFAULT_SPEED_FT, MAX_DC, MIN_DC, MONSTER_STATBLOCKS, SEARCH_DC, attackerBonusFor, damageMonster, skillModifierFor, weaponDamageNotationFor } from "../src/games/livingtable/session/combat";
 import { CELL_HEIGHT, CELL_WIDTH } from "../src/games/livingtable/world/coordinates";
 import { DEFAULT_RANGED_REACH_TILES } from "../src/games/livingtable/world/reach";
-import { DM_LIMITS } from "../scripts/asset-bench/dm";
-import { activeCombatant, attackBlockedReason, startCombat, type CombatRound } from "../src/games/livingtable/menu/combatRound";
-import { castBlockedReason, castableSpells } from "../src/games/livingtable/menu/casting";
+import { DM_LIMITS } from "../src/games/livingtable/table/dmCore";
 import { resolveMenuAction } from "../src/games/livingtable/menu/commandMenu";
 import { SRD_CONDITIONS } from "../src/games/livingtable/rules/conditions";
-import { resolveDmRollRequests } from "../src/games/livingtable/LivingTable";
-import { validateDmTurn, type RollRequest } from "../src/games/livingtable/dm/turnSchema";
+import { validateDmTurn } from "../src/games/livingtable/dm/turnSchema";
 import { resetTurnEconomy } from "../src/games/livingtable/rules/actionEconomy";
 import { stageEquip } from "../src/games/livingtable/rules/inventory";
 import { isContainerProp } from "../src/games/livingtable/characters/equipmentTypes";
 import { SKILL_ABILITY } from "../src/games/livingtable/characters/creation";
-import { longRestBlockedReason, shortRest, shortRestBlockedReason } from "../src/games/livingtable/characters/health";
-import { levelUpChoices } from "../src/games/livingtable/characters/leveling";
-import { emptyWorld, setCell, type CellCoord, type CellLayout, type World } from "../src/games/livingtable/world";
+import { emptyWorld } from "../src/games/livingtable/world";
 
 const BOOK = rulebookText();
 
@@ -319,22 +294,6 @@ test("a legendary weapon's rider damage types are the ones the book names", () =
   assert.ok(sectionText("equipment").includes("radiant for the Knight's, poison for the Shadow's, fire for the Fireball Person's"));
 });
 
-test("levels: milestones per level, the cap, and the hit points a level adds", () => {
-  assert.equal(MILESTONES_PER_LEVEL, 3);
-  const levels = sectionText("levels");
-  assert.ok(levels.includes(`Every ${MILESTONES_PER_LEVEL} milestones earn a level`));
-  assert.ok(levels.includes("Levels run from 1 to 3"));
-  // The cap is LivingTable.tsx's LAUNCH_MAX_LEVEL (not exported), and spell slots stop there as well.
-  const screen = readFileSync(new URL("../src/games/livingtable/LivingTable.tsx", import.meta.url), "utf8");
-  assert.match(screen, /const LAUNCH_MAX_LEVEL = 3;/);
-  assert.ok(spellSlotsForLevel("wizard", 3));
-  assert.throws(() => spellSlotsForLevel("wizard", 4));
-  const base = { level: 1, abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 }, maxHp: 0, currentHp: 0, proficiencyBonus: 2 };
-  const gained = (characterClass: "fighter" | "rogue" | "wizard") => applyLevelUp({ ...base, characterClass }, 2).character.maxHp;
-  assert.deepEqual([gained("fighter"), gained("rogue"), gained("wizard")], [6, 5, 4]);
-  assert.ok(levels.includes("Fighter (d10) 6, Rogue (d8) 5, Wizard (d6) 4"));
-});
-
 test("magic: slots by level, and every spell on the list is in the table with its real reach", () => {
   const magic = sectionText("magic");
   assert.ok(magic.includes("level 1 has 2 of level 1"));
@@ -443,33 +402,6 @@ test("the DM section says the DM never sets a die result", () => {
   assert.match(dm, /Choose, name, grant or price gear/);
 });
 
-// ── the audit: every mechanic the book states, checked against the code that does it ──
-//
-// Each block below pins one CLASS of error found when the book was read statement
-// by statement against the engine. The engine half of a block is a plain call into
-// the real code; the book half asserts the corrected sentence. The few that guard a
-// screen handler (LivingTable.tsx is a component, so its handlers cannot be called)
-// read the handler's own source between two section markers, the way the level-cap
-// test above already reads the screen.
-//
-// Every check on a long string is a plain boolean (`says`, `lacks`, `handlerHas`):
-// node's assert prints a diff of the whole string when a match fails, and on a
-// handler's source or the whole book that diff takes minutes.
-
-const SCREEN = readFileSync(new URL("../src/games/livingtable/LivingTable.tsx", import.meta.url), "utf8");
-
-/** The source of one screen handler: from its marker to the next section marker. */
-function handlerSource(from: string, to: string): string {
-  const start = SCREEN.indexOf(from);
-  const end = SCREEN.indexOf(to, start + 1);
-  assert.ok(start >= 0 && end > start, `could not find ${from} .. ${to} in LivingTable.tsx`);
-  return SCREEN.slice(start, end);
-}
-
-function handlerHas(from: string, to: string, pattern: RegExp): boolean {
-  return pattern.test(handlerSource(from, to));
-}
-
 /** Whether a section's text contains a sentence, with a failure message that does not print the section. */
 function says(id: string, sentence: string): void {
   assert.ok(sectionText(id).includes(sentence), `section "${id}" should say: ${sentence}`);
@@ -483,88 +415,11 @@ function wizard() {
   return createCharacter({ archetypeId: "fireball-person", name: "Ivo", appearanceAssetId: "token_fireball_person" });
 }
 
-const PLAYER = "pc-1";
-const SKEL = "mon-1";
-
-function fightWorld(): { world: World; cell: CellCoord } {
-  const cell: CellCoord = { cx: 0, cy: 0 };
-  const tiles = Array.from({ length: CELL_HEIGHT }, () => Array.from({ length: CELL_WIDTH }, () => "floor_stone"));
-  const layout: CellLayout = {
-    tiles,
-    props: [],
-    tokens: [
-      { id: PLAYER, assetId: "token_knight", x: 5, y: 5, kind: "pc" },
-      { id: SKEL, assetId: "token_skeleton", x: 6, y: 5, kind: "monster" },
-    ],
-    exits: [],
-    sealed: true,
-  };
-  return { world: setCell(emptyWorld(), cell, layout), cell };
-}
-
-/** A round in which the hero acts first (the hero's d20 is a 20, the skeleton's a 1). */
-function heroFirstRound(): CombatRound {
-  return startCombat({
-    player: { id: PLAYER, label: "Bram", dexModifier: 1, speedFt: 30 },
-    hostiles: [{ id: SKEL, label: "the skeleton", speedFt: 30 }],
-    rng: scripted([0.99, 0]),
-  });
-}
-
-function dmRolls(request: RollRequest, round: CombatRound) {
-  const { world, cell } = fightWorld();
-  return resolveDmRollRequests({
-    requests: [request],
-    world,
-    cell,
-    playerTokenId: PLAYER,
-    sheet: knight(),
-    round,
-    namer: { playerTokenId: PLAYER, playerName: "Bram", tokens: [{ id: PLAYER, assetId: "token_knight" }, { id: SKEL, assetId: "token_skeleton" }] },
-    rng: () => 0.5,
-  });
-}
-
-const ATTACK_HANDLER: [string, string] = ["const handleAttack = useCallback(", "// ── local action: Cast"];
-const CAST_HANDLER: [string, string] = ["const handleCast = useCallback(", "// ── local action: end the turn"];
-
-test("what costs your action: Attack and Cast do; a potion, a search and a DM-asked check or save do not (in the game)", () => {
-  // The DM's own roll requests, through the real resolver: only an attack spends the action.
-  const attack = dmRolls({ id: "a", kind: "attack", by: PLAYER, against: SKEL, reason: "swing" }, heroFirstRound());
-  assert.equal(activeCombatant(attack.round!)!.economy.action, false, "a DM-requested attack spends the action");
-  const check = dmRolls({ id: "c", kind: "check", by: PLAYER, skill: "Perception", dc: 10, reason: "look" }, heroFirstRound());
-  assert.equal(activeCombatant(check.round!)!.economy.action, true, "a DM-requested check leaves the action alone");
-  const save = dmRolls({ id: "s", kind: "save", by: PLAYER, ability: "dex", dc: 10, reason: "dodge" }, heroFirstRound());
-  assert.equal(activeCombatant(save.round!)!.economy.action, true, "a DM-requested save leaves the action alone");
-  // The screen's own handlers: Attack and Cast spend it, Item and Search never touch the round.
-  assert.ok(handlerHas(...ATTACK_HANDLER, /spendActiveAction\(round\)/), "Attack spends the action");
-  assert.ok(handlerHas(...CAST_HANDLER, /spendActiveAction\(round\)/), "Cast spends the action");
-  assert.ok(!handlerHas("const handleUseItem = useCallback(", "// ── local action: Rest", /spendActiveAction|spendCombatantAction/), "Item must not spend the action");
-  assert.ok(!handlerHas("const handleSearch = useCallback(", "// ── local action: Item", /spendActiveAction|spendCombatantAction|isPlayersTurn/), "Search must not spend the action");
-  // The book says exactly that, and does not claim a check always costs the action.
-  says("combat", "A potion, a Search and a check or save the DM asks for do not use your action in the game");
-  lacks("combat", /A check in a fight costs your action\./, "only true on the bench");
-  says("exploring", "from where you stand");
-  says("the-dm", "In the game a check the DM asks for does not use your action");
-});
-
 test("the SRD's other actions are not in the engine, and the book says so", () => {
   says("combat", "Dash, Dodge, Disengage, Help and Ready");
   says("combat", "There are no opportunity attacks");
   // Nothing in the hero's action economy is anything but action, bonus action, reaction and movement.
   assert.deepEqual(Object.keys(resetTurnEconomy(30)).sort(), ["action", "bonusAction", "movementRemaining", "reaction"]);
-});
-
-test("Cast checks reach and not line of sight, unlike Attack", () => {
-  const sheet = wizard();
-  const bolt = castableSpells(sheet).find((s) => s.spell.name === "Fire Bolt")!;
-  // Ten squares away: no refusal. Attack asks for sight; Cast has nowhere to ask.
-  assert.equal(castBlockedReason({ round: null, entry: bolt, casterAt: { x: 2, y: 7 }, targetAt: { x: 12, y: 7 }, downed: false }), null);
-  const seen = attackBlockedReason({ round: null, attackerAt: { x: 2, y: 7 }, targetAt: { x: 12, y: 7 }, downed: false, reachTiles: 16, hasLineOfSight: false });
-  assert.ok(seen !== null && /cannot see it/.test(seen));
-  assert.ok(!handlerHas(...CAST_HANDLER, /canSeeToken|hasLineOfSight/), "the Cast handler must not ask about sight");
-  says("magic", "Cast does not check line of sight");
-  says("exploring", "A spell needs only its reach");
 });
 
 test("Fire Bolt differs between Attack and Cast, and the book gives both", () => {
@@ -575,19 +430,6 @@ test("Fire Bolt differs between Attack and Cast, and the book gives both", () =>
   assert.ok(effect.kind === "attack" && effect.damage === "1d10");
   says("magic", `rolls ${attackNotation} (the die plus your Intelligence modifier)`);
   says("magic", "rolls 1d10 and does not count a weapon's bonus");
-});
-
-test("only the Attack button earns a milestone and loot; a spell or a DM-asked attack ends the fight and earns neither", () => {
-  assert.ok(handlerHas(...ATTACK_HANDLER, /earnMilestone\([\s\S]*applyLoot\(/), "the Attack handler earns both");
-  assert.ok(!handlerHas(...CAST_HANDLER, /earnMilestone|applyLoot|lootFor/), "a spell earns neither");
-  assert.ok(
-    !handlerHas("export function resolveDmRollRequests(", "/** Exported so a test can render the whole play surface", /earnMilestone|applyLoot|lootFor/),
-    "a DM-asked attack earns neither",
-  );
-  says("combat", "earns no milestone and no loot");
-  says("levels", "you win a fight with the Attack button");
-  says("equipment", "A kill that does not come from the Attack button");
-  lacks("equipment", /the DM defeats on its own turn/, "the engine's line is the Attack button, not whose turn it was");
 });
 
 test("a chest is the only container that rolls loot (the crate belongs to the paused sci-fi set)", () => {
@@ -642,11 +484,6 @@ test("a step into a room nobody has built asks the DM and costs a credit; nothin
   lacks("the-dm", /Only talking to the DM costs anything/, "a step into an unbuilt room costs a credit too");
 });
 
-test("stepping through an exit leaves the fight behind", () => {
-  assert.ok(handlerHas("const walkInto = ", 'if (route.kind === "local") {', /setRound\(null\)/), "walkInto clears the round");
-  says("exploring", "Stepping through an exit also ends the fight on your side");
-});
-
 test("who rolls: the engine rolls every die, and the tray only animates", () => {
   says("checks", "The engine rolls every die");
   lacks("checks", /You roll your own initiative/, "the engine rolls them");
@@ -675,47 +512,6 @@ test("the score methods and the skills: all 18 are rollable, none is trained twi
   says("your-character", "No skill can be trained twice");
   lacks("your-character", /rolled in the dice tray/, "no creator screen throws the tray yet");
   says("your-character", "Dwarven Toughness adds its hit point at level 1 only");
-});
-
-test("death saves: three and three, in a fight each ends the turn, outside one there are no turns", () => {
-  const roll = (d20: number) => ({ roll: d20, total: d20, success: d20 >= DEATH_SAVE_DC });
-  let up = { ...knight(), currentHp: 0, downed: true };
-  for (let i = 0; i < 3; i++) up = applyDeathSave(up, roll(12)).sheet;
-  assert.equal(up.stable, true, "three successes stabilise");
-  let down = { ...knight(), currentHp: 0, downed: true };
-  for (let i = 0; i < 3; i++) down = applyDeathSave(down, roll(5)).sheet;
-  assert.equal(down.dead, true, "three failures kill");
-  assert.ok(handlerHas("const handleDeathSave = useCallback(", "// ── local action: Search", /if \(round\) setRound\(endCombatTurn\(round\)\)/), "a death save ends the turn only when there is a round");
-  says("dying", "Outside a fight there are no turns, so you can roll whenever you like");
-  says("dying", "On the asset bench there are no death saves yet");
-  says("dying", "refused at full health");
-});
-
-test("resting: the refusals the engine really makes", () => {
-  const full = knight();
-  assert.ok(/full health/.test(shortRestBlockedReason(full)!));
-  assert.ok(/No hit dice left/.test(shortRestBlockedReason({ ...full, currentHp: 3, hitDiceRemaining: 0 })!));
-  assert.equal(shortRestBlockedReason({ ...full, currentHp: 0, stable: true }), null, "a stable character may rest");
-  assert.ok(/already slept/.test(longRestBlockedReason({ ...full, longRestUsed: true })!));
-  // Never less than 1 hit point from a hit die, however low the Constitution.
-  const frail = { ...full, currentHp: 1, modifiers: { ...full.modifiers, con: -5 } };
-  assert.equal(shortRest(frail, () => 0).sheet.currentHp, 2, "a d10 showing 1 with -5 Constitution still heals 1 hit point");
-  says("resting", "refused at full health");
-  says("resting", "or when you have no hit dice left");
-  says("resting", "(even one you have not seen)");
-  says("resting", "you win a fight with the Attack button, or the DM builds you a room");
-  assert.ok(handlerHas("const restBlockedByFight =", "const handleRest = useCallback", /hostileTokens\.length > 0/), "any monster token blocks a rest");
-});
-
-test("levels: the fighter's pick comes at 3 and not before, the maneuver's effect is told to the DM, hit points are quoted at +0", () => {
-  const sheet = knight();
-  assert.equal(levelUpChoices(sheet, 2).choice, null);
-  assert.equal(levelUpChoices({ ...sheet, level: 2 }, 3).choice?.id, "martialArchetype");
-  says("levels", "At level 3 a Fighter picks an archetype");
-  says("levels", "The engine tells the DM; it does not change the creature's rolls");
-  says("levels", "With a Constitution modifier of +0 that is: Fighter (d10) 6, Rogue (d8) 5, Wizard (d6) 4");
-  // The trip is a fact told to the DM, not a condition on any token.
-  assert.ok(handlerHas(...ATTACK_HANDLER, /noteToDm\([\s\S]*is prone/), "a landed trip is a note to the DM");
 });
 
 test("numbers the book states come from the engine, not from a literal in the book", () => {

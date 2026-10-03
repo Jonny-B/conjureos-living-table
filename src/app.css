@@ -1,0 +1,132 @@
+/*
+ * The page around the table window: a bar above, a line below, the window filling what is left.
+ * Everything is under .lt-app, so nothing here reaches the window's own styles (they sit under .ltt-root).
+ * Tokens are the --cui-* set from conjureos-ui.css; each has a fallback so the page reads without it.
+ */
+.lt-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--cui-bg, #131319);
+  color: var(--cui-fg, #eceaf5);
+}
+
+.lt-app-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--cui-border, #31313d);
+}
+
+.lt-app-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lt-app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The window's own page scrolls inside this box, never the page around it, and never sideways. */
+.lt-app-window {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.lt-app-stage {
+  min-height: 100%;
+}
+
+.lt-app-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0;
+  padding: 16px;
+  text-align: center;
+  color: var(--cui-fg-dim, #9c98ad);
+}
+
+.lt-app-foot {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--cui-border, #31313d);
+  font-size: 0.78rem;
+  color: var(--cui-fg-mute, #9c98ad);
+}
+
+.lt-app-save {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lt-app-version {
+  flex: none;
+}
+
+.lt-app-credits summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lt-app-credits-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 12px 16px 4px;
+  background: var(--cui-bg-2, #1a1f2b);
+  border-top: 1px solid var(--cui-border, #31313d);
+  color: var(--cui-fg-mute, #9ca3af);
+  z-index: 5;
+}
+
+.lt-app-credits-body p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+/* On a wide page the board may use the whole height the page has (the bar and the line take about 140px with the window's own
+   margins). The window's own cap (about 620px) is for a page that is not all window. On a phone it stays as the window sets it. */
+@media (min-width: 721px) {
+  .lt-app .ltt-root .lt-viewport {
+    max-height: max(420px, calc(100dvh - 140px));
+  }
+}
+
+@media (max-width: 640px) {
+  .lt-app-bar {
+    padding: 6px 12px;
+  }
+  .lt-app-foot {
+    padding: 6px 12px;
+  }
+}

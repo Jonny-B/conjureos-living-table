@@ -258,7 +258,7 @@ test("the memory host keeps saves, AI adventures, files, sheets and settings", a
   assert.equal(host.settings.get().diceSkin, "ember");
   assert.equal(host.settings.get().textStyle, "pixel");
   host.settings.set({ textStyle: "storybook", zoom: 3 });
-  assert.deepEqual(host.settings.get(), { textStyle: "storybook", rollMyself: true, diceSkin: "ember", zoom: 3 });
+  assert.deepEqual(host.settings.get(), { textStyle: "storybook", textSpeed: "normal", rollMyself: true, diceSkin: "ember", zoom: 3 });
   const snap = host.settings.get();
   snap.zoom = 1;
   assert.equal(host.settings.get().zoom, 3, "get returns a copy");

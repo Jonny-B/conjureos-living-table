@@ -1,7 +1,12 @@
 # Living Table asset bench
 
-One self-contained HTML page for judging the game's art and play. It opens on
-**Play** and has seven tabs, all calling the game's own render, rules and
+One self-contained HTML page for judging the game's art and play. It is a thin
+host around the REAL game window (`src/games/livingtable/table/mountTable.ts`): the Play tab calls
+`mountTable` with the bench's own `TableHost` (`scripts/asset-bench/benchHost.ts`: embedded art,
+browser-held settings and saves, the artifact `sample` capability for the DM), and the shipped app
+(`src/games/livingtable/table/host/gameHost.ts`) calls the same `mountTable` with the game's host (asset files,
+ConjureOS AI, server saves). There is one window and one set of rules; the bench adds only the tabs
+around it. It opens on **Play** and has seven tabs, all calling the game's own render, rules and
 character functions by symbol, so the bench shows what ships rather than a
 second drawing of it.
 
@@ -47,7 +52,7 @@ The Play tab holds any number of creatures, not one "monster". Each is a `Creatu
 
 The Play tab opens on a **start screen** (`overlay.startScreen`) inside the game window. It lists the owner's adventures from `adventures/*.md` as cards (title, summary, who wrote it, and "Draft: N items marked for review" when `markedForReview` finds any), the two **test rooms** (One goblin, Goblin and skeleton) and "Write a new adventure with AI". `TEMPLATE.md` is listed as "Template adventure (its own title)". A file with problems is listed with them and cannot be started. The bench's **Start screen** button comes back here (a game in progress asks first: press it twice within three seconds). Opening the bench with `#sandbox` (or `#sandbox-two`) in the address skips the start screen and starts that test room: the older headless checks go in that way.
 
-- **Where the adventures come from.** `scripts/asset-bench/gen-adventures.mjs` (the first step of `npm run bench`) writes every `adventures/*.md` except `README.md` into `adventuresData.ts` as text, LF line endings. That module is committed (the registry and the tests import it), and `test/livingtable-bench-adventures.test.ts` fails when it is stale. In the page each text is read by the game's own `parseAdventureMarkdown` and checked by `validateAdventure` against the tile, prop and token ids the game really has (with which tiles can be walked on and which props block) and the bestiary. `benchAdventures()` is that list, with each file's problems.
+- **Where the adventures come from.** `scripts/asset-bench/gen-adventures.mjs` (the first step of `npm run bench`) writes every `adventures/*.md` except `README.md` into `src/games/livingtable/table/adventures/data.ts` as text, LF line endings. That module is committed (the registry and the tests import it), and `test/livingtable-bench-adventures.test.ts` fails when it is stale. In the page each text is read by the game's own `parseAdventureMarkdown` and checked by `validateAdventure` against the tile, prop and token ids the game really has (with which tiles can be walked on and which props block) and the bestiary. `benchAdventures()` is that list, with each file's problems.
 - **Starting one.** After the card, the hero screen: a quick start for each class that can be played (the adventure's own hook for that class and its starting kit in words), or **Make your own hero** (the character creator with the kit applied: a fighter's Defense is not offered without armor, so its draft starts on another style; the hero is built again with the kit of the class that was picked). The kit is `startingKitFor` passed to `createCharacter`: in The Rat Cellar, no armor (AC 10 plus DEX; the armour and shield slots are bare and the Worn panel says "Empty"), the class's plain weapon, no potions and no pack. The free armoury is hidden in an adventure: you have only what the story gives you. The game begins at the adventure's start: a checkpoint, the place's name and read-aloud, then the first scene's opening.
 - **The story.** A game keeps `PlayState.adventureId` (the id only: a save never holds the adventure's text, it is read again from the bench) and `PlayState.progress` (`adventures/progress.ts`). The game tells the story what happened with `applyEvent`, and the engine says what that did: a kill (by instance id, such as `cellar_rats_2`) when a creature falls, the party entering a place, an adventure item arriving in or leaving the pack (the pack is compared with the story every frame), and the beats that fire (told in the narration box, with the items they give put in the pack and the creatures they bring in placed on the board), the objectives that finish (a notice and the Log), a new scene (its title and opening on a card) and an ending (its text over the board with Continue, which keeps playing in place, or Back to the start screen). The bench never decides a step itself.
 - **Places and exits.** Each place is its own board, built by the engine's `locationLayout` from its map. Walking onto an exit square (a door on the edge, a stair, a tunnel mouth) takes the hero to where it leads if the exit's requirement holds; if not, the adventure's own `locked text` shows and the hero stays put. The exit is taken when a walk ends on it, never when the walk only passes over it, and never in the middle of a fight. The hero arrives standing on the exit that leads back, so **Use** (E, the Go button) or a click on their own square takes it. Arrival tells the story the party entered, makes a checkpoint save ("arrived: the place", so the three newest checkpoints are the last three places), shows the place's card and then the scene's, and starts the fight at once when something awake and hostile is there (the three Rats in the cellar).
@@ -62,7 +67,7 @@ The Play tab opens on a **start screen** (`overlay.startScreen`) inside the game
 
 ## The DM
 
-Type anything you try in the box under the buttons ("I look in the grate", "I tell the goblin I mean no harm") or look closer at anything: right-click a square, or long-press it on a phone, and pick Look closer (the first line of the context menu, below); a left click on a prop the DM placed walks up to it and looks closer. A left click on a grate just walks onto it, because every DM answer is a paid call. The DM (`dm.ts`) is told the whole room, every secret in it, every creature's numbers (one line each, with its own id), your sheet and pack, what you can see right now and the last few exchanges, and narrates only what you can see or hear.
+Type anything you try in the box under the buttons ("I look in the grate", "I tell the goblin I mean no harm") or look closer at anything: right-click a square, or long-press it on a phone, and pick Look closer (the first line of the context menu, below); a left click on a prop the DM placed walks up to it and looks closer. A left click on a grate just walks onto it, because every DM answer is a paid call. The DM (`src/games/livingtable/table/dmCore.ts`) is told the whole room, every secret in it, every creature's numbers (one line each, with its own id), your sheet and pack, what you can see right now and the last few exchanges, and narrates only what you can see or hear.
 
 - **Freehand.** A trivial action just happens. An uncertain one comes with ONE check, written with both outcomes before the roll; the tray rolls it (d20, or two for advantage or disadvantage, plus your sheet's real modifier, against the DM's DC) and the engine plays the branch the dice pick. One action is one DM call.
 - **What the DM can do.** Give and take plain items, hand out healing potions (two a scene), call the engine's own loot roll (the cell's ledger caps it), heal and harm (dice rolled in the tray, harm only in a failed check), place, remove and alter props, change terrain (never the border, never under a figure), open, close, lock and unlock the door, wake or calm a creature, make it flee, or bring one back (the goblin or the skeleton, up to eight creatures in the room). It can also push, hurt and knock down a creature, by its id, but only through effects the engine applies (see The DM's board powers below). Chests stay the engine's loot roll: the DM never invents what is inside one, and never gives gear with a magic name. Every refused effect is a plain line in the log (and the DM is told next turn), never a popup.
@@ -75,10 +80,10 @@ The DM runs on the viewer's own Claude account through the artifact runtime's `s
 
 ## The DM and the adventure (gospel)
 
-In an adventure the DM is bound by it. The view the DM is given (`dmAdventureView`) carries `adventure`, and `dm.ts` then opens a "THE ADVENTURE (GOSPEL)" block in the prompt, after the rules and before the world. A test room carries none, and its prompt is exactly what it was.
+In an adventure the DM is bound by it. The view the DM is given (`dmAdventureView`) carries `adventure`, and `dmCore.ts` then opens a "THE ADVENTURE (GOSPEL)" block in the prompt, after the rules and before the world. A test room carries none, and its prompt is exactly what it was.
 
 - **What it is told.** `adventureBrief` for this hero and this moment (the truths, "You must" and "You must never", the hook for the hero's class, the current scene and its open objectives, the place and its exits, the things here with their secrets marked DM ONLY, the people here with what they know and what they hide, what the party has done so far), held to 5000 characters (the least essential parts drop first); the progress steps it may propose now (`allowedDmSteps`), each as the exact effect line to write; the adventure's people standing on this board with their ids and squares (a hostile one too: the goblin is Skrit); and the adventure item ids it may give.
-- **It moves the story only with a listed step.** A `progress` effect must match one of the listed steps exactly. `dm.ts` refuses anything else when it checks the answer (the reason names the steps, and the answer goes back for the one repair round), and the engine checks it again when it is applied: `applyEvent({ type: "dm", step })`. A refusal changes nothing, is a plain line in the Log, and is told to the DM next turn. What the engine can see for itself is never the DM's to declare: kills, entering a place, holding an item, talking to someone. In The Rat Cellar the only step the DM ever gets is `tunnel_noticed` (in the cellar scene).
+- **It moves the story only with a listed step.** A `progress` effect must match one of the listed steps exactly. `dmCore.ts` refuses anything else when it checks the answer (the reason names the steps, and the answer goes back for the one repair round), and the engine checks it again when it is applied: `applyEvent({ type: "dm", step })`. A refusal changes nothing, is a plain line in the Log, and is told to the DM next turn. What the engine can see for itself is never the DM's to declare: kills, entering a place, holding an item, talking to someone. In The Rat Cellar the only step the DM ever gets is `tunnel_noticed` (in the cellar scene).
 - **Items.** `give` with an `itemId` hands over the adventure's own item: its name, description and quest flag, whatever the DM wrote beside it. The ids the DM is offered are only the items the story does not hand over itself (a feature's `gives` and a beat's `give` are the engine's, so offering them would let a story item arrive before the story reaches it): The Rat Cellar offers none, because the cloth is the sack heap's and Marta's pay is a beat's.
 - **Talking.** The ask carries the person the hero is speaking to (the one the ask box was opened on, or the one person whose name the words use), so the prompt says "The hero is speaking to <name> (id=...): answer in their voice from their entry above, and set talkedTo". `talkedTo` is checked against the people on the board and becomes a `talk` event. What a DM step or a talk fires (a creature brought in, an item given, a scene, an ending) is played at once, and an awake hostile that arrives starts the fight.
 - **The export** (Saves tab) adds the adventure to `adventure.json` (`adventure`: id, title, version, author, the file, the progress record, the scene, the place, the whole Markdown source and the brief the DM was last given) and two files in the zip: `adventure-source.md` (the Markdown, readable) and `dm-brief.txt` (the last brief). With the DM transcript (the full input of every exchange) that is enough to reproduce a run.
@@ -101,7 +106,7 @@ The board stays clear: only story is written on it, and it fades.
 
 ## Foe dice, bodies and looting, item cards and piles
 
-- **Each creature rolls in its own tray.** Its attack d20 is thrown in the tray look and the dice skin `foeDice.ts` gives it by challenge rating (`foeDiceForToken`: the goblin is tier 1, a dark iron die in an iron-bound box), with "The goblin rolls" or "The skeleton rolls" on the rim (a creature you have not seen yet is "Something rolls"; the skeleton is undead, so its die is bone white in an ossuary tray). Your own rolls stay in your own tray and skin, and the tray goes back to yours at the next roll. The engine does not report the goblin's individual damage dice, only the total, so its damage is the number in the line under the dice and no die is thrown for it. Its initiative die is thrown in its own tray after yours (the total startCombat rolled, less the fixed bonus it adds), and so is its die in a contest (a shove, see below).
+- **Each creature rolls in its own tray.** Its attack d20 is thrown in the tray look and the dice skin `ui/foeDice.ts` gives it by challenge rating (`foeDiceForToken`: the goblin is tier 1, a dark iron die in an iron-bound box), with "The goblin rolls" or "The skeleton rolls" on the rim (a creature you have not seen yet is "Something rolls"; the skeleton is undead, so its die is bone white in an ossuary tray). Your own rolls stay in your own tray and skin, and the tray goes back to yours at the next roll. The engine does not report the goblin's individual damage dice, only the total, so its damage is the number in the line under the dice and no die is thrown for it. Its initiative die is thrown in its own tray after yours (the total startCombat rolled, less the fixed bonus it adds), and so is its die in a contest (a shove, see below).
 - **The kill drops nothing in the pack.** The body stays where it fell (the animated picture draws it lying there) with what the creature carried (`rules/corpses.ts` `carriedBy`: the goblin has a scimitar, a shortbow, leather armor, a shield and a few coins, maybe a trinket; beasts carry nothing). A small gold glint on the square marks a body that has not been searched. Nothing is rolled at the kill.
 - **Searching.** Click the body (you walk up first), or stand next to it and press E (the button reads Search when no door or chest competes for E). A loot window opens at the top of the board: the creature's things, each with a Take button, and Take all. The FIRST search rolls the engine's own loot once (`lootFor`, source fight, the cell's ledger caps it, the log says so when it is spent); a found piece of gear waits in the window, not in the pack, until you take it. Take puts gear the engine names into the bag (`pickUp`, which keeps the bag's rules and says why it refused) and everything else on the carried list with its note for the hover tip. Coins are an item ("12 copper pieces"): the game does not track money yet, and the note says so. A body with nothing left says so; walking away, a fight or a DM turn closes the window.
 - **Items.** Click an item in the Pack tab, or in the sheet's equipment list, and a card pins with what `inventory/itemActions.ts` says it can do: Equip or Unequip (the game's own gate, with the reason when it is refused), Use (a potion heals with the game's own dice; a healing kit uses one of its own uses; an item the DM flagged `usable` sends its `useSay` to the DM; any other item says "Cannot be used" and why), Drop and Destroy (greyed with the reason for worn gear and quest items; Destroy asks to confirm). The clarity line on top comes from `itemStatusLine`. Gear can change only with nothing hostile awake or in sight, the same test Rest uses; a goblin asleep behind a shut door does not stop you.
@@ -131,7 +136,7 @@ Left out, and why: **Stabilize** (the goblin at 0 hit points is removed from the
 
 ## The DM's board powers
 
-A DM that narrates the goblin moving, hurt or knocked down used to leave it standing there (the kick that never moved the goblin). Now a creature changes only through an effect, and the prompt says so. Three effects and two check kinds (`dm.ts`):
+A DM that narrates the goblin moving, hurt or knocked down used to leave it standing there (the kick that never moved the goblin). Now a creature changes only through an effect, and the prompt says so. Three effects and two check kinds (`dmCore.ts`):
 
 - **push** (a creature, 1 or 2 squares) moves it straight away from you along the engine's `pushDestination`, animated; it can stop short, and a push with a wall behind it is refused in words.
 - **hurt** (a creature, only inside the success branch of an attack or contest check) damages it. After an attack check with no dice named it is the attack's own damage (your weapon's dice thrown in the tray, or the kick's flat number); with dice named, those are thrown in the tray instead. A kill leaves a body like any other.
@@ -155,7 +160,7 @@ Press **C** (or the Sheet button) and a D&D style sheet opens over the board, in
 
 **New character** on the sheet opens creation in the same place, following SRD 5.1: class (the playable archetypes), ancestry (the nine SRD ancestries), ability scores (class default, standard array, point buy with 27 points, or 4d6 drop the lowest), skills, a background in your own words (two skills plus a personality trait, ideal, bond and flaw), alignment, name and backstory. Every step has a default, so **Begin** works from any step. Rolling throws the real dice tray: six groups of four d6, so you see every number (tap the tray once to start, and again during a throw to skip ahead). Begin makes the new hero, with a fresh scene and the DM's memory cleared. Reset scene keeps the hero you made; the **Hero** setting in the bench's own row still quick-picks a ready-made character.
 
-`sheet.ts` draws both views and holds their tips and creation helpers; the engine side (`characters/creation.ts`, `ancestries.ts`, `inventory/itemInfo.ts`) lives under `src/` so the game can adopt it.
+`ui/sheet.ts` draws both views and holds their tips and creation helpers; the engine side (`characters/creation.ts`, `ancestries.ts`, `inventory/itemInfo.ts`) lives under `src/` so the game can adopt it.
 
 ## Rebuild it
 
@@ -177,7 +182,7 @@ node scripts/asset-bench/build-bench.mjs \
 ```
 
 `--data <id>=<file.json>` embeds a JSON block the registry reads at mount time
-(`kaykit.ts`, `cast.ts`), so generated data never becomes an import of the
+(`kaykit.ts` here, `ui/cast.ts` in the game), so generated data never becomes an import of the
 registry or of the tests that load it. The artifact has a 16 MB ceiling;
 `pack-cast.mjs --styles bands,pixelart` keeps fewer styles if the cast grows
 past it.
@@ -188,23 +193,30 @@ write there). `test/livingtable-asset-bench.test.ts` guards both of those
 facts plus "every in-play fantasy sprite is on the Pieces tab" and "nothing
 under src/ imports scripts/asset-bench".
 
+## What lives where: the shared window
+
+The Play tab and the shipped app run the same code. Everything the player sees and plays is under `src/games/livingtable/table/`:
+
+- `mountTable.ts`, `host.ts`: the window and the `TableHost` it is given (art, DM, storage, settings, files). A host is the only thing that differs between the bench and the app.
+- `ui/` (`overlay.ts`, `dice.ts`, `foeDice.ts`, `sheet.ts`, `tip.ts`, `pixelFont.ts`, `cast.ts`): every word, die, sheet, tip and figure animation the window draws.
+- `dmCore.ts`, `dmScene.ts`, `fightRules.ts`, `adventureRun.ts`, `state.ts` and the rest: the DM's prompt and checks, the fight and the adventure runner.
+- `host/` (`gameHost.ts`, `gameArt.ts`, `gameDm.ts`, `gameStorage.ts`, `gameSettings.ts`, `gameFiles.ts`, `assetFiles.ts`): the game's host. Saves go to games-db (`game_saves`), the animated art loads from ConjureOS asset files, the DM runs on `ai.complete`.
+- `hostDefault.ts`: a plain in-memory host the unit tests use.
+
+The old shim modules under `scripts/asset-bench/` (`overlay.ts`, `dice.ts`, `sheet.ts`, `tip.ts`, `pixelFont.ts`, `foeDice.ts`, `cast.ts`, `dm.ts`, `adventuresData.ts`) are gone; import from the paths above. `src/` never names the bench (a guard test fails if a file under `src/` contains `asset-bench`).
+
+`node scripts/e2e/run.mjs` plays the shipped game (not the bench) in headless Chromium with ConjureOS mocked (see `scripts/e2e/README.md`). The `.cache/*.cjs` play scripts drive the bench page.
+
 ## Files
 
-- `assets.ts`: the registry and the seven panels. Edit this when the game's
+- `assets.ts`: the registry and the seven panels (the Play panel mounts the shared window). Edit this when the game's
   asset library, rules or render functions change.
-- `sheet.ts`: the character sheet and the creation wizard (DOM views, their tips and the pure creation helpers). Unit-tested in `test/livingtable-bench-sheet.test.ts`.
+- `benchHost.ts`: the bench's `TableHost` (art from the embedded library, settings and saves in the browser, the DM on the
+  viewer's own Claude account) and `createTableSession`; `assets.ts` mounts the window with it. It binds the embedded cast
+  to the window's cast source itself (`bindCastSource`).
 - `books.ts`: the Rules and Bestiary panels, built from `src/games/livingtable/rules/`. Unit-tested in `test/livingtable-bench-books.test.ts`.
-- `tip.ts`: the hover help (placement, one at a time, keyboard and touch) every tip in the bench uses.
 - `kaykit.ts`: decodes the embedded KayKit stills.
-- `cast.ts`: decodes and plays the embedded animated cast, and the small
-  animation state machine (`Actor`) the Play tab drives.
-- `adventuresData.ts`, `gen-adventures.mjs`: the owner's adventures as text, and the script that writes it from `adventures/*.md` (committed; `npm run bench` runs the script first). Checked in `test/livingtable-bench-adventures.test.ts`, which also holds the adventure rules (`ADVENTURE_RULES` in `assets.ts`).
-- `dm.ts`: the DM's model side with no DOM: the prompt, the reply parser and validator, the single repair round, and `askDm`. Unit-tested in `test/livingtable-bench-dm.test.ts`.
-- `overlay.ts`, `pixelFont.ts`: every word drawn on the Play board (banners,
-  the story strip, roll plates, floating numbers, the turn order) and the HUD
-  (buttons, suggested moves, the Pack, Log and Saves drawer) in two styles; no
-  web fonts, so the game can reuse it.
-- `dice.ts`: the dice tray: pixel-art d4 to d20 that tumble and land on a given result, skins as data, the skin picker, and the foe trays. `foeDice.ts` says which tray and skin a creature rolls in.
+- `gen-adventures.mjs`: writes `src/games/livingtable/table/adventures/data.ts` (the owner's adventures as text) from `adventures/*.md` (committed; `npm run bench` runs the script first). `data.ts` is checked in `test/livingtable-bench-adventures.test.ts`, which also holds the adventure rules (`ADVENTURE_RULES` in `assets.ts`).
 - `build-bench.mjs`, `shell.js`: this project's own copy of the asset-bench
   skill's template builder and shell. Adapt them here if the bench needs
   something the template does not provide; they are not shared with other

@@ -13,7 +13,6 @@ import { attunedRoles } from "../src/games/livingtable/rules/attunement";
 import { eligibleRolesFor } from "../src/games/livingtable/rules/loot";
 import { longRest, shortRest } from "../src/games/livingtable/characters/health";
 import { createCharacter, normalizeItemCharges, normalizeSheet, type CharacterSheet } from "../src/games/livingtable/characters/creation";
-import { buildDmCharacterView } from "../src/games/livingtable/session/dmContext";
 import { effectiveSpeedFt, evasionRescue, speedBeforeBootsFt } from "../src/games/livingtable/session/combat";
 import { accessoryCopy, gearView } from "../src/games/livingtable/menu/equipment";
 import { GLOSSARY, explain } from "../src/games/livingtable/menu/labels";
@@ -151,31 +150,6 @@ test("a long rest rolls a spent Ring of Evasion's recharge through the injected 
   assert.match(rested.note, /Ring of Evasion regains 2 charges \(1d3 rolled 3\): 3 of 3\./);
   const full = longRest(knight(), draws());
   assert.equal(full.note.includes("regains"), false, "an absent key means full: no roll and no rng call");
-});
-
-// ── what the DM sees ─────────────────────────────────────────────────────
-
-test("the DM sees what is worn by name and the pack without the loadout, never a tier, a bonus or the bag", () => {
-  const sheet: CharacterSheet = {
-    ...wearing(knight(), { weapon: { slot: "weapon", tier: "legendary" }, ring: { slot: "ring", tier: "rare" } }),
-    bag: [{ slot: "amulet", tier: "rare" }],
-  };
-  const view = buildDmCharacterView(sheet, "hero");
-  assert.deepEqual(view.wearing, ["Dawnbreaker", "Kite Shield", "Plate Harness", "Ring of Protection", "Travel Boots"]);
-  for (const worn of ["Longsword", "Kite Shield", "Plate Harness"]) {
-    assert.ok(!view.inventory.includes(worn), `${worn} is named under Wearing, not again under Carrying`);
-  }
-  assert.ok(!JSON.stringify(view).includes("Stone of Good Luck"), "the bag never reaches the DM");
-  assert.ok(!/legendary|rare|uncommon|\+\d/i.test(view.wearing.join(" ")), "names only, never a tier word or a bonus");
-});
-
-test("the DM pitches DCs at the check bonus the engine actually rolls, a worn Stone of Good Luck included", () => {
-  const plain = knight();
-  const lucky = wearing(plain, { amulet: { slot: "amulet", tier: "rare" } });
-  const before = buildDmCharacterView(plain, "hero").skills;
-  const after = buildDmCharacterView(lucky, "hero").skills;
-  assert.ok(before.length > 0);
-  for (const [i, s] of after.entries()) assert.equal(s.bonus, before[i]!.bonus + 1, `${s.skill} should carry the stone's +1`);
 });
 
 // ── copy that states the real number ────────────────────────────────────

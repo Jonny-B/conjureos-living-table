@@ -1,6 +1,6 @@
 /**
  * Tests for the bench's character sheet and creation views: the pure parts of
- * scripts/asset-bench/sheet.ts (every tip builder, the creation helpers, the
+ * src/games/livingtable/table/ui/sheet.ts (every tip builder, the creation helpers, the
  * features list). The DOM drawing is covered by the Playwright harness; all of
  * this runs in plain Node, which is also the proof that the module does not
  * touch the DOM at import time (the bench registry is imported in Node).
@@ -64,8 +64,8 @@ import {
   sheetItemKey,
   validDiceGroups,
   type StepId,
-} from "../scripts/asset-bench/sheet";
-import type { TipContent } from "../scripts/asset-bench/tip";
+} from "../src/games/livingtable/table/ui/sheet";
+import type { TipContent } from "../src/games/livingtable/table/ui/tip";
 
 // The two dash glyphs the project forbids, built from code points so this file never types them.
 const EM = String.fromCharCode(0x2014);

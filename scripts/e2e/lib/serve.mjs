@@ -143,6 +143,8 @@ export async function startServer({ root = process.cwd(), mode = "dev", log = ()
     port,
     mode,
     root,
+    /** The dev art manifest this server serves (the real library), or null when there is none. */
+    manifestFile: fs.existsSync(path.join(outDir, "livingtable-assets.json")) ? path.join(outDir, "livingtable-assets.json") : null,
     close: async () => {
       await new Promise((r) => server.close(r));
       if (temp) fs.rmSync(temp, { recursive: true, force: true });

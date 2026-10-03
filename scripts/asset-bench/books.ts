@@ -19,9 +19,9 @@
 import { RULEBOOK, type RuleBlock, type RuleSection } from "../../src/games/livingtable/rules/rulebook";
 import { BESTIARY, CR_ORDER, abilityMod, type Beast, type BeastAttack, type CreatureSize } from "../../src/games/livingtable/rules/bestiary";
 import { SRD_ATTRIBUTION } from "../../src/games/livingtable/menu/labels";
-import { attachTip, type TipContent } from "./tip";
-import { renderTrayPreview } from "./dice";
-import { FOE_TIER_WORDS, foeDiceFor, type FoeDiceLook } from "./foeDice";
+import { attachTip, type TipContent } from "../../src/games/livingtable/table/ui/tip";
+import { renderTrayPreview } from "../../src/games/livingtable/table/ui/dice";
+import { FOE_TIER_WORDS, foeDiceFor, type FoeDiceLook } from "../../src/games/livingtable/table/ui/foeDice";
 
 // ===========================================================================
 // Pure helpers (no DOM)

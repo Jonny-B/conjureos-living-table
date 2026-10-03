@@ -23,7 +23,7 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 export async function startHarness({ root = process.cwd(), mode = "dev", headed = false, log = () => {}, shotsDir = null } = {}) {
   const { chromium } = createRequire(import.meta.url)(PLAYWRIGHT_PATH);
-  const server = await startServer({ root, mode, log });
+  const srv = await startServer({ root, mode, log });
   const browser = await chromium.launch({ headless: !headed });
   const games = [];
 
@@ -33,12 +33,22 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
    *   viewport: { width, height }, default 1280 x 900
    *   allowHosts: hostnames besides localhost that may be requested (default none)
    *   url:      path or query to open, default "/"
+   *   server:   play games-db from Node (server saves that survive a reload, the art manifest, auth.whoami); see platform.mjs
+   *   saves:    a Map to share server saves between games (default: one per game)
+   *   who:      what auth.whoami answers (default a signed-in tester)
    *   permissions, storageState: passed to the browser context
    */
-  async function newGame({ script = [], viewport = { width: 1280, height: 900 }, allowHosts = [], url = "/", latencyMs = 0, extraInit, ...ctxOpts } = {}) {
+  async function newGame({ script = [], viewport = { width: 1280, height: 900 }, allowHosts = [], url = "/", latencyMs = 0, extraInit, server = false, saves, who, ...ctxOpts } = {}) {
     const context = await browser.newContext({ viewport, acceptDownloads: true, ...ctxOpts });
     const page = await context.newPage();
-    const platform = await installPlatform(page, { latencyMs, extraInit });
+    let manifest = null;
+    const assetManifest = (template) => {
+      if (!server.art || !srv.manifestFile) return null;
+      manifest ??= JSON.parse(fs.readFileSync(srv.manifestFile, "utf8"));
+      const m = manifest[template];
+      return m ? { template, palette: m.palette, assets: m.assets } : null;
+    };
+    const platform = await installPlatform(page, { latencyMs, extraInit, server: !!server, saves, who, assetManifest });
     platform.script(script);
 
     const consoleErrors = [];
@@ -62,7 +72,7 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
       foreign.push(r.url());
     });
 
-    await page.goto(server.url + url, { waitUntil: "load" });
+    await page.goto(srv.url + url, { waitUntil: "load" });
     const game = {
       page,
       context,
@@ -95,13 +105,13 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
   }
 
   return {
-    server,
+    server: srv,
     browser,
     newGame,
     close: async () => {
       for (const g of games) await g.close().catch(() => {});
       await browser.close().catch(() => {});
-      await server.close().catch(() => {});
+      await srv.close().catch(() => {});
     },
   };
 }

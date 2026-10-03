@@ -573,6 +573,113 @@ export const ltAssetManifest = (
 ): Promise<{ template: LtTemplate; palette: unknown; assets: LtAssetWire[] }> =>
   call("ltAssetManifest", { template });
 
+
+// ── The Living Table's server saves ─────────────────────────────────────
+//
+// One row per (signed-in player, game, key), private to its owner. The table
+// keeps its quick saves, a "current" copy of the running game and the
+// adventures the DM wrote here, so a run resumes on any device (the window's
+// own storage lives in table/host/gameStorage.ts and is the only caller).
+
+/** The game name every Living Table save row carries. */
+export const LT_SAVE_GAME = "livingtable";
+/** What a save row may be: the window's three kinds, the "current" copy, and a written adventure. */
+export type LtSaveKind = "rest" | "checkpoint" | "manual" | "current" | "ai-adventure";
+/** A key is 1 to 80 characters of a-z, 0-9, colon, underscore and hyphen. */
+export const LT_SAVE_KEY_RE = /^[a-z0-9:_-]{1,80}$/;
+/** The most saves one player may hold for one game. */
+export const LT_SAVE_MAX_ROWS = 60;
+/** The largest payload, as serialised JSON in UTF-8 bytes (256 KiB). */
+export const LT_SAVE_MAX_BYTES = 256 * 1024;
+/** The longest label, in characters. */
+export const LT_SAVE_MAX_LABEL = 120;
+const LT_SAVE_KINDS: readonly string[] = ["rest", "checkpoint", "manual", "current", "ai-adventure"];
+
+/** What ltSaveList returns per row: no payload, so listing a player's saves stays small. */
+export interface LtSaveMeta {
+  key: string;
+  kind: string;
+  label: string;
+  updatedAt: string;
+  bytes: number;
+}
+
+export interface LtSaveRow {
+  key: string;
+  kind: string;
+  label: string;
+  updatedAt: string;
+  payload: unknown;
+}
+
+/** The refusals a save call can come back with. `unavailable` is the catch-all for anything else (offline, signed out, a server fault). */
+export type LtSaveErrorCode =
+  | "too_large"
+  | "too_many"
+  | "bad_key"
+  | "bad_kind"
+  | "bad_label"
+  | "bad_payload"
+  | "bad_game"
+  | "wrong_app"
+  | "unknown_action"
+  /** Any other 4xx that is not a timeout or a rate limit: the server looked at the request and turned it down for good. */
+  | "rejected"
+  | "unavailable";
+
+/** A save call that failed. `code` is the server's reason when it gave one; everything else is `unavailable`, which is worth retrying. */
+export class LtSaveError extends Error {
+  readonly code: LtSaveErrorCode;
+  constructor(code: LtSaveErrorCode, message?: string) {
+    super(message ?? code);
+    this.name = "LtSaveError";
+    this.code = code;
+  }
+}
+
+function saveErrorCodeOf(text: string): LtSaveErrorCode | null {
+  const m = /too_large|too_many|bad_key|bad_kind|bad_label|bad_payload|bad_game|wrong_app|unknown_action/.exec(text);
+  if (m) return m[0] as LtSaveErrorCode;
+  // The kernel's own network message carries timings (fail(400ms)): an outage, never a status.
+  if (text.includes("[diag:")) return null;
+  // An HTTP 4xx the server did not name is a refusal for good, except the ones that can pass: signed out (401), timed out (408), too early (425), rate limited (429).
+  const status = /\b(4\d\d)\b(?!\s*ms)/.exec(text);
+  if (status?.[1] && !["401", "408", "425", "429"].includes(status[1])) return "rejected";
+  return null;
+}
+
+/** Run one save call and turn every failure into an LtSaveError: the server's own code when it named one, else `unavailable`. */
+async function saveCall<T>(action: string, params: Record<string, unknown>): Promise<T> {
+  let res: unknown;
+  try {
+    res = await call<unknown>(action, { game: LT_SAVE_GAME, ...params });
+  } catch (e) {
+    if (e instanceof LtSaveError) throw e;
+    const message = e instanceof Error && e.message ? e.message : "The save server could not be reached.";
+    throw new LtSaveError(saveErrorCodeOf(message) ?? "unavailable", message);
+  }
+  const err = (res as { error?: unknown } | null)?.error;
+  if (typeof err === "string" && err) throw new LtSaveError(saveErrorCodeOf(err) ?? "unavailable", err);
+  return res as T;
+}
+
+/** The caller's own saves for the game, newest first. */
+export const ltSaveList = (): Promise<{ saves: LtSaveMeta[] }> => saveCall("ltSaveList", {});
+
+/** One save, or null when there is none under that key. */
+export const ltSaveGet = (key: string): Promise<{ save: LtSaveRow | null }> => saveCall("ltSaveGet", { key });
+
+/** Make or replace a save. Throws an LtSaveError with code too_large, too_many or bad_key when refused. */
+export const ltSavePut = (
+  key: string,
+  kind: LtSaveKind,
+  label: string,
+  payload: unknown,
+): Promise<{ ok: true; updatedAt: string }> => saveCall("ltSavePut", { key, kind, label, payload });
+
+/** Remove a save. Removing one that is not there is fine. */
+export const ltSaveDelete = (key: string): Promise<{ ok: true }> => saveCall("ltSaveDelete", { key });
+
 // ── dev mock ────────────────────────────────────────────────────────────
 //
 // In-memory, per-page-load. Enough to click through every screen under
@@ -603,6 +710,8 @@ const memory: {
      * stripped back out to the real LtMemoryFactRow shape before returning. */
     facts: Record<string, LtMemoryFactRow & { campaignId: string }>;
     log: Record<string, LtMemoryLogRow[]>;
+    /** The saves, by "game:key": the same rules as the real table (key shape, kind, size, row cap). */
+    saves: Record<string, LtSaveRow & { game: string; bytes: number }>;
   };
 } = {
   daily: {},
@@ -626,8 +735,23 @@ const memory: {
   tally: {},
   plays: {},
   profile: {},
-  lt: { campaigns: {}, characters: {}, cells: {}, facts: {}, log: {} },
+  lt: { campaigns: {}, characters: {}, cells: {}, facts: {}, log: {}, saves: {} },
 };
+
+
+let lastSaveStamp = 0;
+/** An ISO time that never repeats or goes backwards, so two saves in one millisecond still sort. */
+function nextSaveStamp(): string {
+  lastSaveStamp = Math.max(Date.now(), lastSaveStamp + 1);
+  return new Date(lastSaveStamp).toISOString();
+}
+const structuredCloneJson = (v: unknown): unknown => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
+
+/** Test seam: empty the dev mock's saves (the in-memory table lives for the whole page load). Does nothing against the real backend. */
+export function resetLtSavesMock(): void {
+  memory.lt.saves = {};
+  lastSaveStamp = 0;
+}
 
 let runSeq = 0;
 let ltSeq = 0;
@@ -1274,6 +1398,44 @@ function mock<T>(action: string, params: Record<string, unknown>): Promise<T> {
         // Returning a promise is fine: the caller below funnels `out` through
         // Promise.resolve, which unwraps it.
         return devOrPlaceholderManifest(template);
+      }
+
+      // ── The Living Table's saves: the real contract, in memory ──
+      case "ltSaveList": {
+        const game = String(params.game ?? "");
+        return {
+          saves: Object.values(memory.lt.saves)
+            .filter((r) => r.game === game)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.key.localeCompare(a.key))
+            .map(({ key, kind, label, updatedAt, bytes }) => ({ key, kind, label, updatedAt, bytes })),
+        };
+      }
+      case "ltSaveGet": {
+        const row = memory.lt.saves[`${params.game}:${params.key}`];
+        return { save: row ? { key: row.key, kind: row.kind, label: row.label, updatedAt: row.updatedAt, payload: structuredCloneJson(row.payload) } : null };
+      }
+      case "ltSavePut": {
+        const game = String(params.game ?? "");
+        const key = typeof params.key === "string" ? params.key : "";
+        if (!LT_SAVE_KEY_RE.test(key)) throw new LtSaveError("bad_key");
+        const kind = typeof params.kind === "string" ? params.kind : "";
+        if (!LT_SAVE_KINDS.includes(kind)) throw new LtSaveError("bad_kind");
+        const label = typeof params.label === "string" ? params.label : "";
+        if (label.length > LT_SAVE_MAX_LABEL) throw new LtSaveError("too_large", "The label is too long (too_large).");
+        const json = JSON.stringify(params.payload ?? null);
+        const bytes = new TextEncoder().encode(json).length;
+        if (bytes > LT_SAVE_MAX_BYTES) throw new LtSaveError("too_large");
+        const slot = `${game}:${key}`;
+        const held = Object.values(memory.lt.saves).filter((r) => r.game === game).length;
+        if (!memory.lt.saves[slot] && held >= LT_SAVE_MAX_ROWS) throw new LtSaveError("too_many");
+        // Strictly later than the last write, so "newest first" is stable even inside one millisecond.
+        const updatedAt = nextSaveStamp();
+        memory.lt.saves[slot] = { game, key, kind, label, updatedAt, payload: JSON.parse(json), bytes };
+        return { ok: true, updatedAt };
+      }
+      case "ltSaveDelete": {
+        delete memory.lt.saves[`${params.game}:${params.key}`];
+        return { ok: true };
       }
 
       default:
