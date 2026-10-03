@@ -35,10 +35,14 @@ import {
   wrapWidth,
 } from "../scripts/asset-bench/pixelFont";
 import {
+  CARD_SUMMARY_MAX,
   DRAWER_TABS,
   FLOAT_BASE_PX,
   FLOAT_GAP_PX,
+  HOOK_MAX,
   HUD_OPTIONS_MAX,
+  JOURNAL_RECENT_MAX,
+  LOCATION_MAX_MS,
   LOG_RENDER_MAX,
   LOOT_EMPTY_MS,
   MENU_GRACE_MS,
@@ -46,13 +50,26 @@ import {
   MENU_MAX_WIDTH,
   NOTICE_MAX,
   OPTION_LABEL_MAX,
+  PREMISE_MAX,
+  PROBLEMS_SHOWN,
   STRIP_MAX_LINES,
+  authorBadge,
   clipOptionLabel,
   createHud,
   createOverlay,
+  draftNote,
+  drawerColumns,
+  endingBannerKind,
+  endingChoices,
+  endingKicker,
+  excerpt,
   floatLift,
   floatStackIndex,
   floatStackTop,
+  journalObjectives,
+  journalProgress,
+  journalRecent,
+  locationHoldMs,
   logWindow,
   menuEntries,
   menuEntryName,
@@ -60,19 +77,27 @@ import {
   menuWidth,
   narrationHoldMs,
   newPackItems,
+  nextWriteStage,
   noticeOverflow,
   optionsLayout,
   overlayDemo,
   packItemText,
+  premiseReady,
+  problemLines,
   sizeTier,
+  startCards,
+  startRooms,
   stripHoldMs,
   stripMaxLines,
   stripOverflow,
+  titleLines,
   toggleDrawerTab,
   usableDrawerTab,
   verdictWords,
   wrapClamp,
+  writingLine,
   type DrawerTab,
+  type WriteStage,
   type PackItem,
   type RecentFloat,
 } from "../scripts/asset-bench/overlay";
@@ -697,17 +722,19 @@ test("stripOverflow: the oldest fades first, and a kept line outlasts an ordinar
 });
 
 test("toggleDrawerTab and usableDrawerTab: one tab at a time, the open one closes it, a missing part shows nothing", () => {
-  assert.deepEqual(DRAWER_TABS, ["pack", "log", "saves"]);
+  assert.deepEqual(DRAWER_TABS, ["pack", "journal", "log", "saves"]);
   assert.equal(toggleDrawerTab(null, "pack"), "pack");
   assert.equal(toggleDrawerTab("pack", "pack"), null);
   assert.equal(toggleDrawerTab("pack", "log"), "log");
   assert.equal(toggleDrawerTab("log", "saves"), "saves");
   assert.equal(toggleDrawerTab("saves", "saves"), null);
-  const all = { pack: true, log: true, saves: true };
+  const all = { pack: true, journal: true, log: true, saves: true };
   assert.equal(usableDrawerTab("log", all), "log");
   assert.equal(usableDrawerTab(null, all), null);
-  assert.equal(usableDrawerTab("log", { pack: true, log: false, saves: true }), null);
-  assert.equal(usableDrawerTab("saves", { pack: false, log: false, saves: false }), null);
+  assert.equal(usableDrawerTab("log", { pack: true, journal: true, log: false, saves: true }), null);
+  assert.equal(usableDrawerTab("journal", { pack: true, journal: false, log: true, saves: true }), null);
+  assert.equal(usableDrawerTab("journal", all), "journal");
+  assert.equal(usableDrawerTab("saves", { pack: false, journal: false, log: false, saves: false }), null);
   // Pressing every tab twice in turn walks open, closed, open, closed.
   let open: DrawerTab | null = null;
   const seen: (DrawerTab | null)[] = [];
@@ -717,7 +744,7 @@ test("toggleDrawerTab and usableDrawerTab: one tab at a time, the open one close
       seen.push(open);
     }
   }
-  assert.deepEqual(seen, ["pack", null, "log", null, "saves", null]);
+  assert.deepEqual(seen, ["pack", null, "journal", null, "log", null, "saves", null]);
 });
 
 test("clipOptionLabel: one run of words, at most 32 characters, cut with two dots", () => {
@@ -967,6 +994,166 @@ test("the menu and loot timings are the ones the contract states", () => {
   assert.equal(MENU_GRACE_MS, 300);
   assert.ok(LOOT_EMPTY_MS >= 800 && LOOT_EMPTY_MS <= 2000);
   assert.equal(typeof createOverlay, "function");
+});
+
+// ---- the adventure screens: pure helpers ----------------------------------------
+
+test("draftNote and authorBadge: the words on an adventure card", () => {
+  assert.equal(draftNote(undefined), "");
+  assert.equal(draftNote(0), "");
+  assert.equal(draftNote(-3), "");
+  assert.equal(draftNote(NaN), "");
+  assert.equal(draftNote(1), "Draft: 1 item marked for review");
+  assert.equal(draftNote(6), "Draft: 6 items marked for review");
+  assert.equal(draftNote(2.9), "Draft: 2 items marked for review");
+  assert.equal(authorBadge("owner"), "Hand written");
+  assert.equal(authorBadge("ai"), "AI written");
+});
+
+test("startCards: tidy, drop the nameless, keep the first of a repeated id, and only a file without problems is playable", () => {
+  const cards = startCards([
+    { id: "rat-cellar", title: "  The   Rat Cellar ", summary: "A  small\nvillage.", author: "owner", draftMarks: 6.7 },
+    { id: "", title: "No id", summary: "", author: "owner" },
+    { id: "blank", title: "   ", summary: "", author: "owner" },
+    { id: "rat-cellar", title: "A copy", summary: "", author: "owner" },
+    { id: "bad", title: "Broken", summary: "x", author: "ai", problems: ["  Scene has no exit.  ", "   ", "Start missing."] },
+    { id: "ai", title: "Written", summary: "y", author: "ai", draftMarks: -2 },
+  ]);
+  assert.deepEqual(cards.map((c) => c.id), ["rat-cellar", "bad", "ai"]);
+  assert.equal(cards[0]!.title, "The Rat Cellar");
+  assert.equal(cards[0]!.summary, "A small village.");
+  assert.equal(cards[0]!.draftMarks, 6);
+  assert.equal(cards[0]!.playable, true);
+  assert.deepEqual(cards[1]!.problems, ["Scene has no exit.", "Start missing."]);
+  assert.equal(cards[1]!.playable, false);
+  assert.equal(cards[1]!.author, "ai");
+  assert.equal(cards[2]!.draftMarks, 0);
+  assert.equal(cards[2]!.playable, true);
+  assert.deepEqual(startRooms([{ id: "a", title: " One  goblin ", summary: " x " }, { id: "a", title: "dup", summary: "" }, { id: "", title: "no id", summary: "" }]), [{ id: "a", title: "One goblin", summary: "x" }]);
+});
+
+test("excerpt cuts a long blurb at a sentence, or at a word with two dots", () => {
+  assert.equal(excerpt("Short and sweet."), "Short and sweet.");
+  const long = "Wick End is a small village where everyone knows everyone. You wake in your home, a young apprentice to your father. Wanting more than his workshop, you take extra jobs on the side. Today the job is the Copper Kettle's cellar: the landlady has a rodent problem in her basement.";
+  const cut = excerpt(long, 190);
+  assert.ok(cut.length <= 190);
+  assert.ok(cut.endsWith("."), cut);
+  assert.ok(long.startsWith(cut));
+  assert.equal(cut, "Wick End is a small village where everyone knows everyone. You wake in your home, a young apprentice to your father. Wanting more than his workshop, you take extra jobs on the side.");
+  // One long sentence: cut at a word, never mid-word, ended with two dots.
+  const one = "word ".repeat(100).trim();
+  const e = excerpt(one, 50);
+  assert.ok(e.endsWith(".."));
+  assert.ok(e.length <= 52);
+  assert.equal(e.replace(/\.\.$/, "").split(" ").every((w) => w === "word"), true);
+  assert.equal(excerpt("a".repeat(300), 20), "a".repeat(20) + "..");
+  assert.equal(CARD_SUMMARY_MAX, 260);
+  assert.ok(HOOK_MAX >= CARD_SUMMARY_MAX);
+});
+
+test("problemLines lists the first few problems and then how many more", () => {
+  assert.deepEqual(problemLines([]), []);
+  assert.deepEqual(problemLines(["a", " b "]), ["a", "b"]);
+  const six = ["1", "2", "3", "4", "5", "6"];
+  assert.equal(PROBLEMS_SHOWN, 4);
+  assert.deepEqual(problemLines(six), ["1", "2", "3", "4", "and 2 more"]);
+  assert.deepEqual(problemLines(["1", "2", "3", "4"]), ["1", "2", "3", "4"]);
+  assert.deepEqual(problemLines(["1", "2", "3", "4", "5"]), ["1", "2", "3", "4", "and 1 more"]);
+});
+
+test("nextWriteStage: the AI card asks before it writes, sends once, and only steps back when it can", () => {
+  const step = (stage: WriteStage, ev: Parameters<typeof nextWriteStage>[1], premise = "a lighthouse") => nextWriteStage(stage, ev, premise);
+  assert.deepEqual(step("closed", "open"), { stage: "form", fire: false });
+  assert.deepEqual(step("form", "open"), { stage: "form", fire: false });
+  // Write needs words, and only asks.
+  assert.deepEqual(step("form", "write"), { stage: "confirm", fire: false });
+  assert.deepEqual(step("form", "write", "   "), { stage: "form", fire: false });
+  assert.deepEqual(step("closed", "write"), { stage: "closed", fire: false });
+  // Yes is the one thing that sends, once.
+  assert.deepEqual(step("confirm", "yes"), { stage: "writing", fire: true });
+  assert.deepEqual(step("writing", "yes"), { stage: "writing", fire: false });
+  assert.deepEqual(step("form", "yes"), { stage: "form", fire: false });
+  assert.deepEqual(step("confirm", "yes", ""), { stage: "confirm", fire: false });
+  // Back: confirm to the form, the form to shut, nothing while writing.
+  assert.deepEqual(step("confirm", "back"), { stage: "form", fire: false });
+  assert.deepEqual(step("form", "back"), { stage: "closed", fire: false });
+  assert.deepEqual(step("closed", "back"), { stage: "closed", fire: false });
+  assert.deepEqual(step("writing", "back"), { stage: "writing", fire: false });
+  // The host says it is writing (from any stage) or has stopped (only a writing card goes back to the form).
+  for (const st of ["closed", "form", "confirm", "writing"] as WriteStage[]) assert.deepEqual(step(st, "busy"), { stage: "writing", fire: false });
+  assert.deepEqual(step("writing", "idle"), { stage: "form", fire: false });
+  assert.deepEqual(step("closed", "idle"), { stage: "closed", fire: false });
+  // A walk through the whole flow fires exactly twice: the retry after a stop sends again, a double press does not.
+  let stage: WriteStage = "closed";
+  let fired = 0;
+  for (const ev of ["open", "write", "yes", "yes", "busy", "idle", "write", "yes"] as const) {
+    const r = nextWriteStage(stage, ev, "x");
+    stage = r.stage;
+    if (r.fire) fired++;
+  }
+  assert.equal(fired, 2);
+  assert.equal(premiseReady(" \n "), false);
+  assert.equal(premiseReady("a"), true);
+  assert.ok(PREMISE_MAX >= 500);
+  assert.equal(writingLine(undefined), "Starting the writer");
+  assert.equal(writingLine("  Writing   the cellar "), "Writing the cellar");
+});
+
+test("ending words: kicker, banner colour and the buttons", () => {
+  assert.equal(endingKicker("victory"), "Victory");
+  assert.equal(endingKicker("defeat"), "Defeat");
+  assert.equal(endingKicker("continue"), "The story goes on");
+  assert.equal(endingBannerKind("victory"), "victory");
+  assert.equal(endingBannerKind("defeat"), "defeat");
+  assert.equal(endingBannerKind("continue"), "initiative");
+  assert.deepEqual(endingChoices(true), ["continue", "menu"]);
+  assert.deepEqual(endingChoices(false), ["menu"]);
+});
+
+test("locationHoldMs: a title alone is brief, a read-aloud is given reading time, never more than 14 s", () => {
+  assert.equal(locationHoldMs(0), 3000);
+  assert.equal(locationHoldMs(100), 3500 + 45 * 100);
+  assert.ok(locationHoldMs(100) > locationHoldMs(50));
+  assert.equal(locationHoldMs(100000), LOCATION_MAX_MS);
+  assert.equal(LOCATION_MAX_MS, 14000);
+});
+
+test("titleLines: one line when it fits, otherwise the two closest halves", () => {
+  assert.deepEqual(titleLines("The Rat Cellar", true), ["The Rat Cellar"]);
+  assert.deepEqual(titleLines("Cellar", false), ["Cellar"]);
+  assert.deepEqual(titleLines("The Haunted Lighthouse of Gull Point", false), ["The Haunted Lighthouse", "of Gull Point"]);
+  assert.deepEqual(titleLines("one two three four", false), ["one two", "three four"]);
+  assert.deepEqual(titleLines("  spaced   out  ", true), ["spaced out"]);
+});
+
+test("drawerColumns: a tab each up to three, two columns of two for four", () => {
+  assert.equal(drawerColumns(0), 1);
+  assert.equal(drawerColumns(1), 1);
+  assert.equal(drawerColumns(3), 3);
+  assert.equal(drawerColumns(4), 2);
+});
+
+test("journal helpers: objectives tidied, progress counted, recent beats newest first and capped", () => {
+  const objs = journalObjectives([{ text: "  Talk to  Marta ", done: true }, { text: "   ", done: false }, { text: "Clear the cellar", done: false }]);
+  assert.deepEqual(objs, [{ text: "Talk to Marta", done: true }, { text: "Clear the cellar", done: false }]);
+  assert.deepEqual(journalObjectives(undefined), []);
+  assert.equal(journalProgress(undefined), "");
+  assert.equal(journalProgress([]), "");
+  assert.equal(journalProgress([{ text: "a", done: true }, { text: "b", done: false }, { text: "c", done: false }]), "1 of 3 done");
+  assert.equal(journalProgress([{ text: "a", done: true }, { text: " ", done: true }]), "1 of 1 done");
+  assert.deepEqual(journalRecent(undefined), []);
+  assert.deepEqual(journalRecent(["one", "", "two", "three"]), ["three", "two", "one"]);
+  const many = ["1", "2", "3", "4", "5", "6", "7"];
+  assert.equal(JOURNAL_RECENT_MAX, 5);
+  assert.deepEqual(journalRecent(many), ["7", "6", "5", "4", "3"]);
+  assert.deepEqual(journalRecent(many, 2), ["7", "6"]);
+});
+
+test("the adventure screens are part of the Overlay and the Hud, and need no DOM to import", () => {
+  assert.equal(typeof createOverlay, "function");
+  assert.equal(typeof createHud, "function");
+  const text = readFileSync(new URL("../scripts/asset-bench/overlay.ts", import.meta.url), "utf8");
+  for (const name of ["startScreen", "startHero", "locationCard", "sceneCard", "endingCard", "toggleJournal"]) assert.ok(text.includes(name), name);
 });
 
 // ---- hygiene ----------------------------------------------------------------

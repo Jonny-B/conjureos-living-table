@@ -128,6 +128,90 @@ export interface LootWindow {
   close(): void;
 }
 
+// ---- the adventure screens: the contract ------------------------------------
+
+/** One adventure on the start screen. */
+export interface StartAdventure {
+  id: string;
+  title: string;
+  summary: string;
+  /** "owner" is a hand-written file; "ai" was written by the AI writer (the card says so). */
+  author: "owner" | "ai";
+  /** How many items the file marks for review: the card says "Draft: N items marked for review". */
+  draftMarks?: number;
+  /** Why the file does not validate. With any, the card is drawn with the problems listed and cannot be picked. */
+  problems?: string[];
+}
+/** One sandbox room on the start screen ("Test rooms"). */
+export interface StartRoom {
+  id: string;
+  title: string;
+  summary: string;
+}
+/** What the AI writer is doing now: setWriting shows it in place of the premise form. */
+export interface StartWriting {
+  stage: string;
+  canCancel: boolean;
+}
+export interface StartScreenOptions {
+  adventures: readonly StartAdventure[];
+  sandboxes: readonly StartRoom[];
+  /** The plain-words cost note shown above the premise box (AI_ADVENTURE_COST_NOTE). */
+  aiNote: string;
+  /** An adventure card, or a test room card, was picked (its id). */
+  onPick: (id: string) => void;
+  /** The premise was written and confirmed. The screen then shows "writing" until setWriting is called. */
+  onWrite: (premise: string) => void;
+}
+export interface StartScreen {
+  /** Take the screen down. Does not call onPick. */
+  close(): void;
+  /**
+   * Show what the writer is doing (a progress line and, with canCancel, a Cancel button that calls `onCancel`), or null when
+   * it has stopped (the premise form comes back with the premise still in it, for another try). While it is up the adventure
+   * and room cards cannot be picked.
+   */
+  setWriting(state: StartWriting | null, onCancel?: () => void): void;
+  /**
+   * Say in plain words why the writer did not make an adventure (the first few lines, then "and N more") above the premise form's buttons,
+   * where it stays until the next try starts or this is called with null. Call it after setWriting(null) so the form is showing.
+   */
+  setProblems(lines: readonly string[] | null): void;
+}
+/** One quick-start hero: the class (chassis id), its label, the adventure's hook for it and its starting kit in words. */
+export interface StartHeroHook {
+  chassis: string;
+  label: string;
+  hook: string;
+  kit: string;
+}
+export interface StartHeroOptions {
+  adventureTitle: string;
+  hooks: readonly StartHeroHook[];
+  /** "Make your own hero": the character maker. */
+  onCreate: () => void;
+  /** A quick start for one class. */
+  onQuick: (chassis: string) => void;
+  /** Back, or Escape: to the start screen. */
+  onBack: () => void;
+}
+export interface StartHero {
+  close(): void;
+}
+export type EndingOutcome = "victory" | "defeat" | "continue";
+export interface EndingCardOptions {
+  title: string;
+  text: string;
+  outcome: EndingOutcome;
+  /** With it there is a Continue button (and Escape does the same). */
+  onContinue?: () => void;
+  /** "Back to the start screen". */
+  onMenu: () => void;
+}
+export interface EndingCard {
+  close(): void;
+}
+
 export interface Overlay {
   setStyle(style: TextStyle): void;
   /** A big centred title for about 900 ms. Banners queue; resolves when this one is gone. */
@@ -149,7 +233,7 @@ export interface Overlay {
    * in pixel, tagged "DM" (or the speaker). It shows a "..." while there is no text yet, follows streamed text through
    * update(), and after done() stays for narrationHoldMs then fades; a click closes it early; a new narrate() replaces it.
    */
-  narrate(opts: { speaker?: string; text: string }): NarrationHandle;
+  narrate(opts: { speaker?: string; text: string; full?: boolean }): NarrationHandle;
   /** The turn-order strip above the board. An empty array hides it. */
   initiative(entries: readonly InitiativeEntry[], activeId: string | null, round: number): void;
   /** A short notice, for refused clicks. */
@@ -169,6 +253,28 @@ export interface Overlay {
    * clear() leaves it up; destroy() takes it down.
    */
   lootWindow(opts: LootWindowOptions): LootWindow;
+
+  /**
+   * The start screen, over the whole board: a title card, the adventures as cards (author badge, a draft note, and a problems list
+   * on a file that does not validate, which then cannot be picked), the sandbox rooms in a smaller "Test rooms" group, and a "Write a
+   * new adventure with AI" card that opens a premise box with the cost note and a Write button that asks to confirm before onWrite.
+   * Modal: the keys do not reach the game, Tab stays inside, the arrow keys move between cards. One at a time (a new one replaces it).
+   */
+  startScreen(opts: StartScreenOptions): StartScreen;
+  /** After an adventure is picked: "Make your own hero" or a quick start per class, each with that class's hook and starting kit in words. Escape is Back. */
+  startHero(opts: StartHeroOptions): StartHero;
+  /**
+   * The arrival card: the place's name as a banner and its read-aloud in the narration box style, at the top of the board. It stays
+   * for a reading time and fades, or a click (or Enter, Escape on it) dismisses it. A new one replaces the last location card.
+   */
+  locationCard(opts: { name: string; readAloud: string }): void;
+  /** A scene change: the title as a banner and the opening text under it, shown and dismissed like locationCard (its own slot, so both can be up). */
+  sceneCard(opts: { title: string; opening?: string }): void;
+  /**
+   * The ending: a full-board card with the title, the ending's text, Continue (only when onContinue is given) and Back to the start
+   * screen. Modal like the start screen. Escape does what Continue does.
+   */
+  endingCard(opts: EndingCardOptions): EndingCard;
 
   /** Drop everything on screen (banners resolve at once), the story strip and the initiative strip included, and the context menu (not the loot window). */
   clear(): void;
@@ -437,6 +543,215 @@ export function menuEntries(entries: readonly ContextMenuEntry[]): ContextMenuEn
   return entries.filter((e) => e.id && e.label.trim() !== "").map((e) => ({ ...e, label: e.label.replace(/\s+/g, " ").trim() }));
 }
 
+// ---- the adventure screens: pure helpers (unit tested) -----------------------
+
+/** The longest premise the box takes. */
+export const PREMISE_MAX = 1000;
+/** The longest summary a card prints before it is cut at a sentence. */
+export const CARD_SUMMARY_MAX = 260;
+/** The longest hook a hero card prints. */
+export const HOOK_MAX = 320;
+/** The most problems a card lists before "and N more". */
+export const PROBLEMS_SHOWN = 4;
+/** How long a location or scene card stays: this plus 45 ms a character, never more than LOCATION_MAX_MS. */
+export const LOCATION_BASE_MS = 3500;
+export const LOCATION_MAX_MS = 14000;
+/** The most recent beats the journal prints. */
+export const JOURNAL_RECENT_MAX = 5;
+
+/** "Draft: 3 items marked for review"; empty when there is nothing marked. */
+export function draftNote(marks: number | undefined): string {
+  const n = Math.max(0, Math.floor(Number.isFinite(marks) ? (marks as number) : 0));
+  if (n === 0) return "";
+  return `Draft: ${n} ${n === 1 ? "item" : "items"} marked for review`;
+}
+
+/** The author badge words. */
+export function authorBadge(author: "owner" | "ai"): string {
+  return author === "ai" ? "AI written" : "Hand written";
+}
+
+/** A card as the start screen draws it: tidied, and whether it can be played. */
+export interface StartCard {
+  id: string;
+  title: string;
+  summary: string;
+  author: "owner" | "ai";
+  draftMarks: number;
+  problems: string[];
+  playable: boolean;
+}
+
+function tidy(s: string | undefined): string {
+  return (s ?? "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The adventure cards the start screen shows: entries without an id or a title are dropped, a repeated id keeps its first card, words are
+ * tidied (runs of blanks become one space), the draft count is a whole number of at least 0, blank problems are dropped, and a card
+ * with any problem left is not playable.
+ */
+export function startCards(list: readonly StartAdventure[]): StartCard[] {
+  const seen = new Set<string>();
+  const out: StartCard[] = [];
+  for (const a of list) {
+    const id = (a.id ?? "").trim();
+    const title = tidy(a.title);
+    if (!id || !title || seen.has(id)) continue;
+    seen.add(id);
+    const problems = (a.problems ?? []).map(tidy).filter(Boolean);
+    const marks = Math.max(0, Math.floor(Number.isFinite(a.draftMarks) ? (a.draftMarks as number) : 0));
+    out.push({ id, title, summary: tidy(a.summary), author: a.author === "ai" ? "ai" : "owner", draftMarks: marks, problems, playable: problems.length === 0 });
+  }
+  return out;
+}
+
+/** The test rooms the start screen shows: the ones with an id and a title, words tidied. */
+export function startRooms(list: readonly StartRoom[]): StartRoom[] {
+  const seen = new Set<string>();
+  const out: StartRoom[] = [];
+  for (const r of list) {
+    const id = (r.id ?? "").trim();
+    const title = tidy(r.title);
+    if (!id || !title || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, title, summary: tidy(r.summary) });
+  }
+  return out;
+}
+
+/**
+ * A long blurb cut for a card: whole when it is at most `max` characters, otherwise cut after the last sentence that ends within `max`
+ * (so a card never ends mid-thought), or at a word with ".." when the first sentence alone is longer than that.
+ */
+export function excerpt(text: string, max = CARD_SUMMARY_MAX): string {
+  const words = tidy(text);
+  if (words.length <= max) return words;
+  const head = words.slice(0, max);
+  const stops = [head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? ")];
+  const stop = Math.max(...stops);
+  if (stop >= Math.floor(max * 0.4)) return head.slice(0, stop + 1);
+  const sp = head.lastIndexOf(" ");
+  return `${(sp > 0 ? head.slice(0, sp) : head).replace(/[.,;:!?\s]+$/, "")}..`;
+}
+
+/** The lines a card lists for a file that does not validate: the first few, then "and N more". */
+export function problemLines(problems: readonly string[], shown = PROBLEMS_SHOWN): string[] {
+  const list = problems.map(tidy).filter(Boolean);
+  if (list.length <= shown) return list;
+  const rest = list.length - shown;
+  return [...list.slice(0, shown), `and ${rest} more`];
+}
+
+/** The premise can be sent: it has words in it. */
+export function premiseReady(premise: string): boolean {
+  return tidy(premise).length > 0;
+}
+
+/** Where the "Write a new adventure with AI" card is: shut, the premise form, the confirm question, or writing. */
+export type WriteStage = "closed" | "form" | "confirm" | "writing";
+export type WriteEvent = "open" | "write" | "yes" | "back" | "busy" | "idle";
+
+/**
+ * The AI card's steps. open shows the form; write asks to confirm (only with a premise); yes starts it (fire: true, once: the
+ * stage is "writing" at once, so a double press cannot send twice); back steps out (confirm to the form, the form to shut, and
+ * nothing while writing); busy (the host says it is writing) and idle (it stopped) move to and from "writing".
+ */
+export function nextWriteStage(stage: WriteStage, event: WriteEvent, premise: string): { stage: WriteStage; fire: boolean } {
+  const stay = { stage, fire: false };
+  switch (event) {
+    case "open":
+      return stage === "closed" ? { stage: "form", fire: false } : stay;
+    case "write":
+      return stage === "form" && premiseReady(premise) ? { stage: "confirm", fire: false } : stay;
+    case "yes":
+      return stage === "confirm" && premiseReady(premise) ? { stage: "writing", fire: true } : stay;
+    case "back":
+      return stage === "confirm" ? { stage: "form", fire: false } : stage === "form" ? { stage: "closed", fire: false } : stay;
+    case "busy":
+      return { stage: "writing", fire: false };
+    case "idle":
+      return stage === "writing" ? { stage: "form", fire: false } : stay;
+  }
+}
+
+/** The progress words: what the host said, or a plain default. */
+export function writingLine(stage: string | undefined): string {
+  return tidy(stage) || "Starting the writer";
+}
+
+/** The kicker over an ending's title. */
+export function endingKicker(outcome: EndingOutcome): string {
+  return outcome === "victory" ? "Victory" : outcome === "defeat" ? "Defeat" : "The story goes on";
+}
+
+/** The banner colour an ending's title takes. */
+export function endingBannerKind(outcome: EndingOutcome): BannerKind {
+  return outcome === "victory" ? "victory" : outcome === "defeat" ? "defeat" : "initiative";
+}
+
+/** The buttons of an ending, in order: Continue only when the host gave a way to continue. */
+export function endingChoices(canContinue: boolean): ("continue" | "menu")[] {
+  return canContinue ? ["continue", "menu"] : ["menu"];
+}
+
+/** How long a location or scene card stays up: 3.5 s plus 45 ms a character, never more than 14 s. No text means just the title: 3 s. */
+export function locationHoldMs(chars: number): number {
+  if (chars <= 0) return 3000;
+  return Math.min(LOCATION_MAX_MS, LOCATION_BASE_MS + NARRATION_PER_CHAR_MS * chars);
+}
+
+/**
+ * A title on one or two lines: the whole thing when it is one word or `oneLine` says it fits, otherwise cut at the space that
+ * leaves the two lines closest in length.
+ */
+export function titleLines(text: string, oneLine: boolean): string[] {
+  const words = tidy(text);
+  if (oneLine || !words.includes(" ")) return [words];
+  const parts = words.split(" ");
+  let best = 1;
+  let gap = Infinity;
+  for (let i = 1; i < parts.length; i++) {
+    const a = parts.slice(0, i).join(" ").length;
+    const b = parts.slice(i).join(" ").length;
+    if (Math.abs(a - b) < gap) {
+      gap = Math.abs(a - b);
+      best = i;
+    }
+  }
+  return [parts.slice(0, best).join(" "), parts.slice(best).join(" ")];
+}
+
+/** How many columns the HUD's drawer tabs take: one each up to three, two columns of two when there are four (their labels need the room). */
+export function drawerColumns(count: number): number {
+  return count <= 3 ? Math.max(1, count) : 2;
+}
+
+export interface JournalObjective {
+  text: string;
+  done: boolean;
+}
+/** The journal's objectives: blank ones dropped, words tidied. */
+export function journalObjectives(list: readonly JournalObjective[] | undefined): JournalObjective[] {
+  return (list ?? []).map((o) => ({ text: tidy(o.text), done: !!o.done })).filter((o) => o.text !== "");
+}
+
+/** "2 of 3 done", or "" with no objectives. */
+export function journalProgress(list: readonly JournalObjective[] | undefined): string {
+  const objs = journalObjectives(list);
+  if (objs.length === 0) return "";
+  return `${objs.filter((o) => o.done).length} of ${objs.length} done`;
+}
+
+/** The recent beats the journal prints: given oldest first (like the log), at most `max` of them, newest first. Blanks are dropped. */
+export function journalRecent(recent: readonly string[] | undefined, max = JOURNAL_RECENT_MAX): string[] {
+  return (recent ?? [])
+    .map(tidy)
+    .filter(Boolean)
+    .slice(-Math.max(0, max))
+    .reverse();
+}
+
 function signed(n: number): string {
   return n >= 0 ? `+${n}` : `${n}`;
 }
@@ -671,6 +986,7 @@ const CSS = `
 .lto-narr-tag{position:relative;z-index:1;align-self:flex-start;margin-left:12px;width:max-content;max-width:calc(100% - 24px);overflow:hidden}
 .lto-narr-box{min-width:0}
 .lto-narr-body{overflow-y:auto;overflow-x:hidden;overflow-wrap:anywhere;scrollbar-width:thin;scrollbar-gutter:stable}
+.lto-root:not([data-size="s"]) .lto-narr[data-full] .lto-narr-body{max-height:none;overflow:visible}
 .lto-narr-dots{display:flex;align-items:center;gap:6px}
 .lto-narr-dots i{display:block;width:6px;height:6px;background:currentColor;animation:lto-narr-dot 1.1s ease-in-out infinite}
 .lto-narr-dots i:nth-child(2){animation-delay:.18s}.lto-narr-dots i:nth-child(3){animation-delay:.36s}
@@ -738,6 +1054,98 @@ const CSS = `
 .lto-sb .lto-cm-label{font:700 15px/1.25 var(--lto-serif);color:var(--sb-ink);overflow-wrap:anywhere}
 .lto-sb .lto-cm-why{font:italic 12.5px/1.3 var(--lto-serif);color:var(--sb-muted);overflow-wrap:anywhere}
 .lto-sb .lto-cm-reason{font:12.5px/1.3 var(--lto-serif);color:var(--sb-bad);overflow-wrap:anywhere}
+
+/* ---- the adventure screens: start, hero, ending (they cover the whole board and take the pointer) ---- */
+.lto-scr-layer{position:absolute;inset:0;pointer-events:none}
+.lto-scr{position:absolute;inset:0;pointer-events:auto;display:flex;flex-direction:column;animation:lto-scr-in .22s ease-out}
+@keyframes lto-scr-in{from{opacity:0}to{opacity:1}}
+.lto-px .lto-scr{background:rgb(5 6 26/.94);color:#f4ecd0}
+.lto-sb .lto-scr{background:rgb(var(--sb-shade)/.92)}
+.lto-scr-scroll{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:14px 12px 18px;overscroll-behavior:contain;scrollbar-width:thin}
+.lto-px .lto-scr-scroll{scrollbar-color:#4d5da6 #05061a}
+.lto-sb .lto-scr-scroll{scrollbar-color:var(--sb-rule) transparent}
+.lto-scr-body{margin:auto;width:min(720px,100%);display:flex;flex-direction:column;gap:14px;min-width:0}
+.lto-scr-title{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;text-align:center}
+.lto-scr-title .lto-num{margin:-4px 0}
+.lto-scr-sec{padding:0 2px;min-width:0}
+.lto-sb .lto-scr-sec{font:700 12px/1.2 var(--lto-serif);letter-spacing:.12em;text-transform:uppercase;color:#ffd86b;text-shadow:0 1px 2px rgb(0 0 0/.6)}
+.lto-sb .lto-scr-sub{font:italic 15px/1.35 var(--lto-serif);color:#eadfc2;text-shadow:0 1px 2px rgb(0 0 0/.6)}
+.lto-st{min-width:0;overflow-wrap:anywhere}
+.lto-st.is-center{display:flex;justify-content:center;text-align:center}
+.lto-st canvas{display:block}
+.lto-card-list{display:flex;flex-direction:column;gap:10px;min-width:0}
+.lto-card-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}
+.lto-root[data-size="s"] .lto-card-grid{grid-template-columns:minmax(0,1fr)}
+.lto-card{appearance:none;font:inherit;color:inherit;text-align:left;margin:0;width:100%;min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:9px 11px;cursor:pointer;touch-action:manipulation;pointer-events:auto;position:relative}
+.lto-card>*{min-width:0}
+.lto-card[aria-disabled="true"]{cursor:default}
+.lto-card:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
+.lto-px .lto-card:focus-visible{outline-color:#ffc72a}
+.lto-px .lto-card.lto-fr{padding:6px 8px}
+.lto-px .lto-card.lto-fr.is-compact{padding:2px 4px}
+.lto-px .lto-card:not([aria-disabled="true"]):hover{--frame:var(--fr-blue)}
+.lto-sb .lto-card.is-compact{padding:7px 10px}
+.lto-sb .lto-card:not([aria-disabled="true"]):hover{box-shadow:0 0 0 2px var(--sb-gold),0 4px 12px rgb(0 0 0/.35),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold)}
+.lto-sb .lto-card.is-bad{border-color:var(--sb-bad)}
+.lto-sb .lto-card-title{font:700 18px/1.2 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-card.is-compact .lto-card-title{font-size:15px}
+.lto-sb .lto-card-text{font:14.5px/1.4 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-card-quiet{font:13px/1.35 var(--lto-serif);color:var(--sb-muted)}
+.lto-sb .lto-card-hook{font:italic 14.5px/1.4 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-card-draft{font:700 13px/1.3 var(--lto-serif);color:var(--sb-spk)}
+.lto-sb .lto-card-bad{font:13.5px/1.35 var(--lto-serif);color:var(--sb-bad)}
+.lto-sb .lto-card-badhead{font:700 13px/1.3 var(--lto-serif);color:var(--sb-bad)}
+.lto-sb .lto-card-ask{font:700 14.5px/1.3 var(--lto-serif);color:var(--sb-spk)}
+.lto-sb .lto-card.is-bad .lto-card-title{color:var(--sb-muted)}
+.lto-card[data-ltoai]{gap:8px}
+.lto-card-meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 10px}
+.lto-pill{display:inline-flex;align-items:center;padding:2px 9px;flex:none}
+.lto-sb .lto-pill{border-radius:999px;font:700 11px/1.2 var(--lto-num);letter-spacing:.06em;text-transform:uppercase;background:var(--sb-badge);color:var(--sb-badge-ink);border:1px solid var(--sb-gold)}
+.lto-sb .lto-pill[data-tone="ai"]{background:var(--sb-hero-deep);color:#e6f1ff;border-color:var(--sb-hero)}
+.lto-px .lto-pill{padding:2px 5px;background:#2a2150;border:2px solid #05061a;box-shadow:inset 0 0 0 1px #8a6a1e}
+.lto-px .lto-pill[data-tone="ai"]{background:#12306a;box-shadow:inset 0 0 0 1px #4a8fd8}
+.lto-pill canvas{display:block}
+.lto-play{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex:none}
+.lto-sb .lto-play{font:700 13px/1 var(--lto-serif);letter-spacing:.06em;text-transform:uppercase;color:var(--sb-spk)}
+.lto-sb .lto-play::after{content:"";width:0;height:0;border:5px solid transparent;border-left:8px solid currentColor;border-right:0}
+.lto-play canvas{display:block}
+.lto-sb .lto-card[data-ltoai]{border-style:dashed}
+.lto-scr-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;min-width:0}
+.lto-scr-actions.is-start{justify-content:flex-start}
+.lto-root[data-size="s"] .lto-scr-actions{flex-direction:column;align-items:stretch}
+.lto-root[data-size="s"] .lto-scr-actions.is-start{align-items:flex-start}
+.lto-scr-actions .lto-btn{min-width:120px}
+.lto-ta{appearance:none;display:block;width:100%;min-width:0;min-height:96px;margin:0;padding:8px 10px;resize:vertical;pointer-events:auto;font:16px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:inherit}
+.lto-ta:disabled{opacity:.6;resize:none}
+.lto-ta:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
+.lto-px .lto-ta{color:#f4ecd0;background:#141a3c}
+.lto-px .lto-ta.lto-fr{padding:2px 4px}
+.lto-px .lto-ta::placeholder{color:#98a5d8;opacity:1}
+.lto-px .lto-ta:focus-visible{outline-color:#ffc72a}
+.lto-sb .lto-ta{font-family:var(--lto-serif);color:var(--sb-ink);background:var(--sb-paper);border:1px solid var(--sb-rule);border-radius:9px;box-shadow:inset 0 1px 3px rgb(var(--sb-shade)/.25)}
+.lto-sb .lto-ta::placeholder{color:var(--sb-muted);opacity:1}
+.lto-wprog{display:flex;align-items:center;gap:8px;min-width:0}
+.lto-wdots{display:flex;align-items:center;gap:5px;flex:none;color:#ffc72a}
+.lto-sb .lto-wdots{color:var(--sb-spk)}
+.lto-wdots i{display:block;width:6px;height:6px;background:currentColor;animation:lto-narr-dot 1.1s ease-in-out infinite}
+.lto-sb .lto-wdots i{border-radius:50%}
+.lto-wdots i:nth-child(2){animation-delay:.18s}.lto-wdots i:nth-child(3){animation-delay:.36s}
+.lto-wprog .lto-st{flex:1 1 auto}
+.lto-card[data-ltoai]:focus{outline:none}
+.lto-scr[data-busy="true"] .lto-card[data-lto-adventure],.lto-scr[data-busy="true"] .lto-card[data-lto-room]{opacity:.5}
+.lto-endbox{display:flex;flex-direction:column;gap:10px;min-width:0}
+.lto-px .lto-endbox .lto-narr-body,.lto-sb .lto-endbox .lto-narr-body{max-height:none;overflow:visible}
+.lto-endbox .lto-narr-box{width:100%}
+.lto-sb .lto-endbox .lto-narr-body{font-size:16.5px}
+.lto-ribbon{width:100%;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;text-align:center}
+.lto-px .lto-ribbon{padding:4px 8px}
+.lto-sb .lto-ribbon .lto-num{margin:-3px 0}
+.lto-cards{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;min-width:0;pointer-events:none}
+.lto-loc{--nl:6;width:min(600px,100%);gap:4px}
+.lto-root[data-size="s"] .lto-loc{--nl:4}
+.lto-loc .lto-narr-box{width:100%}
+.lto-root:not([data-size="s"]) .lto-loc .lto-narr-body{max-height:none;overflow:visible}
+.lto-px .lto-loc .lto-narr-box{padding:2px 5px}
 
 @media (prefers-reduced-motion: reduce){.lto-root *{animation:none!important;transition:none!important}}
 `;
@@ -931,6 +1339,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
       enforceStripMax();
       if (menu) renderMenu(menu);
       if (loot) renderLoot(loot);
+      for (const c of arrivals) renderArrival(c);
+      rebuildScreens();
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
     else run();
@@ -1223,7 +1633,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
   const livePlates = new Set<LivePlate>();
 
   /** The lowest a plate may stand: under the turn-order strip when it is showing. */
-  const safeTop = (): number => (initEl.hidden ? 8 : top.offsetHeight + 12);
+  const safeTop = (): number => (initEl.hidden && cardsHost.hidden ? 8 : top.offsetHeight + 12);
 
   /**
    * Lift a plate that stands over its point clear of a float's ink: a taller float
@@ -1643,7 +2053,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     } else {
       n.body.textContent = n.text;
     }
-    if (stick) n.body.scrollTop = n.body.scrollHeight;
+    // Written text (`full`) is read from its first word; a reply that streams in is followed to its newest line.
+    if (stick && n.node.dataset.full === undefined) n.body.scrollTop = n.body.scrollHeight;
   }
 
   function queueNarrationRender(n: Narr): void {
@@ -1671,7 +2082,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     n.node.remove();
   }
 
-  function narrate(opts: { speaker?: string; text: string }): NarrationHandle {
+  function narrate(opts: { speaker?: string; text: string; full?: boolean }): NarrationHandle {
     const dead: NarrationHandle = { update() {}, done() {}, close() {} };
     if (destroyed) return dead;
     // A new narration replaces the old one at once (a fading one included).
@@ -1679,6 +2090,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (narr) narr.closed = true;
     const node = el("div", "lto-narr");
     node.dataset.ltoNarration = "";
+    // `full`: written text that is read from its first word (an adventure's own beat), not a reply that streams in: the box grows to hold all of it.
+    if (opts.full) node.dataset.full = "";
     node.tabIndex = 0;
     node.setAttribute("role", "group");
     node.title = "Click to dismiss";
@@ -2077,7 +2490,737 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     };
   }
 
+  // ---- the adventure screens: start, hero, ending, and the arrival cards
+
+  /** The width a text block has, in CSS px, for pixel wrapping: its own box when it is laid out, else the board less a margin. */
+  const roomOf = (node: HTMLElement, slack = 0): number => Math.max(40, (node.clientWidth || (root.clientWidth || width) - 48) - slack);
+
+  interface TextSpec {
+    /** The storybook class (it carries the font) and, with it, the hook the tests read. */
+    cls: string;
+    scale?: number;
+    weight?: PixelWeight;
+    color?: PixelColor;
+    /** Ink with a dark outline (text that sits on the scrim, not on a card). */
+    outline?: boolean;
+    center?: boolean;
+    /** Width the pixel text is NOT to use, in CSS px (a sibling beside it). */
+    slack?: number;
+  }
+
+  /** A block of words in the current treatment: a canvas wrapped to the block's width in pixel (with the words kept for screen readers), plain text in storybook. */
+  function stext(parent: HTMLElement, words: string, spec: TextSpec): HTMLElement {
+    const d = el("div", `lto-st ${spec.cls}${spec.center ? " is-center" : ""}`);
+    d.dataset.text = words;
+    parent.append(d);
+    if (isPixel()) {
+      const scale = spec.scale ?? 2;
+      const ratio = deviceRatio();
+      const margin = spec.outline ? 3 * cssScale(scale, ratio) : 2;
+      d.append(
+        srText(words),
+        px(words, {
+          scale,
+          weight: spec.weight ?? "regular",
+          color: spec.color ?? PX.ink,
+          outline: spec.outline ? PX.dark : null,
+          shadow: spec.outline ? PX.shade : null,
+          maxWidth: wrapWidth(roomOf(d, (spec.slack ?? 0) + margin), scale, ratio),
+          align: spec.center ? "center" : "left",
+        }),
+      );
+    } else {
+      d.textContent = words;
+    }
+    return d;
+  }
+
+  /** The width of an SVG numeral for `text` at `size` with the banner's letter spacing, frame included (see numeralGeometry). */
+  const numeralWidth = (text: string, size: number, spacing: number): number =>
+    Math.ceil(serifWidth(text, size) + Math.max(0, text.length - 1) * spacing * size + Math.max(3, Math.round(size * 0.3)) * 2 + 4);
+
+  /**
+   * A big title inside `node`, in the current treatment, on one line when it fits and on two when it does not: pixel text at a scale
+   * between 2 and `pxMax`, wrapped; storybook numerals between 16 px and `sbMax`.
+   */
+  function titleInto(node: HTMLElement, text: string, kind: BannerKind, o: { avail: number; pxMax: number; sbMax: number }): void {
+    const label = text.toUpperCase();
+    const face = FACES[kind];
+    const ratio = deviceRatio();
+    if (isPixel()) {
+      const scale = fitScale(textWidth(label, "bold") + 6, o.avail, 2, o.pxMax, ratio);
+      node.append(
+        srText(text),
+        px(label, {
+          scale,
+          weight: "bold",
+          color: [face.top, face.mid],
+          outline: face.outline,
+          outlinePx: 2,
+          shadow: PX.shade,
+          shadowDx: 2,
+          shadowDy: 2,
+          maxWidth: wrapWidth(o.avail - 6 * cssScale(scale, ratio), scale, ratio),
+          align: "center",
+        }),
+      );
+      return;
+    }
+    const spacing = 0.08;
+    const fitsAt = (lines: string[], size: number) => lines.every((l) => numeralWidth(l, size, spacing) <= o.avail);
+    let lines = [label];
+    let size = o.sbMax;
+    while (size > 20 && !fitsAt(lines, size)) size -= 2;
+    if (!fitsAt(lines, size)) {
+      lines = titleLines(label, false);
+      size = o.sbMax;
+      while (size > 16 && !fitsAt(lines, size)) size -= 2;
+    }
+    node.append(srText(text));
+    for (const line of lines) node.append(numeral(uid, kind, line, size, spacing));
+  }
+
+  /** A framed title strip (the banner's look, kept in the page rather than flashed): pixel frame or storybook ribbon. */
+  function ribbon(parent: HTMLElement, text: string, kind: BannerKind, o: { pxMax: number; sbMax: number }): HTMLElement {
+    const node = el("div", "lto-banner lto-ribbon");
+    node.dataset.ltoRibbon = "";
+    node.dataset.kind = kind;
+    node.dataset.text = text;
+    parent.append(node);
+    if (isPixel()) frame(node, BANNER_FRAME[kind]);
+    titleInto(node, text, kind, { avail: Math.max(100, roomOf(node, isPixel() ? 16 : 72)), ...o });
+    return node;
+  }
+
+  /** A button for the screens: the loot window's look, with a key for keeping the focus across a redraw. */
+  function sbtn(parent: HTMLElement, label: string, key: string, pri = false): HTMLButtonElement {
+    const b = el("button", `lto-btn${pri ? " is-pri" : ""}`);
+    b.type = "button";
+    b.dataset.scrKey = key;
+    b.dataset.scrNav = "";
+    b.setAttribute("aria-label", label);
+    if (isPixel()) {
+      b.classList.add("lto-fr", "fs1", pri ? "fr-gold" : "fr-win");
+      // A long label (Back to the start screen) wraps on a phone instead of running past the button's edge.
+      b.append(px(label, { scale: 2, weight: "bold", color: pri ? PX.gold : PX.ink, outline: PX.dark, maxWidth: wrapWidth(Math.max(100, (root.clientWidth || width) - 96), 2, deviceRatio()) }));
+    } else {
+      b.append(el("span", undefined, label));
+    }
+    parent.append(b);
+    return b;
+  }
+
+  /** A section heading on the scrim. */
+  function sectionHead(parent: HTMLElement, words: string): void {
+    const d = stext(parent, words, { cls: "lto-scr-sec", scale: 2, weight: "bold", color: PX.gold, outline: true });
+    d.setAttribute("role", "heading");
+    d.setAttribute("aria-level", "2");
+  }
+
+  /** A small tag: the author badge. */
+  function pill(parent: HTMLElement, words: string, tone: "plain" | "ai"): void {
+    const p = el("span", "lto-pill");
+    p.dataset.tone = tone;
+    p.dataset.text = words;
+    if (isPixel()) p.append(srText(words), px(words.toUpperCase(), { scale: 1, weight: "bold", color: tone === "ai" ? ["#e6f1ff", "#8fc4ff"] : PX.gold }));
+    else p.textContent = words;
+    parent.append(p);
+  }
+
+  interface Scr {
+    kind: string;
+    node: HTMLElement;
+    scroll: HTMLElement;
+    body: HTMLElement;
+    closed: boolean;
+    /** Draw it again (a resize, a style switch, a state change), keeping the scroll and the focus. */
+    rebuild: () => void;
+    /** What Escape does. */
+    onEscape?: () => void;
+  }
+  const screens = new Set<Scr>();
+  const closers = new WeakMap<Scr, () => void>();
+  const screensLayer = el("div", "lto-scr-layer");
+
+  function focusableIn(node: HTMLElement): HTMLElement[] {
+    return Array.from(node.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled), [tabindex="0"]')).filter((n) => n.getClientRects().length > 0);
+  }
+
+  function closeScreen(s: Scr): void {
+    if (s.closed) return;
+    closers.get(s)?.();
+  }
+  function rebuildScreens(): void {
+    for (const s of screens) s.rebuild();
+  }
+
+  /** A full-board screen: modal (its keys are its own, Tab stays inside, the arrows move between cards). A new screen replaces the ones up. */
+  function mountScreen(kind: string, label: string, draw: (s: Scr) => void): Scr {
+    for (const old of Array.from(screens)) closeScreen(old);
+    const node = el("div", "lto-scr");
+    node.dataset.ltoScreen = kind;
+    node.setAttribute("role", "dialog");
+    node.setAttribute("aria-modal", "true");
+    node.setAttribute("aria-label", label);
+    const scroll = el("div", "lto-scr-scroll");
+    const body = el("div", "lto-scr-body");
+    scroll.append(body);
+    node.append(scroll);
+    const prevFocus = document.activeElement;
+    const s: Scr = { kind, node, scroll, body, closed: false, rebuild: () => {} };
+    s.rebuild = () => {
+      if (s.closed || destroyed) return;
+      const at = document.activeElement as HTMLElement | null;
+      const key = at && node.contains(at) ? (at.dataset.scrKey ?? null) : null;
+      const caret = at instanceof HTMLTextAreaElement && node.contains(at) ? [at.selectionStart, at.selectionEnd] : null;
+      const was = scroll.scrollTop;
+      body.replaceChildren();
+      draw(s);
+      scroll.scrollTop = was;
+      if (key !== null) {
+        const again = Array.from(node.querySelectorAll<HTMLElement>("[data-scr-key]")).find((n) => n.dataset.scrKey === key);
+        if (again) {
+          again.focus({ preventScroll: true });
+          if (caret && again instanceof HTMLTextAreaElement) again.setSelectionRange(caret[0] ?? 0, caret[1] ?? 0);
+        }
+      }
+    };
+    // The board and the game must not act on what is done here.
+    for (const type of ["keyup", "keypress", "pointerdown", "mousedown", "click", "dblclick", "contextmenu"]) node.addEventListener(type, (e) => e.stopPropagation());
+    node.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        s.onEscape?.();
+        return;
+      }
+      if (e.key === "Tab") {
+        const list = focusableIn(node);
+        if (list.length === 0) {
+          e.preventDefault();
+          return;
+        }
+        const i = list.indexOf(document.activeElement as HTMLElement);
+        const first = list[0] as HTMLElement;
+        const last = list[list.length - 1] as HTMLElement;
+        if (i < 0 || (e.shiftKey && i === 0) || (!e.shiftKey && i === list.length - 1)) {
+          e.preventDefault();
+          (e.shiftKey && i >= 0 ? last : first).focus();
+        }
+        return;
+      }
+      const t = e.target as HTMLElement | null;
+      if (t && t.dataset.scrNav !== undefined && ["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        const navs = Array.from(node.querySelectorAll<HTMLElement>("[data-scr-nav]:not(:disabled)")).filter((n) => n.getClientRects().length > 0);
+        const next = navs[cardNavIndex(navs.length, navs.indexOf(t), e.key)];
+        if (next) {
+          e.preventDefault();
+          next.focus({ preventScroll: true });
+          next.scrollIntoView({ block: "nearest" });
+        }
+      }
+    });
+    closers.set(s, () => {
+      const had = node.contains(document.activeElement);
+      s.closed = true;
+      screens.delete(s);
+      node.remove();
+      if ((had || document.activeElement === document.body) && prevFocus instanceof HTMLElement && prevFocus.isConnected) prevFocus.focus({ preventScroll: true });
+    });
+    screens.add(s);
+    screensLayer.append(node);
+    s.rebuild();
+    return s;
+  }
+
+  /** The title block of a screen: the big title, and under it a quiet line. */
+  function titleBlock(parent: HTMLElement, title: string, sub: string): void {
+    const t = el("div", "lto-scr-title");
+    t.dataset.ltoTitle = title;
+    parent.append(t);
+    const big = el("div", "lto-ribbon");
+    t.append(big);
+    titleInto(big, title, "victory", { avail: Math.max(100, roomOf(t, 8)), pxMax: tier === "s" ? 3 : 4, sbMax: tier === "s" ? 32 : 42 });
+    stext(t, sub, { cls: "lto-scr-sub", scale: 2, color: PX.muted, center: true, outline: true });
+  }
+
+  // ---- the start screen
+
+  function startScreen(sopts: StartScreenOptions): StartScreen {
+    const dead: StartScreen = { close() {}, setWriting() {}, setProblems() {} };
+    if (destroyed) return dead;
+    let writeProblems: string[] = [];
+    const adventures = startCards(sopts.adventures);
+    const rooms = startRooms(sopts.sandboxes);
+    let stage: WriteStage = "closed";
+    let writing: StartWriting | null = null;
+    let cancelFn: (() => void) | undefined;
+    let cancelling = false;
+    const ta = el("textarea", "lto-ta");
+    ta.rows = 4;
+    ta.maxLength = PREMISE_MAX;
+    ta.placeholder = "A haunted lighthouse and a missing keeper...";
+    ta.dataset.scrKey = "premise";
+    ta.dataset.ltoPremise = "";
+    ta.setAttribute("aria-label", "What the adventure is about");
+    ta.setAttribute("autocapitalize", "sentences");
+    let writeBtn: HTMLButtonElement | null = null;
+    const sync = (): void => {
+      if (writeBtn) writeBtn.disabled = !premiseReady(ta.value);
+    };
+    ta.addEventListener("input", sync);
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+        e.preventDefault();
+        step("write");
+      }
+    });
+    const busy = (): boolean => stage === "writing";
+
+    const s = mountScreen("start", "The Living Table: choose an adventure", (sc) => {
+      sc.node.dataset.busy = String(busy());
+      const body = sc.body;
+      titleBlock(body, "The Living Table", "Choose an adventure");
+
+      // the owner's adventures
+      sectionHead(body, "Adventures");
+      const list = el("div", "lto-card-list");
+      list.dataset.ltoAdventures = "";
+      body.append(list);
+      if (adventures.length === 0) stext(list, "No adventures are installed yet.", { cls: "lto-scr-sub", scale: 2, color: PX.muted, outline: true });
+      for (const c of adventures) adventureCard(list, c);
+
+      // the test rooms
+      if (rooms.length > 0) {
+        sectionHead(body, "Test rooms");
+        const grid = el("div", "lto-card-grid");
+        grid.dataset.ltoRooms = "";
+        body.append(grid);
+        for (const r of rooms) roomCard(grid, r);
+      }
+
+      // the AI writer
+      sectionHead(body, "Something new");
+      aiCard(body);
+    });
+    s.onEscape = () => step("back");
+
+    function adventureCard(list: HTMLElement, c: StartCard): void {
+      const playable = c.playable;
+      const node = playable ? el("button", "lto-card") : el("div", "lto-card");
+      if (node instanceof HTMLButtonElement) node.type = "button";
+      node.dataset.ltoAdventure = c.id;
+      node.dataset.author = c.author;
+      node.dataset.playable = String(playable);
+      node.dataset.draft = String(c.draftMarks);
+      node.dataset.scrKey = `adv:${c.id}`;
+      node.dataset.scrNav = "";
+      const note = draftNote(c.draftMarks);
+      const name = [c.title, authorBadge(c.author), note].filter(Boolean).join(", ");
+      if (playable) {
+        node.setAttribute("aria-label", `${name}. ${c.summary}`);
+        node.addEventListener("click", () => {
+          if (!busy()) sopts.onPick(c.id);
+        });
+        if (busy()) node.setAttribute("aria-disabled", "true");
+      } else {
+        node.tabIndex = 0;
+        node.setAttribute("role", "group");
+        node.setAttribute("aria-label", `${name}, cannot be played yet. ${c.problems.join(". ")}`);
+        node.setAttribute("aria-disabled", "true");
+      }
+      list.append(node);
+      if (isPixel()) frame(node, playable ? "gold" : "red", true);
+      else {
+        node.classList.add("lto-plate");
+        if (!playable) node.classList.add("is-bad");
+      }
+      stext(node, c.title, { cls: "lto-card-title", scale: 2, weight: "bold", color: playable ? PX.gold : PX.muted });
+      const meta = el("div", "lto-card-meta");
+      node.append(meta);
+      pill(meta, authorBadge(c.author), c.author === "ai" ? "ai" : "plain");
+      if (playable) {
+        const play = el("span", "lto-play");
+        play.setAttribute("aria-hidden", "true");
+        if (isPixel()) play.append(px("PLAY", { scale: 2, weight: "bold", color: PX.gold, outline: PX.dark }), spriteCanvas(["o...", "oo..", "ooo.", "oooo", "ooo.", "oo..", "o..."], { o: "#ffc72a" }, 2));
+        else play.textContent = "Play";
+        meta.append(play);
+      }
+      if (c.summary) stext(node, excerpt(c.summary), { cls: "lto-card-text", scale: 2, color: PX.ink });
+      if (note) stext(node, note, { cls: "lto-card-draft", scale: 2, weight: "bold", color: ["#ffd9a0", "#ff9a3a"] }).dataset.ltoDraft = "";
+      if (!playable) {
+        stext(node, "This file has problems and cannot be played yet:", { cls: "lto-card-badhead", scale: 2, weight: "bold", color: PX.bad });
+        const probs = el("div", "lto-problems");
+        probs.dataset.ltoProblems = "";
+        probs.style.cssText = "display:flex;flex-direction:column;gap:3px;min-width:0";
+        node.append(probs);
+        for (const line of problemLines(c.problems)) stext(probs, /^and \d+ more$/.test(line) ? line : `- ${line}`, { cls: "lto-card-bad", scale: 2, color: PX.bad });
+      }
+    }
+
+    function roomCard(grid: HTMLElement, r: StartRoom): void {
+      const node = el("button", "lto-card is-compact");
+      node.type = "button";
+      node.dataset.ltoRoom = r.id;
+      node.dataset.scrKey = `room:${r.id}`;
+      node.dataset.scrNav = "";
+      node.setAttribute("aria-label", r.summary ? `${r.title}. ${r.summary}` : r.title);
+      node.addEventListener("click", () => {
+        if (!busy()) sopts.onPick(r.id);
+      });
+      if (busy()) node.setAttribute("aria-disabled", "true");
+      grid.append(node);
+      if (isPixel()) frame(node, "win", true);
+      else node.classList.add("lto-plate");
+      stext(node, r.title, { cls: "lto-card-title", scale: 2, weight: "bold", color: PX.ink });
+      if (r.summary) stext(node, r.summary, { cls: "lto-card-quiet", scale: 1, color: PX.muted });
+    }
+
+    function aiCard(parent: HTMLElement): void {
+      writeBtn = null;
+      if (stage === "closed") {
+        const node = el("button", "lto-card");
+        node.type = "button";
+        node.dataset.ltoAi = "";
+        node.dataset.scrKey = "ai";
+        node.dataset.scrNav = "";
+        node.setAttribute("aria-label", "Write a new adventure with AI. Describe an idea and the AI writes one for you. Optional.");
+        node.addEventListener("click", () => step("open"));
+        parent.append(node);
+        if (isPixel()) frame(node, "blue", true);
+        else node.classList.add("lto-plate");
+        stext(node, "Write a new adventure with AI", { cls: "lto-card-title", scale: 2, weight: "bold", color: PX.ink });
+        stext(node, "Describe an idea and the AI writes one for you. Optional.", { cls: "lto-card-quiet", scale: 2, color: PX.muted });
+        return;
+      }
+      const node = el("div", "lto-card");
+      node.dataset.ltoAi = "";
+      node.dataset.stage = stage;
+      node.tabIndex = -1;
+      node.setAttribute("role", "group");
+      node.setAttribute("aria-label", "Write a new adventure with AI");
+      node.dataset.scrKey = "ai";
+      parent.append(node);
+      if (isPixel()) frame(node, "blue", true);
+      else node.classList.add("lto-plate");
+      stext(node, "Write a new adventure with AI", { cls: "lto-card-title", scale: 2, weight: "bold", color: PX.ink });
+      stext(node, sopts.aiNote, { cls: "lto-card-text", scale: 2, color: PX.ink }).dataset.ltoCost = "";
+      stext(node, "What is the adventure about?", { cls: "lto-card-quiet", scale: 2, weight: "bold", color: PX.muted });
+      ta.disabled = busy();
+      ta.classList.toggle("lto-fr", isPixel());
+      ta.classList.toggle("fs1", isPixel());
+      ta.classList.toggle("fr-win", isPixel());
+      node.append(ta);
+      if (stage === "confirm") {
+        const q = stext(node, "Start writing now?", { cls: "lto-card-ask", scale: 2, weight: "bold", color: PX.gold });
+        q.dataset.ltoConfirm = "";
+      } else if (stage === "form" && writeProblems.length > 0) {
+        stext(node, "No adventure was made. Why:", { cls: "lto-card-badhead", scale: 2, weight: "bold", color: PX.bad }).dataset.ltoWriteFailed = "";
+        const probs = el("div", "lto-problems");
+        probs.dataset.ltoWriteProblems = "";
+        probs.style.cssText = "display:flex;flex-direction:column;gap:3px;min-width:0";
+        node.append(probs);
+        for (const line of problemLines(writeProblems)) stext(probs, /^and \d+ more$/.test(line) ? line : `- ${line}`, { cls: "lto-card-bad", scale: 2, color: PX.bad });
+      } else if (stage === "writing") {
+        const prog = el("div", "lto-wprog");
+        prog.dataset.ltoWriting = "";
+        prog.setAttribute("role", "status");
+        prog.setAttribute("aria-live", "polite");
+        const dots = el("span", "lto-wdots");
+        dots.setAttribute("aria-hidden", "true");
+        dots.append(el("i"), el("i"), el("i"));
+        node.append(prog);
+        prog.append(dots);
+        stext(prog, cancelling ? "Cancelling" : writingLine(writing?.stage), { cls: "lto-card-ask", scale: 2, weight: "bold", color: PX.gold, slack: 30 });
+      }
+      const row = el("div", "lto-scr-actions is-start");
+      node.append(row);
+      if (stage === "form") {
+        writeBtn = sbtn(row, "Write it", "write", true);
+        writeBtn.dataset.ltoWrite = "";
+        writeBtn.addEventListener("click", () => step("write"));
+        sync();
+        sbtn(row, "Cancel", "back").addEventListener("click", () => step("back"));
+      } else if (stage === "confirm") {
+        const yes = sbtn(row, "Yes, write it", "yes", true);
+        yes.dataset.ltoYes = "";
+        yes.addEventListener("click", () => step("yes"));
+        sbtn(row, "Not yet", "back").addEventListener("click", () => step("back"));
+      } else if (writing?.canCancel) {
+        const cancel = sbtn(row, "Cancel", "cancel");
+        cancel.dataset.ltoCancel = "";
+        cancel.disabled = cancelling;
+        cancel.addEventListener("click", () => {
+          if (cancelling) return;
+          cancelling = true;
+          s.rebuild();
+          cancelFn?.();
+        });
+      }
+    }
+
+    /** Bring the AI card into view: all of it when it fits the screen (so its buttons show), else down to what has the focus. */
+    function reveal(card: HTMLElement | undefined, focused: HTMLElement | undefined): void {
+      if (!card) return;
+      const sr = s.scroll.getBoundingClientRect();
+      const cr = card.getBoundingClientRect();
+      if (cr.height + 12 <= sr.height) {
+        if (cr.bottom > sr.bottom - 8) s.scroll.scrollTop += cr.bottom - sr.bottom + 12;
+        else if (cr.top < sr.top) s.scroll.scrollTop -= sr.top - cr.top + 8;
+      } else focused?.scrollIntoView({ block: "nearest" });
+    }
+
+    function pick(key: string): HTMLElement | undefined {
+      return Array.from(s.node.querySelectorAll<HTMLElement>("[data-scr-key]")).find((n) => n.dataset.scrKey === key);
+    }
+
+    function step(ev: WriteEvent): void {
+      if (s.closed) return;
+      const r = nextWriteStage(stage, ev, ta.value);
+      const was = stage;
+      stage = r.stage;
+      // A new try, or stepping out of the form, drops what the last try said.
+      if (r.fire || stage !== "form") writeProblems = [];
+      if (r.fire) sopts.onWrite(ta.value.trim());
+      if (stage === was) return;
+      s.rebuild();
+      const target = stage === "form" ? pick("premise") : stage === "confirm" ? pick("back") : stage === "closed" ? pick("ai") : (pick("cancel") ?? pick("ai"));
+      target?.focus({ preventScroll: true });
+      reveal(pick("ai"), target);
+    }
+
+    // The first focus: the first card.
+    queueMicrotask(() => {
+      if (s.closed) return;
+      s.node.querySelector<HTMLElement>("[data-scr-nav]")?.focus({ preventScroll: true });
+    });
+
+    return {
+      close: () => closeScreen(s),
+      setWriting(state: StartWriting | null, onCancel?: () => void): void {
+        if (s.closed) return;
+        writing = state;
+        if (state) writeProblems = [];
+        cancelFn = onCancel;
+        cancelling = false;
+        const was = stage;
+        stage = nextWriteStage(stage, state ? "busy" : "idle", ta.value).stage;
+        s.rebuild();
+        if (stage !== was && stage === "form") ta.focus({ preventScroll: true });
+      },
+      setProblems(lines: readonly string[] | null): void {
+        if (s.closed) return;
+        writeProblems = lines ? lines.map(tidy).filter(Boolean) : [];
+        s.rebuild();
+        if (writeProblems.length > 0) reveal(pick("ai"), pick("premise"));
+      },
+    };
+  }
+
+  // ---- the hero screen
+
+  function startHero(hopts: StartHeroOptions): StartHero {
+    const dead: StartHero = { close() {} };
+    if (destroyed) return dead;
+    const hooks = hopts.hooks.filter((h) => h.chassis && tidy(h.label));
+    const s = mountScreen("hero", `${hopts.adventureTitle}: choose your hero`, (sc) => {
+      const body = sc.body;
+      const back = el("div", "lto-scr-actions is-start");
+      body.append(back);
+      const b = sbtn(back, "Back", "back");
+      b.dataset.ltoBack = "";
+      b.addEventListener("click", () => hopts.onBack());
+      titleBlock(body, tidy(hopts.adventureTitle) || "A new adventure", "Who will you be?");
+
+      const mine = el("button", "lto-card");
+      mine.type = "button";
+      mine.dataset.ltoCreate = "";
+      mine.dataset.scrKey = "create";
+      mine.dataset.scrNav = "";
+      mine.setAttribute("aria-label", "Make your own hero. Open the character maker.");
+      mine.addEventListener("click", () => hopts.onCreate());
+      body.append(mine);
+      if (isPixel()) frame(mine, "gold", true);
+      else mine.classList.add("lto-plate");
+      stext(mine, "Make your own hero", { cls: "lto-card-title", scale: 2, weight: "bold", color: PX.gold });
+      stext(mine, "Open the character maker.", { cls: "lto-card-quiet", scale: 2, color: PX.muted });
+
+      if (hooks.length > 0) {
+        sectionHead(body, "Or start right away");
+        const list = el("div", "lto-card-list");
+        list.dataset.ltoHooks = "";
+        body.append(list);
+        for (const h of hooks) {
+          const card = el("button", "lto-card");
+          card.type = "button";
+          card.dataset.ltoQuick = h.chassis;
+          card.dataset.scrKey = `quick:${h.chassis}`;
+          card.dataset.scrNav = "";
+          const kit = tidy(h.kit).replace(/^you start with\s+/i, "");
+          card.setAttribute("aria-label", `${h.label}. ${tidy(h.hook)}${kit ? ` You start with ${kit}.` : ""}`);
+          card.addEventListener("click", () => hopts.onQuick(h.chassis));
+          list.append(card);
+          if (isPixel()) frame(card, "win", true);
+          else card.classList.add("lto-plate");
+          stext(card, tidy(h.label), { cls: "lto-card-title", scale: 2, weight: "bold", color: PX.gold });
+          if (tidy(h.hook)) stext(card, excerpt(h.hook, HOOK_MAX), { cls: "lto-card-hook", scale: 2, color: PX.ink });
+          if (kit) stext(card, `You start with ${kit}`, { cls: "lto-card-quiet", scale: 2, color: PX.muted }).dataset.ltoKit = "";
+        }
+      }
+    });
+    s.onEscape = () => hopts.onBack();
+    queueMicrotask(() => {
+      if (!s.closed) s.node.querySelector<HTMLElement>("[data-lto-create]")?.focus({ preventScroll: true });
+    });
+    return { close: () => closeScreen(s) };
+  }
+
+  // ---- the ending
+
+  function endingCard(eopts: EndingCardOptions): EndingCard {
+    const dead: EndingCard = { close() {} };
+    if (destroyed) return dead;
+    const outcome = eopts.outcome;
+    const title = tidy(eopts.title) || endingKicker(outcome);
+    const s = mountScreen("ending", `${endingKicker(outcome)}: ${title}`, (sc) => {
+      sc.node.dataset.outcome = outcome;
+      const body = sc.body;
+      const box = el("div", "lto-endbox");
+      box.dataset.ltoEnding = outcome;
+      body.append(box);
+      stext(box, endingKicker(outcome), { cls: "lto-scr-sec", scale: 2, weight: "bold", color: outcome === "defeat" ? PX.bad : PX.gold, outline: true, center: true });
+      ribbon(box, title, endingBannerKind(outcome), { pxMax: tier === "s" ? 3 : 4, sbMax: tier === "s" ? 28 : 36 });
+      const text = (eopts.text ?? "").trim();
+      if (text) {
+        const tb = el("div", "lto-narr-box");
+        tb.dataset.ltoEndingText = "";
+        box.append(tb);
+        if (isPixel()) frame(tb, outcome === "defeat" ? "red" : outcome === "continue" ? "blue" : "gold", tier === "s");
+        else tb.classList.add("lto-plate");
+        const tbody = el("div", "lto-narr-body");
+        tb.append(tbody);
+        if (isPixel()) tbody.append(srText(text), px(text, { scale: 2, color: PX.ink, shadow: PX.shade, maxWidth: wrapWidth(roomOf(tbody, 8), 2, deviceRatio()) }));
+        else tbody.textContent = text;
+      }
+      const row = el("div", "lto-scr-actions");
+      box.append(row);
+      for (const c of endingChoices(!!eopts.onContinue)) {
+        if (c === "continue") {
+          const b = sbtn(row, "Continue", "continue", true);
+          b.dataset.ltoContinue = "";
+          b.addEventListener("click", () => eopts.onContinue?.());
+        } else {
+          const b = sbtn(row, "Back to the start screen", "menu", !eopts.onContinue);
+          b.dataset.ltoMenuBack = "";
+          b.addEventListener("click", () => eopts.onMenu());
+        }
+      }
+    });
+    s.onEscape = () => eopts.onContinue?.();
+    announce(`${endingKicker(outcome)}: ${title}. ${eopts.text ?? ""}`);
+    queueMicrotask(() => {
+      if (!s.closed) s.node.querySelector<HTMLElement>("[data-lto-continue], [data-lto-menu-back]")?.focus({ preventScroll: true });
+    });
+    return { close: () => closeScreen(s) };
+  }
+
+  // ---- the arrival cards: a location's name and read-aloud, a scene's title and opening
+
+  interface ArrivalCard {
+    kind: "location" | "scene";
+    node: HTMLElement;
+    title: string;
+    text: string;
+    closed: boolean;
+    epoch: number;
+  }
+  const arrivals: ArrivalCard[] = [];
+  const cardsHost = el("div", "lto-cards");
+  cardsHost.dataset.ltoCards = "";
+  cardsHost.hidden = true;
+  top.insertBefore(cardsHost, toasts);
+
+  function renderArrival(c: ArrivalCard): void {
+    const pixel = isPixel();
+    c.node.replaceChildren();
+    if (pixel) c.node.style.setProperty("--lto-nrow", `${(CELL_H + LINE_GAP) * cssScale(2, deviceRatio())}px`);
+    ribbon(c.node, c.title, c.kind === "location" ? "turn" : "initiative", { pxMax: 3, sbMax: tier === "s" ? 24 : 30 });
+    if (c.text) {
+      const box = el("div", "lto-narr-box");
+      c.node.append(box);
+      if (pixel) frame(box, c.kind === "location" ? "gold" : "blue", tier === "s");
+      else box.classList.add("lto-plate");
+      const body = el("div", "lto-narr-body");
+      box.append(body);
+      if (pixel) body.append(srText(c.text), px(c.text, { scale: 2, color: PX.ink, shadow: PX.shade, maxWidth: wrapWidth(roomOf(body, 14), 2, deviceRatio()) }));
+      else body.textContent = c.text;
+    }
+  }
+
+  function dropArrival(c: ArrivalCard): void {
+    c.closed = true;
+    const at = arrivals.indexOf(c);
+    if (at >= 0) arrivals.splice(at, 1);
+    c.node.remove();
+    cardsHost.hidden = arrivals.length === 0;
+  }
+
+  async function retireArrival(c: ArrivalCard, ms: number): Promise<void> {
+    if (destroyed || c.closed || c.epoch !== epoch) return;
+    c.closed = true;
+    await play(c.node, [{ opacity: 1 }, { opacity: 0 }], reduced() ? 120 : ms);
+    const at = arrivals.indexOf(c);
+    if (at >= 0) arrivals.splice(at, 1);
+    c.node.remove();
+    cardsHost.hidden = arrivals.length === 0;
+    layoutLoot();
+  }
+
+  function showArrival(kind: "location" | "scene", titleIn: string, textIn: string | undefined): void {
+    if (destroyed) return;
+    const title = tidy(titleIn);
+    const text = (textIn ?? "").trim();
+    if (!title && !text) return;
+    for (const old of arrivals.filter((a) => a.kind === kind)) dropArrival(old);
+    const node = el("div", "lto-narr lto-loc");
+    node.dataset.ltoCard = kind;
+    node.dataset.text = title;
+    node.dataset.readAloud = text;
+    node.tabIndex = 0;
+    node.setAttribute("role", "group");
+    node.setAttribute("aria-label", `${title}, activate to dismiss`);
+    node.title = "Click to dismiss";
+    const c: ArrivalCard = { kind, node, title: title || (kind === "scene" ? "A new scene" : "A new place"), text, closed: false, epoch };
+    // A scene card stands above a location card: the new scene is what is happening.
+    if (kind === "scene") cardsHost.prepend(node);
+    else cardsHost.append(node);
+    arrivals.push(c);
+    cardsHost.hidden = false;
+    renderArrival(c);
+    announce(text ? `${c.title}. ${text}` : c.title);
+    const closeNow = (): void => void retireArrival(c, NARRATION_CLOSE_MS);
+    node.addEventListener("click", closeNow);
+    node.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" && e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeNow();
+    });
+    if (reduced()) void play(node, [{ opacity: 0 }, { opacity: 1 }], 120);
+    else void play(node, [{ opacity: 0, transform: "translateY(-8px)" }, { opacity: 1, transform: "translateY(0)" }], NARRATION_IN_MS, "ease-out");
+    layoutLoot();
+    void wait(locationHoldMs(text.length)).then(() => retireArrival(c, NARRATION_OUT_MS));
+  }
+
+  function locationCard(o: { name: string; readAloud: string }): void {
+    showArrival("location", o.name, o.readAloud);
+  }
+  function sceneCard(o: { title: string; opening?: string }): void {
+    showArrival("scene", o.title, o.opening);
+  }
+
   root.insertBefore(lootHost, platesLayer);
+  root.insertBefore(screensLayer, lootHost);
   root.append(menuLayer);
 
   // ---- control
@@ -2098,6 +3241,10 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     liveFloats.clear();
     bannersLayer.replaceChildren();
     toasts.replaceChildren();
+    for (const c of arrivals) c.closed = true;
+    arrivals.length = 0;
+    cardsHost.replaceChildren();
+    cardsHost.hidden = true;
     narrHost.replaceChildren();
     if (narr) narr.closed = true;
     narr = null;
@@ -2124,12 +3271,15 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (narr && !narr.closed) renderNarration(narr);
     if (menu) renderMenu(menu);
     if (loot) renderLoot(loot);
+    for (const c of arrivals) renderArrival(c);
+    rebuildScreens();
   }
 
   function destroy(): void {
     if (destroyed) return;
     clear();
     if (loot) closeLoot(loot, false);
+    for (const sc of Array.from(screens)) closeScreen(sc);
     destroyed = true;
     ro?.disconnect();
     root.remove();
@@ -2137,7 +3287,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     internals.delete(api);
   }
 
-  const api: Overlay = { setStyle, banner, float, rollPlate, say, dismissStory, narrate, initiative, toast, contextMenu, lootWindow, clear, destroy };
+  const api: Overlay = { setStyle, banner, float, rollPlate, say, dismissStory, narrate, initiative, toast, contextMenu, lootWindow, startScreen, startHero, locationCard, sceneCard, endingCard, clear, destroy };
   internals.set(api, { host, root });
   applyStyleClass();
   measure();
@@ -2279,6 +3429,16 @@ export interface HudSave {
   detail?: string;
   canLoad: boolean;
 }
+/** What the Journal tab shows. */
+export interface HudJournal {
+  /** The adventure's title. */
+  title: string;
+  /** The scene now. */
+  scene: string;
+  objectives: readonly { text: string; done: boolean }[];
+  /** The last beats of the story, oldest first. */
+  recent?: readonly string[];
+}
 export interface HudState {
   /** One line on top: "Round 2, your turn", "Exploring". */
   title: string;
@@ -2303,12 +3463,17 @@ export interface HudState {
   log?: readonly HudLogLine[];
   /** The save points. With it the HUD has a "Saves" button; the drawer lists them, each with a Load button, and under them the debug export button. */
   saves?: readonly HudSave[];
+  /**
+   * The story so far. With it the HUD has a "Journal (J)" tab (and without it there is none): the adventure's title, the scene, the
+   * objectives with a tick on the done ones, and the last few beats. `recent` is oldest first, like the log; the tab shows the newest first.
+   */
+  journal?: HudJournal;
   /** A small line under the export button in the Saves drawer: "Saved.", "Copied to the clipboard.", or why it did not work. */
   exportStatus?: string;
   /** Show a second button, "Copy adventure JSON", beside the export one (the fallback when the file cannot be saved). Pressing it calls onAction("export-copy"). */
   exportCopy?: boolean;
 }
-export type DrawerTab = "pack" | "log" | "saves";
+export type DrawerTab = "pack" | "journal" | "log" | "saves";
 export interface Hud {
   setStyle(style: TextStyle): void;
   render(state: HudState): void;
@@ -2318,6 +3483,8 @@ export interface Hud {
   toggleLog(): void;
   /** Show or hide the saves list. Does nothing while the state has no `saves`. */
   toggleSaves(): void;
+  /** Show or hide the journal. Does nothing while the state has no `journal`. */
+  toggleJournal(): void;
   /** Open the drawer on a tab (switching from another). Does nothing while the state has none of that tab's part. */
   openDrawer(tab: DrawerTab): void;
   closeDrawer(): void;
@@ -2426,6 +3593,16 @@ const HUD_CSS = `
 .lto-hud-export-status{min-width:0;padding:0 2px}
 .lto-px .lto-hud-load canvas{display:block}
 .lto-hud-tab canvas,.lto-hud-opt canvas{flex:none}
+.lto-hud-pack-list.lto-hud-journal{max-height:300px}
+.lto-hud-journalview{display:flex;flex-direction:column;gap:6px;min-width:0}
+.lto-hud-obj{display:grid;grid-template-columns:20px minmax(0,1fr);gap:6px;align-items:start;padding:1px 4px;min-width:0}
+.lto-hud-obj canvas{display:block}
+.lto-hud-box{display:grid;place-items:center;width:18px;height:18px}
+.lto-hud-box canvas{display:block}
+.lto-sb .lto-hud-box{width:16px;height:16px;margin-top:2px;border:2px solid var(--sb-rule);border-radius:4px;background:var(--sb-paper)}
+.lto-sb .lto-hud-box.is-done{background:var(--sb-good);border-color:var(--sb-good)}
+.lto-hud-box svg{display:block;width:10px;height:10px;fill:#fff}
+.lto-hud-beat{min-width:0;padding:1px 4px;overflow-wrap:anywhere}
 .lto-sb .lto-hud-tone-good{color:var(--sb-good)}
 .lto-sb .lto-hud-tone-bad{color:var(--sb-bad)}
 .lto-sb .lto-hud-tone-dm{color:var(--sb-spk);font-style:italic}
@@ -2433,7 +3610,7 @@ const HUD_CSS = `
 
 // ---- the HUD's pure helpers (unit tested) ------------------------------------
 
-export const DRAWER_TABS: readonly DrawerTab[] = ["pack", "log", "saves"];
+export const DRAWER_TABS: readonly DrawerTab[] = ["pack", "journal", "log", "saves"];
 
 /** The drawer after a tab's button is pressed: the open tab closes it, any other tab opens (switching from the one showing). */
 export function toggleDrawerTab(open: DrawerTab | null, tab: DrawerTab): DrawerTab | null {
@@ -2515,6 +3692,12 @@ export function noticeOverflow(count: number, max = NOTICE_MAX): number {
 
 type HudTone = "good" | "bad" | "dm";
 
+/** The tick box of a journal objective in pixel art: a plain box, or a green one with a white tick. */
+const BOX_ROWS = ["MMMMMMM", "M.....M", "M.....M", "M.....M", "M.....M", "M.....M", "MMMMMMM"];
+const BOX_DONE_ROWS = ["LLLLLLL", "LGGGGWL", "LGGGWGL", "LWGWGGL", "LGWGGGL", "LGGGGGL", "LLLLLLL"];
+/** Font Awesome's solid check, drawn inline so there is no icon font. */
+const CHECK_PATH = "M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z";
+
 /** Hit point colours: hero blue, enemy red, both amber when low, grey when down. */
 function hpColour(bar: HudBar): string {
   if (bar.down || bar.hp <= 0) return "#6b6f86";
@@ -2552,6 +3735,9 @@ export function createHud(
   /** New items to light up in the next pack draw, and ones that arrived while the pack was shut (they light up when it opens). */
   let freshNow = new Set<string>();
   let pendingNew = new Set<string>();
+  /** The journal as the last render saw it, to tell when it changed while shut (the tab then wears a dot until it is opened). */
+  let prevJournal: string | null = null;
+  let journalNew = false;
   const root = el("div", "lto-root lto-hud");
   root.dataset.ltoHud = "";
   for (const key of Object.keys(FRAMES) as FrameKey[]) {
@@ -2578,7 +3764,7 @@ export function createHud(
   tabs.dataset.hudTabs = "";
   tabs.hidden = true;
   tabs.setAttribute("role", "toolbar");
-  tabs.setAttribute("aria-label", "Pack, log and saves");
+  tabs.setAttribute("aria-label", "Pack, journal, log and saves");
   const noticeBox = el("div", "lto-hud-notices");
   noticeBox.dataset.hudNotices = "";
   noticeBox.hidden = true;
@@ -2656,7 +3842,7 @@ export function createHud(
     return node;
   };
 
-  const has = (s: HudState | null): Record<DrawerTab, boolean> => ({ pack: !!s?.pack, log: !!s?.log, saves: !!s?.saves });
+  const has = (s: HudState | null): Record<DrawerTab, boolean> => ({ pack: !!s?.pack, journal: !!s?.journal, log: !!s?.log, saves: !!s?.saves });
   /** The tab that really shows now. */
   const openTab = (): DrawerTab | null => usableDrawerTab(drawer, has(last));
 
@@ -2791,13 +3977,13 @@ export function createHud(
 
   // ---- the drawer: Pack, Log, Saves
 
-  const TAB_WORDS: Record<DrawerTab, { label: string; key?: string }> = { pack: { label: "Pack", key: "I" }, log: { label: "Log", key: "L" }, saves: { label: "Saves" } };
+  const TAB_WORDS: Record<DrawerTab, { label: string; key?: string }> = { pack: { label: "Pack", key: "I" }, journal: { label: "Journal", key: "J" }, log: { label: "Log", key: "L" }, saves: { label: "Saves" } };
 
   function drawTabs(s: HudState, tab: DrawerTab | null): void {
     const have = has(s);
     const shown = DRAWER_TABS.filter((t) => have[t]);
     tabs.hidden = shown.length === 0;
-    tabs.style.setProperty("--n", String(Math.max(1, shown.length)));
+    tabs.style.setProperty("--n", String(drawerColumns(shown.length)));
     tabs.replaceChildren();
     for (const t of shown) {
       const { label, key } = TAB_WORDS[t];
@@ -2810,6 +3996,7 @@ export function createHud(
       btn.setAttribute("aria-pressed", String(open));
       btn.setAttribute("aria-expanded", String(open));
       if (t === "pack" && !open && pendingNew.size > 0) btn.dataset.new = "true";
+      if (t === "journal" && !open && journalNew) btn.dataset.new = "true";
       if (isPixel()) {
         btn.classList.add("lto-fr", "fs1", open ? "fr-gold" : "fr-win");
         btn.append(px(label, { scale: 2, weight: "bold", color: open ? PX.gold : PX.ink, outline: PX.dark }));
@@ -2837,6 +4024,7 @@ export function createHud(
     if (isPixel()) drawerBox.classList.add("lto-fr", "fr-win");
     else drawerBox.classList.add("lto-plate");
     if (tab === "pack" && s.pack) drawerBox.append(packView(s.pack.sections, keep.sameTab ? keep.scroll : 0));
+    else if (tab === "journal" && s.journal) drawerBox.append(journalView(s.journal, keep.sameTab ? keep.scroll : 0));
     else if (tab === "log" && s.log) drawerBox.append(logView(s.log, keep));
     else if (tab === "saves" && s.saves) drawerBox.append(savesView(s.saves, keep.sameTab ? keep.scroll : 0, { status: s.exportStatus, copy: s.exportCopy }));
   }
@@ -2896,6 +4084,78 @@ export function createHud(
     }
     queueMicrotask(() => {
       if (!firstFresh) list.scrollTop = prevScroll;
+    });
+    return wrap;
+  }
+
+  /** The journal: the adventure and scene, the objectives with their ticks, and the last few beats (newest first). */
+  function journalView(j: HudJournal, prevScroll: number): HTMLElement {
+    const wrap = el("div", "lto-hud-journalview");
+    wrap.dataset.hudJournalView = "";
+    wrap.setAttribute("role", "group");
+    wrap.setAttribute("aria-label", "Journal");
+    const list = el("div", "lto-hud-pack-list lto-hud-list lto-hud-journal");
+    list.dataset.tab = "journal";
+    const row = (node: HTMLElement): HTMLElement => {
+      const r = el("div", "lto-hud-row");
+      r.append(node);
+      return r;
+    };
+    const story = el("div", "lto-hud-sec");
+    story.dataset.section = "Story";
+    story.append(row(text(j.title, "seclabel", 18)));
+    if (j.scene.trim()) {
+      const scene = row(text(`Scene: ${j.scene.trim()}`, "item", 18));
+      scene.dataset.journalScene = "";
+      story.append(scene);
+    }
+    list.append(story);
+    const objs = journalObjectives(j.objectives);
+    const sec = el("div", "lto-hud-sec");
+    sec.dataset.section = "Objectives";
+    const progress = journalProgress(j.objectives);
+    sec.append(row(text("Objectives", "seclabel", 18)));
+    if (progress) {
+      const pr = row(text(progress, "line", 18));
+      pr.dataset.journalProgress = progress;
+      sec.append(pr);
+    }
+    if (objs.length === 0) sec.append(row(text("Nothing to do yet.", "line", 18)));
+    for (const o of objs) {
+      const r = el("div", "lto-hud-obj");
+      r.dataset.objective = o.text;
+      r.dataset.done = String(o.done);
+      const box = el("span", "lto-hud-box");
+      box.setAttribute("aria-hidden", "true");
+      if (isPixel()) {
+        box.append(spriteCanvas(o.done ? BOX_DONE_ROWS : BOX_ROWS, { M: "#98a5d8", L: "#e6dcb4", G: "#2f9e55", W: "#ffffff" }, 2));
+      } else if (o.done) {
+        box.classList.add("is-done");
+        const svg = svgEl("svg", { viewBox: "0 0 448 512", "aria-hidden": "true", focusable: "false" });
+        svg.append(svgEl("path", { d: CHECK_PATH }));
+        box.append(svg);
+      }
+      const words = text(o.text, "item", 18 + 26, o.done ? "good" : undefined);
+      r.append(box, words, el("span", "lto-sr", o.done ? " (done)" : " (not done)"));
+      sec.append(r);
+    }
+    list.append(sec);
+    const beats = journalRecent(j.recent);
+    if (beats.length > 0) {
+      const lately = el("div", "lto-hud-sec");
+      lately.dataset.section = "Lately";
+      lately.append(row(text("Lately", "seclabel", 18)));
+      for (const b of beats) {
+        const r = el("div", "lto-hud-beat");
+        r.dataset.beat = b;
+        r.append(text(b, "line", 18));
+        lately.append(r);
+      }
+      list.append(lately);
+    }
+    wrap.append(list);
+    queueMicrotask(() => {
+      list.scrollTop = prevScroll;
     });
     return wrap;
   }
@@ -3010,6 +4270,7 @@ export function createHud(
       freshNow = pendingNew;
       pendingNew = new Set();
     }
+    if (openTab() === "journal") journalNew = false;
     redraw();
   }
 
@@ -3210,6 +4471,10 @@ export function createHud(
       prevPack = state.pack?.sections ?? null;
       if (drawer === "pack" && state.pack) freshNow = added;
       else for (const item of added) pendingNew.add(item);
+      const jsig = state.journal ? JSON.stringify([state.journal.scene, journalObjectives(state.journal.objectives), journalRecent(state.journal.recent)]) : null;
+      if (jsig !== null && prevJournal !== null && jsig !== prevJournal && drawer !== "journal") journalNew = true;
+      if (jsig === null) journalNew = false;
+      prevJournal = jsig;
       last = state;
       redraw();
     },
@@ -3221,6 +4486,9 @@ export function createHud(
     },
     toggleSaves(): void {
       toggleTab("saves");
+    },
+    toggleJournal(): void {
+      toggleTab("journal");
     },
     openDrawer(tab: DrawerTab): void {
       if (!has(last)[tab]) return;

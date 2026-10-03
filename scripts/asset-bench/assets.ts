@@ -58,8 +58,8 @@ import {
   type SheetOnlyRole,
   type SlotRole,
 } from "../../src/games/livingtable/characters/equipmentTypes";
-import { PLAYABLE_ARCHETYPE_IDS, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
-import { createCharacter, type CharacterSheet } from "../../src/games/livingtable/characters/creation";
+import { PLAYABLE_ARCHETYPE_IDS, getArchetype, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
+import { createCharacter, creationChoicesFor, type CharacterSheet, type StartingKit as CreationKit } from "../../src/games/livingtable/characters/creation";
 import { describeBagItem, describeCarried, packInfo } from "../../src/games/livingtable/inventory/itemInfo";
 import { destroyItem, dropItem, equipItem, itemActionsFor, itemStatusLine, itemUseSay, pickUp, unequipItem, type ItemActionContext, type ItemFlags, type ItemRef } from "../../src/games/livingtable/inventory/itemActions";
 import { bodyFor, carriedBy, itemNotes as carriedNotes, pocketPick, takeFromBody, type BodyState, type CarriedItem } from "../../src/games/livingtable/rules/corpses";
@@ -84,9 +84,10 @@ import {
   type RollMode,
 } from "../../src/games/livingtable/session/maneuvers";
 import { contextActionsFor, type ContextAction, type ContextSituation, type ContextTarget } from "../../src/games/livingtable/session/contextActions";
-import { ADVENTURE_FORMAT, ADVENTURE_VERSION, adventureFiles, adventureZip, type AdventureBundle, type DmExchange, type RollRecord } from "../../src/games/livingtable/session/adventureExport";
+import { ADVENTURE_FORMAT, ADVENTURE_VERSION, adventureFilename, adventureFiles, type AdventureBundle, type DmExchange, type RollRecord } from "../../src/games/livingtable/session/adventureExport";
+import { zipStore } from "../../src/games/livingtable/session/zip";
 import { APP_VERSION } from "../../src/version";
-import { itemNameFor } from "../../src/games/livingtable/characters/equipment";
+import { itemNameFor, tierInSlot } from "../../src/games/livingtable/characters/equipment";
 import { applyDamage, applyHealing, longRest, newAdventuringDay } from "../../src/games/livingtable/characters/health";
 import { addSave, latestSave, makeSavePoint, parseSaves, restBlockedReason, saveLabel, serializeSaves, type SaveKind, type SavePoint } from "../../src/games/livingtable/session/savePoints";
 import { parseDiceNotation, rollDice, rollDie } from "../../src/games/livingtable/rules/dice";
@@ -131,7 +132,7 @@ import { headAnchor } from "../../src/games/livingtable/render/anchors";
 import { attackResultToReadout } from "../../src/games/livingtable/render/rollReadoutAdapter";
 import { resolveMonsterTurn } from "../../src/games/livingtable/session/hostileTurns";
 import { attackEvents, type CombatEvent } from "../../src/games/livingtable/session/combatEvents";
-import { createHud, createOverlay, verdictWords, type ContextMenuEntry, type DialogueLine, type Hud, type HudAction, type HudBar, type HudOption, type HudSave, type InitiativeSide, type ItemCardContent, type LootWindow, type LootWindowItem, type NarrationHandle, type Overlay, type OverlayPoint, type PackSection, type TextStyle } from "./overlay";
+import { createHud, createOverlay, locationHoldMs, verdictWords, type ContextMenuEntry, type DialogueLine, type Hud, type HudAction, type HudBar, type HudJournal, type HudOption, type HudSave, type InitiativeSide, type ItemCardContent, type LootWindow, type LootWindowItem, type NarrationHandle, type Overlay, type OverlayPoint, type PackSection, type StartAdventure, type StartHero, type StartHeroHook, type StartScreen, type EndingCard, type TextStyle } from "./overlay";
 import { foeDiceForToken } from "./foeDice";
 import { askDm, normaliseSkill, validationContextFor, type DmAsk, type DmCheck, type DmEffect, type DmOption, type DmReply, type DmSceneView, type SampleFn } from "./dm";
 import { createDiceTray, createSkinPicker, DICE_SKINS, type DiceTray, type DieKind, type RollRequest } from "./dice";
@@ -188,6 +189,32 @@ import { SHROUD_TICK_MS, shroudAnimates, shroudPixels } from "../../src/games/li
 import type { AssetManifest } from "../../src/games/livingtable/world/cell";
 import type { CellCoord } from "../../src/games/livingtable/world/coordinates";
 import { DEFAULT_MELEE_REACH_TILES, DEFAULT_RANGED_REACH_TILES, tileDistance } from "../../src/games/livingtable/world/reach";
+import { ADVENTURE_FILES } from "./adventuresData";
+import { adventureBrief } from "../../src/games/livingtable/adventures/brief";
+import { allowedDmSteps, applyEvent, evaluate as evaluateCondition, settleProgress, startProgress, type AdventureStepResult } from "../../src/games/livingtable/adventures/progress";
+import { exitDestination, locationLayout, spawnIsPresent, validateAdventure } from "../../src/games/livingtable/adventures/validate";
+import { markedForReview, parseAdventureMarkdown } from "../../src/games/livingtable/adventures/markdown";
+import { AI_ADVENTURE_COST_NOTE, writeAdventure as writeAiAdventure, type AdventureWriterContext, type CompleteInput } from "../../src/games/livingtable/adventures/generate";
+import {
+  heroHook,
+  itemOf,
+  locationOf,
+  progressMatches,
+  sceneOf,
+  spawnInstanceIds,
+  startingKitFor,
+  type Adventure,
+  type AdventureAssets,
+  type AdventureEvent,
+  type AdventureExit,
+  type AdventureFeature,
+  type AdventureItem,
+  type AdventureNpc,
+  type AdventureProgress,
+  type AdventureSpawn,
+  type Chassis,
+  type StartingKit as AdventureKit,
+} from "../../src/games/livingtable/adventures/types";
 
 // ===========================================================================
 // Shared shape: a sprite from either template's flat SPRITES array.
@@ -605,6 +632,246 @@ function buildScaleSelect(options: readonly number[], initial: number, onChange:
 }
 
 // ===========================================================================
+// Adventures: the owner's adventures/*.md, in the bench. Each file rides in as
+// text (adventuresData.ts, written by gen-adventures.mjs from adventures/*.md,
+// README.md left out), is read in the page by the game's own
+// parseAdventureMarkdown and checked by validateAdventure against the pictures
+// and creatures the game really has (the same lists scripts/adventures/check.ts
+// uses). A file with problems is listed on the start screen with them and
+// cannot be started. The adventure is gospel: the Play panel below runs from it
+// and progress.ts decides every step.
+// ===========================================================================
+
+/** One adventure the start screen offers: a file (or an AI-written adventure kept in this browser), read and checked. */
+interface BenchAdventure {
+  /** The adventure's own id; "file:<name>" for a file too broken to have one. */
+  id: string;
+  /** The file under adventures/, or "ai" for one the AI wrote. */
+  file: string;
+  /** What the start screen calls it. */
+  title: string;
+  summary: string;
+  author: "owner" | "ai";
+  /** The whole Markdown the adventure was read from (LF endings): the debug export carries it, so a run can be reproduced. */
+  source: string;
+  /** The checked adventure; null when there is any problem. */
+  adventure: Adventure | null;
+  /** Everything wrong with it, in plain words with a line or a path. Empty when it can be started. */
+  problems: string[];
+  warnings: string[];
+  /** How many items the file marks for review ("ADDED:" and "REVIEW:" comments): the card says "Draft: N items marked for review". */
+  draftMarks: number;
+}
+
+const AI_ADVENTURES_KEY = "livingtable-bench-ai-adventures-v1";
+/** How the start screen names the template file: it is the owner's copy-me example, not a story to play for real. */
+const TEMPLATE_FILE = "TEMPLATE.md";
+
+let adventureAssetsCache: AdventureAssets | null = null;
+/** The picture ids and walkability the game really has: what every adventure is checked against. */
+function adventureAssets(): AdventureAssets {
+  if (adventureAssetsCache) return adventureAssetsCache;
+  const sprites = SPRITES_BY_TEMPLATE.fantasy;
+  const tiles = sprites.filter((s) => s.kind === "tile");
+  const props = sprites.filter((s) => s.kind === "prop");
+  adventureAssetsCache = {
+    tiles: tiles.map((s) => s.assetId),
+    props: props.map((s) => s.assetId),
+    tokens: sprites.filter((s) => s.kind === "token").map((s) => s.assetId),
+    walkableTiles: tiles.filter((s) => s.walkable).map((s) => s.assetId),
+    blockingProps: props.filter((s) => !s.walkable).map((s) => s.assetId),
+  };
+  return adventureAssetsCache;
+}
+
+/** A title for a file that did not parse: its first "# " line, else its name. */
+function looseTitle(text: string, file: string): string {
+  const m = /^#\s+(.+?)\s*$/m.exec(text);
+  return m?.[1] ?? file;
+}
+
+/** A summary for a file that did not parse: the words under its "## Summary" heading, comments left out. */
+function looseSummary(text: string): string {
+  const at = text.search(/^##\s+Summary\s*$/m);
+  if (at < 0) return "";
+  const rest = text.slice(at).split("\n").slice(1);
+  const lines: string[] = [];
+  for (const line of rest) {
+    if (/^##\s/.test(line)) break;
+    lines.push(line);
+  }
+  return lines.join(" ").replace(/<!--[\s\S]*?-->/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Read and check one adventure text. Never throws: whatever goes wrong is a problem on the entry. */
+function checkAdventureText(file: string, text: string): BenchAdventure {
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  let adventure: Adventure | null = null;
+  try {
+    const parsed = parseAdventureMarkdown(text, { file });
+    for (const e of parsed.errors) problems.push(`Line ${e.line}: ${e.message}`);
+    for (const w of parsed.warnings) warnings.push(`Line ${w.line}: ${w.message}`);
+    adventure = parsed.adventure;
+  } catch (e) {
+    problems.push(`The file could not be read: ${e instanceof Error ? e.message : "unknown error"}`);
+  }
+  if (adventure) {
+    try {
+      const v = validateAdventure(adventure, adventureAssets(), BESTIARY.map((b) => b.id));
+      for (const e of v.errors) problems.push(`${e.path}: ${e.message}`);
+      for (const w of v.warnings) warnings.push(`${w.path}: ${w.message}`);
+    } catch (e) {
+      problems.push(`The adventure could not be checked: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
+  }
+  let draftMarks = 0;
+  try {
+    draftMarks = markedForReview(text).length;
+  } catch {
+    draftMarks = 0;
+  }
+  const ok = adventure !== null && problems.length === 0;
+  const title = adventure?.title ?? looseTitle(text, file);
+  return {
+    id: adventure?.id ?? `file:${file}`,
+    file,
+    title: file === TEMPLATE_FILE ? `Template adventure (${title})` : title,
+    summary: adventure?.summary ?? looseSummary(text),
+    author: adventure?.author ?? "owner",
+    source: text,
+    adventure: ok ? adventure : null,
+    problems,
+    warnings,
+    draftMarks,
+  };
+}
+
+/** AI-written adventures kept in this browser: [{ markdown }], read again and checked on every load. Never throws. */
+function readAiAdventureTexts(): string[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(AI_ADVENTURES_KEY);
+    const list: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.flatMap((x) => (isRec(x) && typeof x.markdown === "string" ? [x.markdown] : [])) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeAiAdventureTexts(texts: readonly string[]): void {
+  try {
+    globalThis.localStorage?.setItem(AI_ADVENTURES_KEY, JSON.stringify(texts.map((markdown) => ({ markdown }))));
+  } catch {
+    // Storage can be blocked or full: the adventure still plays this visit.
+  }
+}
+
+let adventureList: BenchAdventure[] | null = null;
+
+/** Every adventure the bench knows, the owner's files first (the template last), then what the AI wrote and this browser kept. Read once. */
+function benchAdventures(): BenchAdventure[] {
+  if (adventureList) return adventureList;
+  const files = [...ADVENTURE_FILES].sort((a, b) => Number(a.file === TEMPLATE_FILE) - Number(b.file === TEMPLATE_FILE) || a.file.localeCompare(b.file));
+  const list = files.map((f) => checkAdventureText(f.file, f.text));
+  for (const text of readAiAdventureTexts()) list.push(checkAdventureText("ai", text));
+  // Two adventures cannot share an id (a save names one): the later one is listed, with the problem, and cannot be started.
+  const seen = new Map<string, string>();
+  for (const e of list) {
+    if (!e.adventure) continue;
+    const first = seen.get(e.id);
+    if (first !== undefined) {
+      e.problems.push(`The id "${e.id}" is already used by ${first}. Give this adventure its own id.`);
+      e.adventure = null;
+    } else {
+      seen.set(e.id, e.file);
+    }
+  }
+  adventureList = list;
+  return list;
+}
+
+/** The checked adventure with this id, or undefined (a file with problems is not one). */
+function adventureById(id: string): Adventure | undefined {
+  return benchAdventures().find((e) => e.adventure?.id === id)?.adventure ?? undefined;
+}
+
+/**
+ * Add an adventure the AI wrote (its Markdown) to the list and keep it in this browser, so it is playable now and after a reload. Returns
+ * the entry; one with problems is returned but not kept and cannot be started.
+ */
+function registerAiAdventure(markdown: string): BenchAdventure {
+  const entry = checkAdventureText("ai", markdown);
+  const list = benchAdventures();
+  if (entry.adventure && list.some((e) => e.adventure?.id === entry.id)) {
+    entry.problems.push(`The id "${entry.id}" is already used by another adventure.`);
+    entry.adventure = null;
+  }
+  list.push(entry);
+  if (entry.adventure) writeAiAdventureTexts([...readAiAdventureTexts(), markdown]);
+  return entry;
+}
+
+/** The start screen's cards for the list. */
+function startCardsFor(list: readonly BenchAdventure[]): StartAdventure[] {
+  return list.map((e) => ({
+    id: e.id,
+    title: e.title,
+    summary: e.summary,
+    author: e.author,
+    ...(e.draftMarks > 0 ? { draftMarks: e.draftMarks } : {}),
+    ...(e.problems.length > 0 ? { problems: e.problems } : {}),
+  }));
+}
+
+/** The starting kit as a phrase for the hero screen's "You start with ...": "a plain sword, no armor and no potions." The numbers come from the class; this says what the adventure decided. */
+function kitWords(kit: AdventureKit | undefined): string {
+  if (!kit) return "the class's usual gear.";
+  const parts: string[] = [];
+  if (kit.weaponNote) parts.push(kit.weaponNote.replace(/[.\s]+$/, ""));
+  parts.push(kit.armor === "none" ? "no armor" : "the class's armor");
+  for (const item of kit.items) parts.push(item);
+  parts.push(kit.potions > 0 ? `${kit.potions} healing potion${kit.potions === 1 ? "" : "s"}` : "no potions");
+  return `${parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0]}.`;
+}
+
+/** What createCharacter takes for an adventure's kit (the same four fields). */
+function creationKitFor(kit: AdventureKit): CreationKit {
+  return { armor: kit.armor, items: [...kit.items], potions: kit.potions, ...(kit.weaponNote ? { weaponNote: kit.weaponNote } : {}) };
+}
+
+/**
+ * What the creator starts a class's draft with under an adventure's kit: the class's own defaults, except that a choice the kit rules out
+ * (a fighter's Defense with no armor to wear) starts on the first one it does allow, so Begin is not refused before the player has chosen anything.
+ */
+function creatorStartFor(a: Adventure, archetypeId: string): { archetypeId: string; startingKit?: CreationKit; choices?: Record<string, string> } {
+  const kit = kitForArchetype(a, archetypeId);
+  if (!kit) return { archetypeId };
+  const startingKit = creationKitFor(kit);
+  const choices: Record<string, string> = {};
+  for (const c of creationChoicesFor(archetypeId, undefined, startingKit)) if (c.options[0]) choices[c.id] = c.options[0].id;
+  return { archetypeId, startingKit, ...(Object.keys(choices).length > 0 ? { choices } : {}) };
+}
+
+/** The adventure's kit for this archetype's class. */
+const kitForArchetype = (a: Adventure, archetypeId: string): AdventureKit | undefined => startingKitFor(a, getArchetype(archetypeId).chassis);
+
+/** A ready-made hero of this archetype with the adventure's starting kit for its class (no armor, one plain weapon, in the first adventure). */
+function adventureHero(a: Adventure, archetypeId: ArchetypeId): CharacterSheet {
+  const kit = kitForArchetype(a, archetypeId);
+  return createCharacter({ archetypeId, name: ARCHETYPE_LABEL[archetypeId], appearanceAssetId: bodySpriteId(archetypeId), ...(kit ? { startingKit: creationKitFor(kit) } : {}) });
+}
+
+/** A hero from the creator, built again with the kit of the class it ended up as (the creator started from the first class's kit). Falls back to the creator's own sheet when the kit cannot be applied. */
+function adventureHeroFromCreator(a: Adventure, made: CharacterSheet, input: Parameters<typeof createCharacter>[0]): CharacterSheet {
+  const kit = kitForArchetype(a, made.archetypeId);
+  try {
+    return createCharacter({ ...input, ...(kit ? { startingKit: creationKitFor(kit) } : { startingKit: undefined }) });
+  } catch {
+    return made;
+  }
+}
+
+// ===========================================================================
 // Panel: Play. The game in miniature, turn based: a two-room scene with a
 // door, a chest and a goblin (or, with the Room setting, a goblin and a
 // skeleton: any number of creatures work, each with its own statblock, hit
@@ -775,8 +1042,10 @@ interface Creature {
   carried: CarriedItem[];
   /** A hostile fights the hero. A creature that is not (a villager, a shopkeeper) is never in the initiative order and is never attacked by a click. */
   hostile: boolean;
-  /** Set on a creature that is somebody (a role the DM and the readout name: "the innkeeper"). Picture and words only; the rules read `hostile`. */
-  npc?: { role: string };
+  /** Set on a creature that is somebody (a role the DM and the readout name: "the innkeeper"; in an adventure, also their own name). Picture and words only; the rules read `hostile`. */
+  npc?: { role: string; name?: string };
+  /** Set only while an adventure runs: which creature of the adventure this is. `instance` is the id the story's kills use ("cellar_rats_2"), `npc` the adventure NPC entry it stands for. */
+  adv?: { spawn: string; instance: string; npc?: string };
   /** What it is doing in the animated picture (cast.ts). Picture only: the rules never read it, and a save does not keep it. */
   actor: Actor;
 }
@@ -858,7 +1127,38 @@ interface PlayState {
   dmJournal: DmExchange[];
   /** Every roll thrown in the tray, oldest first, at most ROLL_JOURNAL_KEEP. Kept out of saves; it goes in the debug export. */
   rollJournal: RollRecord[];
+  /** The adventure being played (its id: the text is never in a save, the adventure is read again from the bench), or null in a test room. */
+  adventureId: string | null;
+  /** Where the story stands (progress.ts): the scene, the flags, the kills, the items held. The place the hero is in is `progress.locationId`. Null in a test room. */
+  progress: AdventureProgress | null;
+  /** The places of the adventure the hero has left, as they were left: what was explored, who is there, who lies dead. The place the hero is in lives in the fields above. */
+  places: Record<string, PlaceMemory>;
+  /** The features the hero has found the secret of, as "<location id>/<feature id>". */
+  featuresFound: string[];
+  /** Creatures (by instance id) the DM sent away: they do not come back when the place is read again. */
+  goneSpawns: string[];
+  /** The last beats of the story, oldest first: the Journal tab's "recently". */
+  storyRecent: string[];
+  /** What the story did since the board last showed it (beats, objectives, a new scene, an ending). Never saved: the panel plays it out and clears it. */
+  adventurePending: AdventureStepResult[];
+  /** A number no other board has ever had: it changes whenever the board is another place, so the picture, the sight and the tile caches know to rebuild. Never saved. */
+  boardEpoch: number;
 }
+
+/** A place of an adventure the hero has left, as it was left (JSON, so a save keeps it). */
+interface PlaceMemory {
+  explored: string;
+  creatures: SavedCreature[];
+  bodies: PlayBody[];
+  piles: { at: XY; items: string[] }[];
+  extraProps: DmProp[];
+  tileOverrides: { x: number; y: number; tile: TileId }[];
+  propSecrets: Record<string, string>;
+}
+
+/** How many of the story's last beats the Journal tab shows. */
+const STORY_RECENT_KEEP = 6;
+let boardEpochSeq = 0;
 
 interface DmProp {
   id: string;
@@ -880,7 +1180,7 @@ function freshHero(archetypeId: ArchetypeId): CharacterSheet {
  * container and the monster all start again. The picture and the animated figure
  * follow the archetype either way.
  */
-function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: TileId, keepGearOf?: CharacterSheet, start?: CharacterSheet, room: RoomChoice = roomChoice): PlayState {
+function basePlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: TileId, keepGearOf?: CharacterSheet, start?: CharacterSheet, room: RoomChoice = roomChoice): PlayState {
   const fresh = start ?? freshHero(archetypeId);
   const hero = keepGearOf ? { ...fresh, equipment: keepGearOf.equipment, bag: keepGearOf.bag } : fresh;
   const p: PlayState = {
@@ -923,7 +1223,20 @@ function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: Til
     doorLockDc: DEFAULT_LOCK_DC,
     dmJournal: [],
     rollJournal: [],
+    adventureId: null,
+    progress: null,
+    places: {},
+    featuresFound: [],
+    goneSpawns: [],
+    storyRecent: [],
+    adventurePending: [],
+    boardEpoch: ++boardEpochSeq,
   };
+  return p;
+}
+
+function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: TileId, keepGearOf?: CharacterSheet, start?: CharacterSheet, room: RoomChoice = roomChoice): PlayState {
+  const p = basePlay(template, archetypeId, floorId, keepGearOf, start, room);
   // The scene's creatures, asleep in the east room.
   const kit = SCENE_KIT[template];
   addCreature(p, kit.monster, MONSTER_START);
@@ -947,8 +1260,8 @@ function roomLabel(template: TemplateGenre, room: RoomChoice): string {
  * Put a creature on the board (asleep, unseen, hostile, standing, carrying what its kind carries), and number it: the first of a scene is
  * "monster", the rest "monster-2", "monster-3". `over` changes any of it (an NPC is not hostile and is awake).
  */
-function addCreature(p: PlayState, token: TileId, at: XY, over: Partial<Pick<Creature, "awake" | "hostile" | "npc" | "hp">> = {}): Creature {
-  const id = p.creatureSeq === 1 ? MONSTER_ID : `${MONSTER_ID}-${p.creatureSeq}`;
+function addCreature(p: PlayState, token: TileId, at: XY, over: Partial<Pick<Creature, "awake" | "hostile" | "npc" | "hp" | "adv">> & { id?: string } = {}): Creature {
+  const id = over.id ?? (p.creatureSeq === 1 ? MONSTER_ID : `${MONSTER_ID}-${p.creatureSeq}`);
   p.creatureSeq++;
   const n = (p.spawned[token] ?? 0) + 1;
   p.spawned[token] = n;
@@ -964,6 +1277,7 @@ function addCreature(p: PlayState, token: TileId, at: XY, over: Partial<Pick<Cre
     carried: carriedBy(token),
     hostile: over.hostile ?? true,
     ...(over.npc ? { npc: over.npc } : {}),
+    ...(over.adv ? { adv: over.adv } : {}),
     actor: newActor("left"),
   };
   p.creatures.push(c);
@@ -972,6 +1286,23 @@ function addCreature(p: PlayState, token: TileId, at: XY, over: Partial<Pick<Cre
 
 // Module level, so leaving the tab and coming back finds the fight where it was.
 let play: PlayState | null = null;
+/** True while the Play tab is on its start screen (nothing chosen yet): `play` is then only a test room standing behind it, never saved. Coming back to the tab shows the start screen again. */
+let atStart = true;
+
+/**
+ * The page's own way past the start screen, for the headless checks and for anyone who wants the test room at once: opening the bench with
+ * #sandbox in the address starts the one-goblin room, #sandbox-two the goblin and skeleton room. Without it the Play tab opens on its start screen.
+ */
+function sandboxFromAddress(): RoomChoice | null {
+  try {
+    const hash = String(globalThis.location?.hash ?? "").toLowerCase();
+    if (hash === "#sandbox" || hash === "#sandbox-one") return "one";
+    if (hash === "#sandbox-two") return "two";
+  } catch {
+    // No address to read.
+  }
+  return null;
+}
 
 /** Lines that scrolled off the Log tab, or belong to a scene that has since been replaced: the debug export keeps them, the game does not. */
 const sessionLog: LogLine[] = [];
@@ -1006,7 +1337,14 @@ const SNAPSHOT_VERSION = 2;
 const LEGACY_SNAPSHOT_VERSION = 1;
 const SAVES_STORAGE_KEY = "livingtable-bench-saves-v1";
 
-type SnapshotBase = Omit<PlayState, "heroActor" | "creatures" | "room" | "spawned" | "creatureSeq" | "bodies" | "explored" | "exploredRev" | "round" | "note" | "options" | "dmJournal" | "rollJournal"> & {
+type SnapshotBase = Omit<PlayState, "heroActor" | "creatures" | "room" | "spawned" | "creatureSeq" | "bodies" | "explored" | "exploredRev" | "round" | "note" | "options" | "dmJournal" | "rollJournal" | "adventurePending" | "boardEpoch" | "adventureId" | "progress" | "places" | "featuresFound" | "goneSpawns" | "storyRecent"> & {
+  /** The adventure being played (id only), where the story stands, and what each place left behind. Absent in a save from a test room or from before adventures. */
+  adventureId?: string | null;
+  progress?: AdventureProgress | null;
+  places?: Record<string, PlaceMemory>;
+  featuresFound?: string[];
+  goneSpawns?: string[];
+  storyRecent?: string[];
   bodies: PlayBody[];
   /** One "1" (seen) or "0" per square, row-major: PlayState.explored as text. */
   explored: string;
@@ -1039,7 +1377,7 @@ const decodeExplored = (s: string): Uint8Array => Uint8Array.from(s, (c) => (c =
 
 /** A copy that later play cannot reach into. */
 function toSnapshot(p: PlayState): PlaySnapshot {
-  const { heroActor: _hero, creatures, explored, exploredRev: _rev, round, note: _note, options: _options, dmJournal: _dm, rollJournal: _rolls, ...rest } = p;
+  const { heroActor: _hero, creatures, explored, exploredRev: _rev, round, note: _note, options: _options, dmJournal: _dm, rollJournal: _rolls, adventurePending: _pending, boardEpoch: _epoch, ...rest } = p;
   // A creature's actor is the picture, not the scene.
   const saved: SavedCreature[] = creatures.map(({ actor: _actor, ...c }) => c);
   return JSON.parse(JSON.stringify({ ...rest, creatures: saved, round, v: SNAPSHOT_VERSION, explored: encodeExplored(explored) })) as PlaySnapshot;
@@ -1076,6 +1414,7 @@ function isSnapshot(d: unknown): d is StoredSnapshot {
   if (!Array.isArray(d.extraProps) || !d.extraProps.every((e) => isRec(e) && isStr(e.id) && isStr(e.assetId) && known.has(e.assetId) && inRoom(e) && isStr(e.label) && (e.secret === undefined || isStr(e.secret)))) return false;
   if (!isRec(d.propSecrets) || !Object.values(d.propSecrets).every(isStr)) return false;
   if (!Array.isArray(d.tileOverrides) || !d.tileOverrides.every((o) => isRec(o) && inRoom(o) && isStr(o.tile) && known.has(o.tile))) return false;
+  if (!adventureFieldsOk(d)) return false;
   if (!Array.isArray(d.dmMemory) || !d.dmMemory.every(isStr)) return false;
   if (!Array.isArray(d.dmRecent) || !d.dmRecent.every((r) => isRec(r) && (r.who === "player" || r.who === "dm") && isStr(r.text))) return false;
   // Saves from before bodies, piles and item flags have none of these: they are optional here and filled in on load.
@@ -1086,6 +1425,34 @@ function isSnapshot(d: unknown): d is StoredSnapshot {
   // Hiding, sneaking and the lock's DC came later: an older save has none of them.
   if ((d.heroHidden !== undefined && typeof d.heroHidden !== "boolean") || (d.sneaking !== undefined && typeof d.sneaking !== "boolean") || (d.doorLockDc !== undefined && !isNum(d.doorLockDc))) return false;
   return true;
+}
+
+/** The adventure part of a save: absent (a test room, or a save from before adventures), or an adventure the bench has, at the version the save was made against, with a story record and places that fit. */
+function adventureFieldsOk(d: Record<string, unknown>): boolean {
+  const id = d.adventureId;
+  if (id === undefined || id === null) return d.progress === undefined || d.progress === null;
+  if (!isStr(id)) return false;
+  const a = adventureById(id);
+  const pr = d.progress;
+  if (!a || !isRec(pr) || !progressMatches(a, pr as unknown as AdventureProgress)) return false;
+  const strs = (v: unknown): boolean => Array.isArray(v) && v.every(isStr);
+  if (!isStr(pr.sceneId) || !isStr(pr.locationId) || !locationOf(a, pr.locationId) || !sceneOf(a, pr.sceneId)) return false;
+  if (!isRec(pr.flags) || !strs(pr.objectivesDone) || !strs(pr.beatsFired) || !strs(pr.killed) || !strs(pr.entered) || !strs(pr.talkedTo) || !strs(pr.has)) return false;
+  if (pr.spawned !== undefined && !strs(pr.spawned)) return false;
+  if (pr.ended !== undefined && pr.ended !== "victory" && pr.ended !== "defeat") return false;
+  if (d.places !== undefined) {
+    if (!isRec(d.places)) return false;
+    for (const [loc, m] of Object.entries(d.places)) {
+      if (!locationOf(a, loc) || !isRec(m) || !isStr(m.explored) || m.explored.length !== CELL_WIDTH * CELL_HEIGHT || !/^[01]+$/.test(m.explored)) return false;
+      if (!Array.isArray(m.creatures) || !m.creatures.every((c) => isCreatureLike(c, WALKABLE_BY_ID.fantasy))) return false;
+      if (!Array.isArray(m.bodies) || !m.bodies.every(isBodyLike)) return false;
+      if (!Array.isArray(m.piles) || !m.piles.every((q) => isRec(q) && inRoom(q.at) && strs(q.items))) return false;
+      if (!Array.isArray(m.extraProps) || !m.extraProps.every((e) => isRec(e) && isStr(e.id) && isStr(e.assetId) && inRoom(e) && isStr(e.label))) return false;
+      if (!Array.isArray(m.tileOverrides) || !m.tileOverrides.every((o) => isRec(o) && inRoom(o) && isStr(o.tile))) return false;
+      if (!isRec(m.propSecrets) || !Object.values(m.propSecrets).every(isStr)) return false;
+    }
+  }
+  return (d.featuresFound === undefined || strs(d.featuresFound)) && (d.goneSpawns === undefined || strs(d.goneSpawns)) && (d.storyRecent === undefined || strs(d.storyRecent));
 }
 
 const isCarriedLike = (c: unknown): boolean => isRec(c) && isStr(c.name) && isStr(c.note) && isStr(c.kind) && typeof c.pocketable === "boolean";
@@ -1104,7 +1471,8 @@ const isCreatureLike = (c: unknown, known: Map<string, boolean>): boolean =>
   typeof c.hostile === "boolean" &&
   Array.isArray(c.carried) &&
   c.carried.every(isCarriedLike) &&
-  (c.npc === undefined || (isRec(c.npc) && isStr(c.npc.role))) &&
+  (c.npc === undefined || (isRec(c.npc) && isStr(c.npc.role) && (c.npc.name === undefined || isStr(c.npc.name)))) &&
+  (c.adv === undefined || (isRec(c.adv) && isStr(c.adv.spawn) && isStr(c.adv.instance) && (c.adv.npc === undefined || isStr(c.adv.npc)))) &&
   known.has(c.token);
 
 /**
@@ -1127,7 +1495,7 @@ function fromSnapshot(data: unknown): PlayState | null {
   const s = JSON.parse(JSON.stringify(data)) as StoredSnapshot;
   const { explored, ...rest } = s;
   const kit = SCENE_KIT[rest.template];
-  const old = rest as Partial<Pick<SnapshotBase, "piles" | "itemFlags" | "heroHidden" | "sneaking" | "doorLockDc">>;
+  const old = rest as Partial<Pick<SnapshotBase, "piles" | "itemFlags" | "heroHidden" | "sneaking" | "doorLockDc" | "adventureId" | "progress" | "places" | "featuresFound" | "goneSpawns" | "storyRecent">>;
   let creatures: Creature[];
   let room: RoomChoice;
   let spawned: Record<string, number>;
@@ -1167,9 +1535,9 @@ function fromSnapshot(data: unknown): PlayState | null {
     const legacyBodies = s.bodies ?? (s.fallenAt ? [{ ...bodyFor("body-1", kit.monster, s.fallenAt, []), looted: true, engineLootRolled: true }] : []);
     bodies = legacyBodies.map((b) => ({ ...b, token: kit.monster }));
   }
-  const { v: _v, monster: _monster, monsterSeen: _seen, monsterCarried: _carried, creatures: _creatures, spawned: _spawned, creatureSeq: _seq, room: _room, bodies: _bodies, round: _round, ...scene } = rest as typeof rest & Record<string, unknown>;
+  const { v: _v, monster: _monster, monsterSeen: _seen, monsterCarried: _carried, creatures: _creatures, spawned: _spawned, creatureSeq: _seq, room: _room, bodies: _bodies, round: _round, adventureId: _aid, progress: _prog, places: _places, featuresFound: _found, goneSpawns: _gone, storyRecent: _recent, ...scene } = rest as typeof rest & Record<string, unknown>;
   const p: PlayState = {
-    ...(scene as Omit<SnapshotBase, "bodies" | "explored">),
+    ...(scene as Omit<SnapshotBase, "bodies" | "explored" | "adventureId" | "progress" | "places" | "featuresFound" | "goneSpawns" | "storyRecent">),
     room,
     creatures,
     spawned,
@@ -1182,6 +1550,14 @@ function fromSnapshot(data: unknown): PlayState | null {
     doorLockDc: old.doorLockDc ?? DEFAULT_LOCK_DC,
     dmJournal: [],
     rollJournal: [],
+    adventureId: old.adventureId ?? null,
+    progress: old.progress ?? null,
+    places: old.places ?? {},
+    featuresFound: old.featuresFound ?? [],
+    goneSpawns: old.goneSpawns ?? [],
+    storyRecent: old.storyRecent ?? [],
+    adventurePending: [],
+    boardEpoch: ++boardEpochSeq,
     note: null,
     round: s.v === SNAPSHOT_VERSION ? roundFromSnapshot(s.round, s.creatures) : null,
     options: [],
@@ -1245,12 +1621,13 @@ const awakeHostiles = (p: PlayState): Creature[] => p.creatures.filter((c) => c.
 
 /** A creature's name: its statblock's ("Goblin"), the role of one that is somebody, and a number after it ("Rat 2") while the scene has more than one of its kind. */
 function creatureName(p: PlayState, c: Creature): string {
+  if (c.npc?.name) return c.npc.name;
   const base = c.npc ? sentenceCase(c.npc.role) : statblockFor(c.token).name;
   return !c.npc && (p.spawned[c.token] ?? 0) > 1 ? `${base} ${c.n}` : base;
 }
 
 /** "the goblin", "the rat 2", "the innkeeper": a creature in a sentence. */
-const creatureLabel = (p: PlayState, c: Creature): string => `the ${creatureName(p, c).toLowerCase()}`;
+const creatureLabel = (p: PlayState, c: Creature): string => (c.npc?.name ? c.npc.name : `the ${creatureName(p, c).toLowerCase()}`);
 
 /** The plural of a kind's name, for a group ("Rats"). */
 const pluralName = (name: string): string => (/(s|x|ch|sh)$/i.test(name) ? `${name}es` : `${name}s`);
@@ -1259,16 +1636,364 @@ function heroDown(p: PlayState): boolean {
   return p.hero.downed || p.hero.stable || p.hero.dead;
 }
 
+// ---------------------------------------------------------------------------
+// The adventure in the scene. An adventure's places are separate boards built by
+// the engine's own locationLayout; the hero walks between them by their exits.
+// The story (adventures/progress.ts) decides every step: the game reports what
+// happened (an event) and the engine says what it did (beats, objectives, a new
+// scene, an end). Everything here changes the state and queues what happened in
+// `adventurePending`; the panel plays it out (cards, strip, journal).
+// ---------------------------------------------------------------------------
+
+/** A square nothing is ever on: the test room's door and chest stand here while an adventure runs, so no rule that asks "is this the door?" says yes. */
+const OFF_BOARD: XY = { x: -50, y: -50 };
+const doorAt = (p: PlayState): XY => (p.adventureId ? OFF_BOARD : DOOR_AT);
+const containerAt = (p: PlayState): XY => (p.adventureId ? OFF_BOARD : CONTAINER_AT);
+
+/** The adventure being played, or null in a test room. */
+function adventureOf(p: PlayState): Adventure | null {
+  return p.adventureId && p.progress ? (adventureById(p.adventureId) ?? null) : null;
+}
+
+/** The place of the adventure the hero is in. */
+function currentLocation(p: PlayState) {
+  const a = adventureOf(p);
+  return a && p.progress ? locationOf(a, p.progress.locationId) : undefined;
+}
+
+/** A place built into squares: floor, props, where its exits and features stand. Built once per place (the map never changes). */
+interface LocationBoard {
+  tiles: TileId[][];
+  props: PlacedProp[];
+  exitsAt: Record<string, XY>;
+  featuresAt: Record<string, XY>;
+  start?: XY;
+}
+const boardsByAdventure = new WeakMap<Adventure, Map<string, LocationBoard>>();
+
+function locationBoard(a: Adventure, locationId: string): LocationBoard {
+  let boards = boardsByAdventure.get(a);
+  if (!boards) boardsByAdventure.set(a, (boards = new Map()));
+  const hit = boards.get(locationId);
+  if (hit) return hit;
+  const built = locationLayout(a, locationId, {
+    walkable: (t) => WALKABLE_BY_ID.fantasy.get(t) === true,
+    blocking: (id) => WALKABLE_BY_ID.fantasy.get(id) === false,
+  });
+  const board: LocationBoard = { tiles: built.layout.tiles, props: built.layout.props, exitsAt: built.exitsAt, featuresAt: built.featuresAt, ...(built.start ? { start: built.start } : {}) };
+  boards.set(locationId, board);
+  return board;
+}
+
+/** The board of the place the hero is in, or null in a test room. */
+function advBoard(p: PlayState): LocationBoard | null {
+  const a = adventureOf(p);
+  return a && p.progress ? locationBoard(a, p.progress.locationId) : null;
+}
+
+/** A thing in a place the hero can walk onto to leave: an exit and the square it stands on. */
+interface ExitHere {
+  exit: AdventureExit;
+  at: XY;
+}
+
+function exitsHere(p: PlayState): ExitHere[] {
+  const board = advBoard(p);
+  const loc = currentLocation(p);
+  if (!board || !loc) return [];
+  return loc.exits.flatMap((exit) => (board.exitsAt[exit.id] ? [{ exit, at: board.exitsAt[exit.id]! }] : []));
+}
+
+const exitOn = (p: PlayState, at: XY): ExitHere | undefined => (p.adventureId ? exitsHere(p).find((e) => same(e.at, at)) : undefined);
+
+/** Whether the way is open now: no condition on it, or the story says it holds. */
+function exitIsOpen(p: PlayState, exit: AdventureExit): boolean {
+  const a = adventureOf(p);
+  if (!exit.requires) return true;
+  return a !== null && p.progress !== null && evaluateCondition(a, p.progress, exit.requires);
+}
+
+/** What the party finds while a way is shut, in the adventure's own words (or an honest plain line when it wrote none). */
+const exitLockedWords = (exit: AdventureExit): string => sentence(exit.lockedText ?? "That way is shut.");
+
+function featureAtSquare(p: PlayState, at: XY): AdventureFeature | undefined {
+  const board = advBoard(p);
+  const loc = currentLocation(p);
+  if (!board || !loc) return undefined;
+  const id = Object.keys(board.featuresAt).find((k) => same(board.featuresAt[k]!, at));
+  return id ? loc.features.find((f) => f.id === id) : undefined;
+}
+
+const featureKey = (p: PlayState, f: AdventureFeature): string => `${p.progress?.locationId ?? ""}/${f.id}`;
+const featureIsFound = (p: PlayState, f: AdventureFeature): boolean => p.featuresFound.includes(featureKey(p, f));
+/** A feature the hero can search: it has a DC, something to give or a secret. One with none of them is only looked at. */
+const featureSearchable = (f: AdventureFeature): boolean => f.searchDc !== undefined || (f.gives?.length ?? 0) > 0 || !!f.secret;
+
+/** The nearest feature within one square of the hero (the hero's own square counts). */
+function featureNear(p: PlayState): { feature: AdventureFeature; at: XY } | undefined {
+  const board = advBoard(p);
+  const loc = currentLocation(p);
+  if (!board || !loc) return undefined;
+  let best: { feature: AdventureFeature; at: XY; d: number } | undefined;
+  for (const f of loc.features) {
+    const at = board.featuresAt[f.id];
+    if (!at) continue;
+    const d = tileDistance(p.heroAt, at);
+    if (d <= 1 && (!best || d < best.d)) best = { feature: f, at, d };
+  }
+  return best ? { feature: best.feature, at: best.at } : undefined;
+}
+
+/** What a placed prop or feature is called in a sentence: a feature by its name, any other prop by its picture's name. */
+function advPropWords(p: PlayState, at: XY): string | null {
+  const f = featureAtSquare(p, at);
+  if (f) return f.name.toLowerCase().startsWith("the ") ? f.name : `the ${f.name.toLowerCase()}`;
+  const prop = advBoard(p)?.props.find((q) => same(q, at));
+  if (!prop) return null;
+  const name = SPRITES_BY_TEMPLATE.fantasy.find((s) => s.assetId === prop.assetId)?.name ?? prop.assetId.replace(/_/g, " ");
+  return `the ${name.toLowerCase()}`;
+}
+
+const npcOf = (a: Adventure, id: string | undefined) => (id ? a.npcs.find((n) => n.id === id) : undefined);
+
+/** A square near `at` where a creature can stand: `at` itself when it is free, else the nearest free one within three squares. */
+function freeSquareNear(p: PlayState, at: XY): XY {
+  const tiles = sceneTiles(p);
+  const ok = (q: XY): boolean => q.x >= 0 && q.y >= 0 && q.x < CELL_WIDTH && q.y < CELL_HEIGHT && terrainBlocks(p, tiles, q) === null && !same(q, p.heroAt) && !creatureAt(p, q);
+  if (ok(at)) return at;
+  for (let r = 1; r <= 3; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const q = { x: at.x + dx, y: at.y + dy };
+        if (ok(q)) return q;
+      }
+    }
+  }
+  return at;
+}
+
+/**
+ * Put the place's creatures on the board: every creature of every spawn that is in play (its own condition holds, no beat is still holding
+ * it back) and not dead, as the engine's locationLayout places them. Creatures already there stay as they are; one whose spawn is not in
+ * play any more (the landlady, once the job is done) goes. `only` limits it to these spawn ids (what a beat just brought in).
+ * A hostile starts as the spawn says (awake or asleep); anybody else is an NPC with their own name.
+ */
+function populateLocation(p: PlayState, only?: ReadonlySet<string>): void {
+  const a = adventureOf(p);
+  const loc = currentLocation(p);
+  const progress = p.progress;
+  if (!a || !loc || !progress) return;
+  if (!only) {
+    p.creatures = p.creatures.filter((c) => {
+      const spawn = c.adv ? loc.spawns.find((s) => s.id === c.adv!.spawn) : undefined;
+      return !c.adv || !spawn || spawnIsPresent(a, progress, spawn);
+    });
+  }
+  const placed = locationLayout(a, loc.id, {
+    progress,
+    walkable: (t) => WALKABLE_BY_ID.fantasy.get(t) === true,
+    blocking: (id) => WALKABLE_BY_ID.fantasy.get(id) === false,
+  }).layout.tokens;
+  const spawnOf = new Map<string, AdventureSpawn>();
+  for (const s of loc.spawns) for (const id of spawnInstanceIds(s)) spawnOf.set(id, s);
+  for (const t of placed) {
+    const spawn = spawnOf.get(t.id);
+    if (!spawn || (only && !only.has(spawn.id))) continue;
+    if (p.creatures.some((c) => c.adv?.instance === t.id) || p.goneSpawns.includes(t.id)) continue;
+    const npc = npcOf(a, spawn.npcId);
+    addCreature(p, t.assetId, freeSquareNear(p, { x: t.x, y: t.y }), {
+      id: t.id,
+      awake: spawn.awake,
+      hostile: spawn.hostile,
+      ...(spawn.hostile ? {} : { npc: { role: npc?.role ?? "villager", ...(npc ? { name: npc.name } : {}) } }),
+      adv: { spawn: spawn.id, instance: t.id, ...(spawn.npcId ? { npc: spawn.npcId } : {}) },
+    });
+  }
+}
+
+const advHolds = (p: PlayState, item: AdventureItem): boolean => p.hero.inventory.some((n) => foldItem(withoutCount(n)) === foldItem(item.name));
+
+/** Put an adventure item in the pack with its own description and flags (a quest item cannot be dropped or destroyed; a usable one sends its words to the DM). */
+function giveAdventureItem(p: PlayState, item: AdventureItem): void {
+  if (advHolds(p, item)) return;
+  p.hero = { ...p.hero, inventory: [...p.hero.inventory, item.name] };
+  p.itemNotes[item.name] = item.description;
+  if (item.quest === true || item.usable === true || item.useSay !== undefined) {
+    p.itemFlags[item.name] = { ...(item.quest ? { quest: true } : {}), ...(item.usable ? { usable: true } : {}), ...(item.useSay !== undefined ? { useSay: item.useSay } : {}) };
+  }
+  p.log.push({ text: `You now carry ${item.name}.`, tone: "good", notice: `+ ${item.name}` });
+}
+
+/** What a step of the story leaves behind: the items its beats handed over, the creatures they brought in, what the Journal remembers, and the step itself for the panel to play. */
+function afterStep(p: PlayState, a: Adventure, r: AdventureStepResult): void {
+  for (const b of r.fired) {
+    for (const g of b.give ?? []) {
+      const item = itemOf(a, g);
+      if (item) giveAdventureItem(p, item);
+    }
+    if (b.narrate) p.storyRecent = [...p.storyRecent, b.narrate].slice(-STORY_RECENT_KEEP);
+  }
+  const brought = new Set(r.fired.flatMap((b) => b.spawn ?? []));
+  if (brought.size > 0) populateLocation(p, brought);
+  if (r.fired.length > 0 || r.completed.length > 0 || r.sceneChanged || r.ended) p.adventurePending.push(r);
+}
+
+/** Tell the story something happened. A refusal changes nothing (the result says why); anything else is applied and queued. */
+function advApply(p: PlayState, e: AdventureEvent): AdventureStepResult | null {
+  const a = adventureOf(p);
+  if (!a || !p.progress) return null;
+  const r = applyEvent(a, p.progress, e);
+  if (r.refused) return r;
+  p.progress = r.progress;
+  afterStep(p, a, r);
+  return r;
+}
+
+/**
+ * Keep the story's list of items the party holds in step with the pack: an adventure item that arrived is a "gain", one that left (dropped,
+ * destroyed) a "lose". Cheap, so the panel runs it every frame.
+ */
+function syncItems(p: PlayState): void {
+  const a = adventureOf(p);
+  const progress = p.progress;
+  if (!a || !progress || progress.ended) return;
+  for (const item of a.items) {
+    const holds = advHolds(p, item);
+    const has = p.progress!.has.includes(item.id);
+    if (holds && !has) advApply(p, { type: "gain", item: item.id });
+    else if (!holds && has) advApply(p, { type: "lose", item: item.id });
+  }
+}
+
+/** The place the hero is in, as it will be remembered once they leave. */
+function stashPlace(p: PlayState): void {
+  const id = p.progress?.locationId;
+  if (!id) return;
+  p.places[id] = {
+    explored: encodeExplored(p.explored),
+    creatures: p.creatures.map(({ actor: _actor, ...c }) => ({ ...c })),
+    bodies: p.bodies.map((b) => ({ ...b })),
+    piles: p.piles.map((q) => ({ at: { ...q.at }, items: [...q.items] })),
+    extraProps: p.extraProps.map((e) => ({ ...e })),
+    tileOverrides: p.tileOverrides.map((o) => ({ ...o })),
+    propSecrets: { ...p.propSecrets },
+  };
+}
+
+/** A place nobody has been to: nothing explored, nobody there, nothing changed. */
+function clearPlace(p: PlayState): void {
+  p.spawned = {};
+  p.explored = emptyExplored();
+  p.exploredRev++;
+  p.creatures = [];
+  p.bodies = [];
+  p.piles = [];
+  p.extraProps = [];
+  p.tileOverrides = [];
+  p.propSecrets = {};
+  p.round = null;
+  p.fallenAt = null;
+}
+
+function restorePlace(p: PlayState, m: PlaceMemory): void {
+  p.explored = decodeExplored(m.explored);
+  p.exploredRev++;
+  p.creatures = m.creatures.map((c) => ({ ...c, actor: newActor("left") }));
+  // Each kind is numbered within the place ("Rat 2" only where there are several): the count carries on from the highest number kept here.
+  p.spawned = {};
+  for (const c of p.creatures) p.spawned[c.token] = Math.max(p.spawned[c.token] ?? 0, c.n);
+  for (const c of p.creatures) if (c.prone) playClips(c.actor, ["death"], performance.now());
+  p.bodies = m.bodies.map((b) => ({ ...b }));
+  p.piles = m.piles.map((q) => ({ at: { ...q.at }, items: [...q.items] }));
+  p.extraProps = m.extraProps.map((e) => ({ ...e }));
+  p.tileOverrides = m.tileOverrides.map((o) => ({ ...o }));
+  p.propSecrets = { ...m.propSecrets };
+}
+
+/**
+ * The hero leaves for another place of the adventure: the place left is kept as it is, the story is told the party entered the new one
+ * (it may fire beats, finish objectives, move to another scene), the board becomes the new place (remembered, or fresh) with the hero on
+ * `at` and its creatures on their squares. Returns false, changing nothing, when the story has no such place.
+ */
+function enterLocation(p: PlayState, locationId: string, at: XY): boolean {
+  const a = adventureOf(p);
+  if (!a || !p.progress || !locationOf(a, locationId)) return false;
+  const r = applyEvent(a, p.progress, { type: "enter", location: locationId });
+  if (r.refused) return false;
+  stashPlace(p);
+  clearPlace(p);
+  p.progress = r.progress;
+  p.heroAt = { ...at };
+  const kept = p.places[locationId];
+  if (kept) {
+    restorePlace(p, kept);
+    delete p.places[locationId];
+  }
+  p.heroHidden = false;
+  p.sneaking = false;
+  p.options = [];
+  p.worldRev++;
+  p.boardEpoch = ++boardEpochSeq;
+  afterStep(p, a, r);
+  populateLocation(p);
+  noteSight(p);
+  return true;
+}
+
+/** A new game of an adventure: this hero, at the start of the first scene, in its first place, with the creatures that are there. */
+function newAdventurePlay(a: Adventure, sheet: CharacterSheet, template: TemplateGenre = "fantasy"): PlayState {
+  const archetypeId = sheet.archetypeId as ArchetypeId;
+  const p = basePlay(template, archetypeId, ROOM_FLOOR[template], undefined, sheet);
+  const kit = startingKitFor(a, sheet.chassis);
+  // The bench's own potion stock: what the adventure's kit says (none, in the first adventure), the usual two when it says nothing.
+  p.potions = kit ? kit.potions : HERO_POTIONS;
+  p.adventureId = a.id;
+  const settled = settleProgress(a, startProgress(a));
+  p.progress = settled.progress;
+  p.heroAt = { ...a.start.at };
+  afterStep(p, a, settled);
+  populateLocation(p);
+  noteSight(p);
+  return p;
+}
+
+/** The Journal tab: the adventure, the scene, its objectives (a hidden one is the DM's alone) and the last beats. */
+function journalFor(p: PlayState): HudJournal | undefined {
+  const a = adventureOf(p);
+  const progress = p.progress;
+  if (!a || !progress) return undefined;
+  const scene = sceneOf(a, progress.sceneId);
+  return {
+    title: a.title,
+    scene: scene?.title ?? "",
+    objectives: (scene?.objectives ?? []).filter((o) => !o.hidden).map((o) => ({ text: o.text, done: progress.objectivesDone.includes(o.id) })),
+    ...(p.storyRecent.length > 0 ? { recent: [...p.storyRecent] } : {}),
+  };
+}
+
+/** What Use does now in an adventure: leave by the exit underfoot, search or look at the feature beside the hero. Null when neither. */
+function advUseFor(p: PlayState): { kind: "exit"; exit: ExitHere; label: string } | { kind: "feature"; feature: AdventureFeature; at: XY; label: string } | null {
+  const here = exitOn(p, p.heroAt);
+  if (here && !p.round) return { kind: "exit", exit: here, label: "Go" };
+  const near = featureNear(p);
+  if (near) return { kind: "feature", ...near, label: featureSearchable(near.feature) && !featureIsFound(p, near.feature) ? "Search" : "Look" };
+  return null;
+}
+
 function sceneTiles(p: PlayState): TileId[][] {
   const wall = SCENE_KIT[p.template].wall;
-  const tiles = Array.from({ length: CELL_HEIGHT }, (_, y) =>
-    Array.from({ length: CELL_WIDTH }, (_, x) => {
-      const edge = x === 0 || y === 0 || x === CELL_WIDTH - 1 || y === CELL_HEIGHT - 1;
-      const divider = x === DIVIDER_X && y !== DOOR_AT.y;
-      if (edge || divider) return wall;
-      return DRAIN_AT.some((d) => same(d, { x, y })) ? DRAIN_TILE[p.template] : p.floorId;
-    }),
-  );
+  const board = advBoard(p);
+  const tiles = board
+    ? board.tiles.map((row) => [...row])
+    : Array.from({ length: CELL_HEIGHT }, (_, y) =>
+        Array.from({ length: CELL_WIDTH }, (_, x) => {
+          const edge = x === 0 || y === 0 || x === CELL_WIDTH - 1 || y === CELL_HEIGHT - 1;
+          const divider = x === DIVIDER_X && y !== DOOR_AT.y;
+          if (edge || divider) return wall;
+          return DRAIN_AT.some((d) => same(d, { x, y })) ? DRAIN_TILE[p.template] : p.floorId;
+        }),
+      );
   // What the DM changed rides on top; it can never reach the border (the effect is refused there).
   for (const o of p.tileOverrides) {
     const row = tiles[o.y];
@@ -1279,6 +2004,9 @@ function sceneTiles(p: PlayState): TileId[][] {
 
 function sceneProps(p: PlayState): PlacedProp[] {
   const kit = SCENE_KIT[p.template];
+  const board = advBoard(p);
+  // An adventure's place: its own props (the map's, with the features' names), and whatever the DM added.
+  if (board) return [...board.props, ...p.extraProps.map((e) => ({ id: e.id, assetId: e.assetId, x: e.x, y: e.y, label: e.label }))];
   return [
     { id: "door", assetId: p.doorOpen ? kit.doorOpen : kit.doorClosed, x: DOOR_AT.x, y: DOOR_AT.y, label: kit.doorLabel },
     {
@@ -1438,7 +2166,7 @@ interface SightKit {
 }
 
 /** Everything the grid depends on: the tiles (template and floor), the door, and whatever the DM changed (worldRev). Nothing else in the scene stops a look. */
-const sightKey = (p: PlayState): string => `${p.template}|${p.floorId}|${p.doorOpen ? 1 : 0}|${p.worldRev}`;
+const sightKey = (p: PlayState): string => `${p.template}|${p.floorId}|${p.doorOpen ? 1 : 0}|${p.worldRev}|${p.boardEpoch}`;
 
 let kitCache: { key: string; kit: SightKit } | null = null;
 function sightKit(p: PlayState): SightKit {
@@ -1548,7 +2276,7 @@ function blockedWords(p: PlayState, to: XY): string {
   const blocked = terrainBlocks(p, sceneTiles(p), to);
   if (blocked === "door") return p.doorLocked ? `${sentenceCase(kit.doorLabel)} is locked.` : `${sentenceCase(kit.doorLabel)} is closed. Click it when you are next to it to open it.`;
   if (blocked === "container") return `${sentenceCase(kit.containerLabel)} is in the way.`;
-  if (blocked === "prop") return `${sentence(p.extraProps.find((e) => same(e, to))?.label ?? "something")} is in the way.`;
+  if (blocked === "prop") return `${sentence(p.extraProps.find((e) => same(e, to))?.label ?? advPropWords(p, to) ?? "something")} is in the way.`;
   if (blocked) return "A wall. You cannot walk through it.";
   const there = creatureAt(p, to);
   if (there && creatureInSight(p, there)) return `${sentenceCase(creatureLabel(p, there))} is in the way.`;
@@ -1677,6 +2405,9 @@ function heroStepTo(p: PlayState, to: XY): TurnResult {
   if (heroDown(p)) return refusedWith(DOWN_NOTE);
   if (p.round && !isPlayersTurn(p.round)) return refusedWith("Wait for your turn.");
   if (tileDistance(p.heroAt, to) !== 1) return refusedWith("One square at a time.");
+  // A way out that is shut (a door held shut until the story says so) is not stepped onto: the adventure's own words say why.
+  const shut = exitOn(p, to);
+  if (shut && !exitIsOpen(p, shut.exit)) return refusedWith(exitLockedWords(shut.exit));
   if (fieldCostFt(heroField(p), to) === undefined) return refusedWith(blockedWords(p, to));
   if (p.round) {
     const next = spendActiveMovement(p.round, FEET_PER_TILE);
@@ -1816,6 +2547,8 @@ function slayCreature(p: PlayState, c: Creature): void {
   }
   // The kill drops nothing in the pack: the body lies where it fell, and the loot is found by searching it (leaveBody).
   leaveBody(p, c);
+  // In an adventure the story is told which of its creatures fell (by instance id: "cellar_rats_2"), and may fire a beat or finish an objective.
+  if (p.adventureId && c.adv) advApply(p, { type: "kill", spawn: c.adv.instance });
   if (awakeHostiles(p).length === 0) {
     p.round = null;
     p.hero = newAdventuringDay(p.hero);
@@ -1903,20 +2636,21 @@ function heroInteractRules(p: PlayState): TurnResult {
   if (p.round && !isPlayersTurn(p.round)) return refusedWith("Wait for your turn.");
   const kit = SCENE_KIT[p.template];
   const near = (at: XY) => tileDistance(p.heroAt, at) <= 1;
-  if (near(DOOR_AT)) {
+  const door = doorAt(p);
+  if (near(door)) {
     if (!p.doorOpen) {
       if (p.doorLocked) return refusedWith("Locked.");
       p.doorOpen = true;
       p.log.push({ text: `You open ${kit.doorLabel}.`, tone: "plain" });
-    } else if (same(p.heroAt, DOOR_AT)) {
+    } else if (same(p.heroAt, door)) {
       return refusedWith("You are standing in the doorway. Step out of it first.");
-    } else if (creatureAt(p, DOOR_AT)) {
-      return refusedWith(`${sentenceCase(creatureLabel(p, creatureAt(p, DOOR_AT)!))} is standing in the doorway.`);
+    } else if (creatureAt(p, door)) {
+      return refusedWith(`${sentenceCase(creatureLabel(p, creatureAt(p, door)!))} is standing in the doorway.`);
     } else {
       p.doorOpen = false;
       p.log.push({ text: `You close ${kit.doorLabel}.`, tone: "plain" });
     }
-  } else if (near(CONTAINER_AT)) {
+  } else if (near(containerAt(p))) {
     if (p.searched) return refusedWith(`You already emptied ${kit.containerLabel}.`);
     p.searched = true;
     p.log.push({ text: `You open ${kit.containerLabel}.`, tone: "plain" });
@@ -1931,8 +2665,9 @@ function heroInteractRules(p: PlayState): TurnResult {
 
 /** Whether the door or the chest is next to the hero and can be used now (the Use button's own test for them). */
 function doorOrChestUsable(p: PlayState): boolean {
-  const doorUsable = tileDistance(p.heroAt, DOOR_AT) <= 1 && !p.doorLocked && !same(p.heroAt, DOOR_AT) && !creatureAt(p, DOOR_AT);
-  return doorUsable || (tileDistance(p.heroAt, CONTAINER_AT) <= 1 && !p.searched);
+  const door = doorAt(p);
+  const doorUsable = tileDistance(p.heroAt, door) <= 1 && !p.doorLocked && !same(p.heroAt, door) && !creatureAt(p, door);
+  return doorUsable || (tileDistance(p.heroAt, containerAt(p)) <= 1 && !p.searched);
 }
 
 /** Why the hero cannot make camp right now, in words: the sheet's own day rule, then the table's (no fight, nothing hostile awake or in sight). Null when it can. */
@@ -2046,7 +2781,7 @@ function dmAssetsFor(template: TemplateGenre): DmSceneView["assets"] {
 /** The tiles as the player SEES them (the renderer's own display pass, seed 0), so a grate that is only a scattered variant is still a grate the DM knows about. */
 let displayCache: { key: string; tiles: TileId[][] } | null = null;
 function displayTiles(p: PlayState): TileId[][] {
-  const key = `${p.template}|${p.floorId}|${p.worldRev}`;
+  const key = `${p.template}|${p.floorId}|${p.worldRev}|${p.boardEpoch}`;
   if (displayCache?.key === key) return displayCache.tiles;
   const m = MANIFEST[p.template];
   const tiles = applyDisplayTiles(sceneTiles(p), (id) => m.tiles[id] !== undefined, 0, { props: sceneProps(p), hasProp: (id) => m.props[id] !== undefined });
@@ -2056,6 +2791,8 @@ function displayTiles(p: PlayState): TileId[][] {
 
 /** Whether the square is a drain grate, by the stored tile or by what is drawn there. */
 function isGrate(p: PlayState, at: XY): boolean {
+  // In an adventure a drain grate is only a variant the renderer scatters on stone floor: the story does not know of it, so neither does the DM.
+  if (p.adventureId) return false;
   const grate = DRAIN_TILE[p.template];
   return sceneTiles(p)[at.y]?.[at.x] === grate || displayTiles(p)[at.y]?.[at.x] === grate;
 }
@@ -2087,13 +2824,15 @@ function whatIsAt(p: PlayState, at: XY): string {
   if (same(at, p.heroAt)) return "yourself";
   const there = creatureAt(p, at);
   if (there && creatureInSight(p, there)) return creatureLabel(p, there);
-  if (same(at, DOOR_AT)) return kit.doorLabel;
-  if (same(at, CONTAINER_AT)) return kit.containerLabel;
+  if (same(at, doorAt(p))) return kit.doorLabel;
+  if (same(at, containerAt(p))) return kit.containerLabel;
   const body = p.bodies.find((b) => same(b.at, at));
   if (body) return `the ${body.name.toLowerCase()}'s body`;
   if (pileAt(p, at)) return "the things lying on the ground";
   const prop = p.extraProps.find((e) => same(e, at));
   if (prop) return prop.label;
+  const placed = p.adventureId ? advPropWords(p, at) : null;
+  if (placed) return placed;
   if (isGrate(p, at)) return "the drain grate";
   const tile = sceneTiles(p)[at.y]?.[at.x];
   if (tile && WALKABLE_BY_ID[p.template].get(tile) === true) return tile === p.floorId || /^floor_stone/.test(tile) ? "the floor" : tileWords(tile);
@@ -2103,7 +2842,7 @@ function whatIsAt(p: PlayState, at: XY): string {
 /** The feature the examine/left-click shortcut treats as lookable: a grate or a DM prop (the door and chest keep their Use). */
 function lookableAt(p: PlayState, at: XY): "grate" | "prop" | null {
   if (p.extraProps.some((e) => same(e, at))) return "prop";
-  if (isGrate(p, at) && !same(at, DOOR_AT) && !same(at, CONTAINER_AT)) return "grate";
+  if (isGrate(p, at) && !same(at, doorAt(p)) && !same(at, containerAt(p))) return "grate";
   return null;
 }
 
@@ -2116,22 +2855,32 @@ function dmFeatures(p: PlayState): DmSceneView["features"] {
     out.push(f);
   };
   const withSecret = <T extends object>(id: string, base: T): T & { secret?: string } => (p.propSecrets[id] ? { ...base, secret: p.propSecrets[id]! } : base);
-  add(withSecret("door", { id: "door", x: DOOR_AT.x, y: DOOR_AT.y, what: kit.doorLabel, asset: p.doorOpen ? kit.doorOpen : kit.doorClosed, state: p.doorOpen ? "open" : p.doorLocked ? "closed and locked" : "closed", seen: seen(DOOR_AT) }));
-  add(
-    withSecret("container", {
-      id: "container",
-      x: CONTAINER_AT.x,
-      y: CONTAINER_AT.y,
-      what: kit.containerLabel,
-      asset: p.searched && kit.containerOpened ? kit.containerOpened : kit.container,
-      state: p.searched ? "already opened and emptied" : "unopened (the engine rolls what is inside when the hero opens it; never invent its contents)",
-      seen: seen(CONTAINER_AT),
-    }),
-  );
+  if (!p.adventureId) {
+    add(withSecret("door", { id: "door", x: DOOR_AT.x, y: DOOR_AT.y, what: kit.doorLabel, asset: p.doorOpen ? kit.doorOpen : kit.doorClosed, state: p.doorOpen ? "open" : p.doorLocked ? "closed and locked" : "closed", seen: seen(DOOR_AT) }));
+    add(
+      withSecret("container", {
+        id: "container",
+        x: CONTAINER_AT.x,
+        y: CONTAINER_AT.y,
+        what: kit.containerLabel,
+        asset: p.searched && kit.containerOpened ? kit.containerOpened : kit.container,
+        state: p.searched ? "already opened and emptied" : "unopened (the engine rolls what is inside when the hero opens it; never invent its contents)",
+        seen: seen(CONTAINER_AT),
+      }),
+    );
+  }
+  // The adventure's own features (a heap of sacks, a hoard chest): what the hero can see of them, never their secrets until they are found.
+  const board = advBoard(p);
+  for (const f of currentLocation(p)?.features ?? []) {
+    const at = board?.featuresAt[f.id];
+    if (!at) continue;
+    const prop = board!.props.find((q) => same(q, at));
+    add({ id: f.id, x: at.x, y: at.y, what: f.name, asset: prop?.assetId ?? "", state: featureIsFound(p, f) ? "already searched" : f.description, seen: seen(at) });
+  }
   for (let y = 1; y < CELL_HEIGHT - 1; y++) {
     for (let x = 1; x < CELL_WIDTH - 1; x++) {
       const at = { x, y };
-      if (!isGrate(p, at) || same(at, DOOR_AT) || same(at, CONTAINER_AT)) continue;
+      if (!isGrate(p, at) || same(at, doorAt(p)) || same(at, containerAt(p))) continue;
       const id = grateId(at);
       add(withSecret(id, { id, x, y, what: "a drain grate in the floor", asset: DRAIN_TILE[p.template], seen: seen(at) }));
     }
@@ -2178,6 +2927,52 @@ function heroIdentityFor(p: PlayState): Partial<DmSceneView["hero"]> {
   return out;
 }
 
+/** The adventure's own name for a creature that is somebody (a hostile one too: the goblin Skrit), or undefined. */
+function advNpcNameOf(p: PlayState, c: Creature): string | undefined {
+  const a = adventureOf(p);
+  return a ? npcOf(a, c.adv?.npc)?.name : undefined;
+}
+
+/** The most characters of the adventure's brief the DM is sent (dm.ts raises its own prompt cap by what this and the rules take). */
+const DM_BRIEF_MAX = 5000;
+
+/**
+ * The adventure items the DM may hand over by id: the ones the story does not hand over itself. A feature's "gives" and a beat's "give" are
+ * the engine's to give (when the search succeeds, when the beat fires), so offering them to the DM would let a story item arrive before the story
+ * reaches it (the green cloth would end the search for the tunnel). What is left is what an adventure leaves to its people to hand out in talk.
+ */
+function dmGivableItemIds(a: Adventure): string[] {
+  const engineGives = new Set<string>();
+  // A feature or a beat names an item by id or by its name (itemOf takes either).
+  const give = (ref: string): void => void engineGives.add(itemOf(a, ref)?.id ?? ref);
+  for (const loc of a.locations) for (const f of loc.features) for (const g of f.gives ?? []) give(g);
+  for (const s of a.scenes) for (const b of s.beats) for (const g of b.give ?? []) give(g);
+  return a.items.filter((i) => !engineGives.has(i.id)).map((i) => i.id);
+}
+
+/**
+ * What the DM is told about the adventure: its brief for this hero and moment (the truths, the secrets marked DM ONLY, the people here, the
+ * current scene), the progress steps it may propose right now (allowedDmSteps), the adventure's people standing on this board with their
+ * squares (the ids it answers talkedTo with) and the item ids it may give. Undefined in a test room, so a room's prompt is what it always was.
+ */
+function dmAdventureView(p: PlayState): DmSceneView["adventure"] | undefined {
+  const a = adventureOf(p);
+  const progress = p.progress;
+  if (!a || !progress) return undefined;
+  const npcsHere: { id: string; name: string; at: XY }[] = [];
+  for (const c of p.creatures) {
+    const npc = npcOf(a, c.adv?.npc);
+    if (npc && !npcsHere.some((n) => n.id === npc.id)) npcsHere.push({ id: npc.id, name: npc.name, at: { ...c.at } });
+  }
+  return {
+    title: a.title,
+    brief: adventureBrief(a, progress, { chassis: p.hero.chassis as Chassis, maxChars: DM_BRIEF_MAX }),
+    allowedSteps: allowedDmSteps(a, progress),
+    npcsHere,
+    itemIds: dmGivableItemIds(a),
+  };
+}
+
 /** The whole scene for one DM call, rebuilt from the state every time. */
 function dmViewFor(p: PlayState): DmSceneView {
   const kit = SCENE_KIT[p.template];
@@ -2202,8 +2997,8 @@ function dmViewFor(p: PlayState): DmSceneView {
         let ch: string;
         if (same(at, p.heroAt)) ch = "@";
         else if (creatureAt(p, at)) ch = letterOf(creatureAt(p, at)!);
-        else if (same(at, DOOR_AT)) ch = p.doorOpen ? "d" : "D";
-        else if (same(at, CONTAINER_AT)) ch = p.searched ? "c" : "C";
+        else if (same(at, doorAt(p))) ch = p.doorOpen ? "d" : "D";
+        else if (same(at, containerAt(p))) ch = p.searched ? "c" : "C";
         else if (propDigit.has(`${x},${y}`)) ch = propDigit.get(`${x},${y}`)!;
         else if (isGrate(p, at)) ch = "o";
         else if (changed.has(`${x},${y}`)) ch = walkable.get(id) === true ? "," : "%";
@@ -2243,6 +3038,7 @@ function dmViewFor(p: PlayState): DmSceneView {
   else if (h.downed) conditions.push("down at 0 hit points, making death saves");
   else if (h.stable) conditions.push("stable at 0 hit points");
   const potions = p.potions;
+  const adventure = dmAdventureView(p);
   return {
     template: p.template,
     cols: CELL_WIDTH,
@@ -2276,7 +3072,7 @@ function dmViewFor(p: PlayState): DmSceneView {
     monsters: p.creatures.map((m) => ({
       id: m.id,
       // Who it is, for the DM: its name (numbered while the scene has several of its kind), and the role of one that is somebody and not hostile.
-      name: m.npc ? `${creatureName(p, m)} (not hostile)` : creatureName(p, m),
+      name: m.npc ? `${creatureName(p, m)} (not hostile)` : advNpcNameOf(p, m) ? `${advNpcNameOf(p, m)} (${creatureName(p, m).toLowerCase()})` : creatureName(p, m),
       hp: m.hp,
       maxHp: statblockFor(m.token).maxHp,
       ac: monsterArmorClassFor(m.token),
@@ -2290,7 +3086,7 @@ function dmViewFor(p: PlayState): DmSceneView {
     fight: p.round
       ? { round: p.round.roundNumber, whoseTurn: mine ? h.name : (activeCreature(p) ? creatureLabel(p, activeCreature(p)!) : "a creature"), heroMovementFt: mine ? (c?.economy.movementRemaining ?? 0) : 0, heroActionReady: heroActionReady(p) }
       : null,
-    visibleToHero: `${inSight.length ? `ids in sight now: ${inSight.join(", ")}` : "no feature or creature in particular"}; the hero stands in the ${p.heroAt.x < DIVIDER_X ? "west" : "east"} room`,
+    visibleToHero: `${inSight.length ? `ids in sight now: ${inSight.join(", ")}` : "no feature or creature in particular"}; the hero stands ${p.adventureId ? `in ${currentLocation(p)?.name ?? "the place"}` : `in the ${p.heroAt.x < DIVIDER_X ? "west" : "east"} room`}`,
     memory: [...p.dmMemory],
     recent: p.dmRecent.slice(-DM_RECENT_SHOWN),
     log: p.log.slice(-6).map((l) => l.text),
@@ -2298,6 +3094,8 @@ function dmViewFor(p: PlayState): DmSceneView {
     // Only when there are any, so a scene without them reads exactly as it did.
     ...(p.bodies.length > 0 ? { bodies: p.bodies.map((b) => ({ id: b.id, name: b.name, at: { ...b.at }, looted: b.looted, items: b.items.map((i) => i.name) })) } : {}),
     ...(p.piles.some((q) => q.items.length > 0) ? { piles: p.piles.filter((q) => q.items.length > 0).map((q) => ({ at: { ...q.at }, items: [...q.items] })) } : {}),
+    // Only in an adventure: then the DM is bound by it (the brief, the steps it may propose, the people and items it may name).
+    ...(adventure ? { adventure } : {}),
   };
 }
 
@@ -2307,7 +3105,7 @@ const LISTEN_DC = 10;
 /** The effect in plain words, for the debug journal's applied and refused lists. */
 function describeEffect(e: DmEffect): string {
   switch (e.type) {
-    case "give": return `give ${e.item}${e.quest ? " (quest item)" : ""}${e.usable ? " (usable)" : ""}`;
+    case "give": return `give ${e.itemId !== undefined ? `adventure item ${e.itemId}` : e.item}${e.quest ? " (quest item)" : ""}${e.usable ? " (usable)" : ""}`;
     case "take": return `take ${e.item}`;
     case "potion": return `potion x${e.count}`;
     case "loot": return "loot roll";
@@ -2322,6 +3120,7 @@ function describeEffect(e: DmEffect): string {
     case "push": return `push ${e.id} ${e.squares} square${e.squares === 1 ? "" : "s"}`;
     case "hurt": return `hurt ${e.id}${e.dice ? ` ${e.dice}` : " (the attack's own damage)"}${e.damageType ? ` ${e.damageType}` : ""}`;
     case "prone": return `prone ${e.id}`;
+    case "progress": return `progress ${e.step.kind} ${e.step.kind === "flag" ? e.step.flag : e.step.id}`;
   }
 }
 
@@ -2358,9 +3157,11 @@ function squareBlockedWords(p: PlayState, at: XY): string | null {
   if (same(at, p.heroAt)) return "the hero is standing there";
   const there = creatureAt(p, at);
   if (there) return `${creatureLabel(p, there)} is standing there`;
-  if (same(at, DOOR_AT)) return "the door is there";
-  if (same(at, CONTAINER_AT)) return "the chest is there";
+  if (same(at, doorAt(p))) return "the door is there";
+  if (same(at, containerAt(p))) return "the chest is there";
   if (p.extraProps.some((e) => same(e, at))) return "another prop is already there";
+  // A square of an adventure's place that already holds a prop of the map (a barrel, a stair, an exit) is not free.
+  if (p.adventureId && (advBoard(p)?.props.some((q) => same(q, at)) || exitOn(p, at))) return "something of the place is already there";
   return null;
 }
 
@@ -2375,6 +3176,15 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
   switch (e.type) {
     case "give": {
       if (p.hero.inventory.length >= DM_INVENTORY_MAX) return fail("the pack is full");
+      // An item of the adventure, by id: the adventure's own name, description and quest flag (nothing the DM wrote about it), and the story hears of it.
+      if (e.itemId !== undefined) {
+        const a = adventureOf(p);
+        const item = a ? itemOf(a, e.itemId) : undefined;
+        if (!item) return fail(`"${e.itemId}" is not an item of this adventure`);
+        if (advHolds(p, item)) return fail(`the hero already carries ${item.name}`);
+        giveAdventureItem(p, item);
+        return { ok: true };
+      }
       p.hero = { ...p.hero, inventory: [...p.hero.inventory, e.item] };
       // What the DM says it is: the pack's hover tip shows it (and says the game does not use it by itself).
       if (typeof e.desc === "string" && e.desc.trim()) p.itemNotes[e.item] = e.desc.trim();
@@ -2393,6 +3203,14 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       p.hero = { ...p.hero, inventory: p.hero.inventory.filter((_, i) => i !== at) };
       if (!p.hero.inventory.includes(gone)) forgetItem(p, gone);
       return { ok: true, line: { text: `You no longer have ${gone}.`, tone: "plain" } };
+    }
+    case "progress": {
+      // The story's own check (progress.ts): a step the adventure does not allow now changes nothing and comes back to the DM in plain words.
+      if (!p.adventureId) return fail("there is no adventure running, so there is no story step to take");
+      const r = advApply(p, { type: "dm", step: e.step });
+      if (!r) return fail("there is no adventure running, so there is no story step to take");
+      if (r.refused) return fail(r.refused);
+      return { ok: true };
     }
     case "potion": {
       const grant = Math.min(e.count, DM_POTION_CAP - p.potionsGranted);
@@ -2449,7 +3267,8 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       if (same(at, p.heroAt)) return fail("the hero is standing there");
       const standing = creatureAt(p, at);
       if (standing) return fail(`${creatureLabel(p, standing)} is standing there`);
-      if (same(at, DOOR_AT) || same(at, CONTAINER_AT)) return fail(`${same(at, DOOR_AT) ? kit.doorLabel : kit.containerLabel} is on that square`);
+      if (same(at, doorAt(p)) || same(at, containerAt(p))) return fail(`${same(at, doorAt(p)) ? kit.doorLabel : kit.containerLabel} is on that square`);
+      if (p.adventureId && (exitOn(p, at) || advBoard(p)?.props.some((q) => same(q, at)))) return fail("something of the place stands on that square");
       const now = sceneTiles(p)[e.y]![e.x]!;
       if (now === e.tile) return { ok: true };
       const prop = p.extraProps.find((x) => same(x, at));
@@ -2459,6 +3278,7 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       return { ok: true };
     }
     case "door": {
+      if (p.adventureId) return fail("there is no door the story lets you open or shut here; the way out is the exit, and the story decides when it opens");
       const inDoorway = same(p.heroAt, DOOR_AT) || creatureAt(p, DOOR_AT) !== undefined;
       if (e.state === "unlocked") {
         p.doorLocked = false;
@@ -2496,6 +3316,8 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       const wasSeen = creatureInSight(p, m);
       const label = creatureLabel(p, m);
       p.creatures = p.creatures.filter((x) => x !== m);
+      // An adventure's creature that fled does not come back when the place is read again (it is not dead: the story's kills do not count it).
+      if (m.adv) p.goneSpawns.push(m.adv.instance);
       if (p.round) {
         const rest = dropCombatant(p.round, m.id);
         p.round = hasHostiles(rest) ? rest : null;
@@ -2513,8 +3335,9 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
 
 type GearOutcome = { ok: true } | { ok: false; reason: string };
 
+/** The tier worn in a role, by the engine's own tierInSlot: an unarmored hero's armour and shield slots are bare (nothing worn), not "common". */
 function wornTier(p: PlayState, role: GearRole): EquipmentTier | null {
-  return p.hero.equipment?.[role]?.tier ?? null;
+  return tierInSlot(p.hero, role);
 }
 
 function itemName(archetypeId: ArchetypeId, role: GearRole, tier: EquipmentTier): string {
@@ -3331,7 +4154,7 @@ function createPlayStage(host: PlayStageHost): PlayStage {
 
   /** Everything the room bitmap depends on. With the animated figures drawn over it that is the tiles, the props and the art; with static tokens it also holds them. */
   function roomKeyFor(p: PlayState, manifest: RenderManifest, tileScale: number, isAnimated: boolean): string {
-    const scene = `${tileScale}|${p.template}|${p.floorId}|${p.doorOpen ? 1 : 0}|${p.searched ? 1 : 0}|${p.worldRev}`;
+    const scene = `${tileScale}|${p.template}|${p.floorId}|${p.doorOpen ? 1 : 0}|${p.searched ? 1 : 0}|${p.worldRev}|${p.boardEpoch}`;
     // Animated, the room is only tiles and props, which do not depend on the character style: switching it must not repaint the room.
     if (isAnimated) return `a|${art.ground}|${spriteSizeOf(manifest)}|${artDecoded ? 1 : 0}|${scene}`;
     return `${manifestId(manifest)}|${scene}|${p.archetypeId}|${p.heroAt.x},${p.heroAt.y}|${p.creatures.map((c) => `${c.id}:${c.at.x},${c.at.y},${c.hp},${creatureInSight(p, c) ? 1 : 0}`).join(";") || "-"}|${equipmentSig(p.hero)}`;
@@ -3673,7 +4496,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   el.innerHTML = "";
   // A scene that starts here (first visit, or a hero the bench no longer offers) gets its checkpoint below; coming back to one in progress does not.
   const startedNew = !play || !PLAYABLE_HEROES.includes(play.archetypeId);
-  if (startedNew) play = newPlay("fantasy", PLAYABLE_HEROES[0]!, ROOM_FLOOR.fantasy);
+  if (startedNew) {
+    const fromAddress = sandboxFromAddress();
+    if (fromAddress) roomChoice = fromAddress;
+    play = newPlay("fantasy", PLAYABLE_HEROES[0]!, ROOM_FLOOR.fantasy);
+    atStart = fromAddress === null;
+  }
   const st = (): PlayState => play!;
 
   // Per SOURCE pixel, integers only; renderCell's own unit is canvas px PER
@@ -3713,6 +4541,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     controls.appendChild(f);
   };
   const heroSelect = buildHeroSelect(st().archetypeId, (id) => {
+    // In an adventure a different class starts the adventure again as that class (the adventure's own kit for it); in a test room it is a new hero there.
+    const running = adventureOf(st());
+    if (running) {
+      const entry = benchAdventures().find((e) => e.adventure === running);
+      if (entry) return beginAdventure(entry, adventureHero(running, id));
+    }
+    closeScreens();
+    atStart = false;
     const old = play;
     play = newPlay("fantasy", id, ROOM_FLOOR.fantasy, undefined, undefined, st().room);
     carryJournals(old, play, "a different hero was picked");
@@ -3729,6 +4565,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   }
   roomSelect.value = st().room;
   roomSelect.onchange = () => {
+    closeScreens();
+    atStart = false;
     roomChoice = roomSelect.value as RoomChoice;
     const old = play!;
     play = newPlay(old.template, old.archetypeId, old.floorId, old.hero, old.start, roomChoice);
@@ -3771,6 +4609,25 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   resetBtn.type = "button";
   resetBtn.onclick = () => resetScene();
   controls.appendChild(resetBtn);
+  // Back to the start screen. Leaving a game in progress asks first (a second press within three seconds): the saves stay, but the place you stood in is lost.
+  const startBtn = el_("button", "bn-btn lt-start", "Start screen");
+  startBtn.type = "button";
+  let startArmed: ReturnType<typeof setTimeout> | null = null;
+  startBtn.onclick = () => {
+    if (!atStart && st().adventureId && startArmed === null) {
+      startBtn.textContent = "Leave this adventure?";
+      startArmed = setTimeout(() => {
+        startArmed = null;
+        startBtn.textContent = "Start screen";
+      }, 3000);
+      return;
+    }
+    if (startArmed !== null) clearTimeout(startArmed);
+    startArmed = null;
+    startBtn.textContent = "Start screen";
+    showStart();
+  };
+  controls.appendChild(startBtn);
   // A chosen option must not keep the arrow keys: they walk the hero.
   el.addEventListener("change", (e) => {
     const t = e.target as HTMLElement | null;
@@ -3781,7 +4638,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     el_(
       "p",
       "lt-note lt-howto",
-      "Click a square to walk there, a creature to attack that creature, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press any square for what you can do there (Look closer is the first line; a kick, a shove, hiding, a pickpocket and more show up for the characters that can); type what you do in the box. Hover anything in the pack, or any number on the sheet, to read exactly what it is; click an item for what you can do with it (equip, use, drop, destroy), or why you cannot. A fallen creature stays where it fell: click it, or stand next to it and press E, to search it. Things you drop lie in a sack on your square. Sheet (C) opens your character sheet and makes your own hero; the Hero setting here quick-picks a ready-made one. The DM's answers come with two to four suggested next moves (keys 1 to 4, or press them); Attack, Use, Potion and End turn show only when they would do something. Rest (R) makes camp once a day and saves; the Saves tab goes back to any save, and a checkpoint is made when a scene starts. The Log tab (L) keeps every roll, find and line of narration; the board shows only the story, and it fades. Keys: arrows or WASD step, F attacks the nearest creature in reach, E use, Q potion, R rest, 1 to 4 suggested moves, I pack, L log, C sheet, T end turn, Space skips a creature's turn, Esc stops the DM. The Room setting chooses who is in the east room: one goblin, or a goblin and a skeleton (each its own hit points, dice and turn).",
+      "Click a square to walk there, a creature to attack that creature, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press any square for what you can do there (Look closer is the first line; a kick, a shove, hiding, a pickpocket and more show up for the characters that can); type what you do in the box. Hover anything in the pack, or any number on the sheet, to read exactly what it is; click an item for what you can do with it (equip, use, drop, destroy), or why you cannot. A fallen creature stays where it fell: click it, or stand next to it and press E, to search it. Things you drop lie in a sack on your square. Sheet (C) opens your character sheet and makes your own hero; the Hero setting here quick-picks a ready-made one. The DM's answers come with two to four suggested next moves (keys 1 to 4, or press them); Attack, Use, Potion and End turn show only when they would do something. Rest (R) makes camp once a day and saves; the Saves tab goes back to any save, and a checkpoint is made when a scene starts. The Log tab (L) keeps every roll, find and line of narration; the board shows only the story, and it fades. Keys: arrows or WASD step, F attacks the nearest creature in reach, E use, Q potion, R rest, 1 to 4 suggested moves, I pack, L log, C sheet, T end turn, Space skips a creature's turn, Esc stops the DM. The Room setting chooses who is in the east room of a test room: one goblin, or a goblin and a skeleton (each its own hit points, dice and turn). The Play tab opens on the start screen: pick one of the owner's adventures (a hand-written story the game follows, place by place, and the DM may not change), or a test room. In an adventure, walk onto a doorway or stairs to move to the next place, press E (or click) next to something to search or look at it, and click a person to talk to them; the Journal tab (J) keeps the objectives.",
     ),
   );
 
@@ -3867,6 +4724,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   let sheetView: SheetView | null = null;
   let creationView: CreationView | null = null;
+  /** The adventure screens over the board (the start screen, the hero screen, an ending): each pauses the game like the sheet does. */
+  let startScr: StartScreen | null = null;
+  let heroScr: StartHero | null = null;
+  let endScr: EndingCard | null = null;
+  const screenOpen = (): boolean => startScr !== null || heroScr !== null || endScr !== null;
   /** The debug export's outcome, in plain words, under its button in the Saves tab; and whether the clipboard fallback button shows. */
   let exportStatus: string | undefined;
   let exportCopyShown = false;
@@ -3874,7 +4736,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   let lootWin: LootWindow | null = null;
   let lootTarget: { kind: "body"; id: string } | { kind: "pile"; at: XY } | null = null;
   let sheetSig = "";
-  const overlayOpen = (): boolean => sheetView !== null || creationView !== null;
+  const overlayOpen = (): boolean => sheetView !== null || creationView !== null || screenOpen();
   const sheetExtras = (p: PlayState): SheetExtras => ({ potions: p.potions, notes: p.itemNotes, portrait: portraitCanvas(p.archetypeId) });
   const sheetSigFor = (p: PlayState): string => JSON.stringify([p.hero, p.potions, p.itemNotes, art.source, art.chars, art.size]);
 
@@ -3990,8 +4852,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   }
 
   /** The new hero: the sheet the creator built, in a fresh scene with the DM's memory and recent talk cleared. */
-  function beginCharacter(made: CharacterSheet): void {
+  function beginCharacter(made: CharacterSheet, input?: Parameters<typeof createCharacter>[0]): void {
     const p = st();
+    // In an adventure a made hero starts the adventure again, with the kit the adventure gives that class.
+    const running = adventureOf(p);
+    const entry = running ? benchAdventures().find((e) => e.adventure === running) : undefined;
+    if (running && entry) return beginAdventure(entry, input ? adventureHeroFromCreator(running, made, input) : made);
     const id = made.archetypeId as ArchetypeId;
     const sheet = made.appearanceAssetId === bodySpriteId(id) ? made : { ...made, appearanceAssetId: bodySpriteId(id) };
     play = newPlay(p.template, id, ROOM_FLOOR[p.template], undefined, sheet, p.room);
@@ -4003,14 +4869,15 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   function openCreationView(): void {
     if (overlayOpen()) return;
     const p = st();
+    const running = adventureOf(p);
     creationView = openCreation(
       stageWrap,
       { style: () => textStyle, rollDice: rollScoreDice, portrait: portraitCanvas },
       {
-        start: { archetypeId: p.archetypeId },
-        onBegin: (sheet) => {
+        start: running ? creatorStartFor(running, p.archetypeId) : { archetypeId: p.archetypeId },
+        onBegin: (sheet, input) => {
           creationView = null;
-          beginCharacter(sheet);
+          beginCharacter(sheet, input);
         },
         onCancel: () => {
           creationView = null;
@@ -4019,6 +4886,459 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       },
     );
     viewsChanged();
+  }
+
+  // ---- the adventure: the start screen, its heroes, moving between places, the story's cards ----------------------
+  //
+  // The Play tab opens on the start screen (overlay.ts startScreen): the owner's adventures, the test rooms, and the AI writer. An adventure
+  // goes to the hero screen (a quick start for a class, or the character creator with the adventure's kit), then the game begins at the
+  // adventure's start. The story is progress.ts (the adventure is gospel): the game tells it what happened, it says what that did.
+
+  function closeScreens(): void {
+    const screens = [startScr, heroScr, endScr];
+    startScr = null;
+    heroScr = null;
+    endScr = null;
+    for (const s of screens) s?.close();
+  }
+
+  const ROOM_SUMMARY: Record<RoomChoice, string> = {
+    one: "A two-room test scene: a door, a chest and one goblin asleep in the east room. No story, for trying the rules.",
+    two: "The same two rooms with a goblin and a skeleton, each with its own hit points, dice and turn. No story.",
+  };
+
+  function showStart(): void {
+    closeViews();
+    closeScreens();
+    atStart = true;
+    startScr = overlay.startScreen({
+      adventures: startCardsFor(benchAdventures()),
+      sandboxes: ROOM_CHOICES.map((r) => ({ id: `room:${r}`, title: roomLabel(st().template, r), summary: ROOM_SUMMARY[r] })),
+      aiNote: AI_ADVENTURE_COST_NOTE,
+      onPick: (id) => pickStart(id),
+      onWrite: (premise) => void writeNewAdventure(premise),
+    });
+    viewsChanged();
+  }
+
+  function pickStart(id: string): void {
+    if (id.startsWith("room:")) {
+      const room = id.slice(5) as RoomChoice;
+      if (ROOM_CHOICES.includes(room)) startSandbox(room);
+      return;
+    }
+    const entry = benchAdventures().find((e) => e.id === id && e.adventure);
+    if (entry) showHero(entry);
+  }
+
+  /**
+   * The AI writer. Called only by the start screen's "Yes, write it" (the confirm is the screen's own), once per press. It asks the model through
+   * the sample capability (the complex tier: a whole adventure is long and costs a lot; no cache, a repeat must be fresh), with the engine's
+   * writeAdventure checking every answer and sending the problems back for a repair. Cancel (or leaving the tab) stops the call in flight. A
+   * finished adventure joins the start screen as "AI written" and is kept in this browser; a failure says why, in plain words, and keeps nothing.
+   */
+  async function writeNewAdventure(premise: string): Promise<void> {
+    const screen = startScr;
+    if (!screen) return;
+    const sample = benchHook() ?? sampleFn;
+    if (!sample) {
+      screen.setWriting(null);
+      if (sampleState === "pending") overlay.toast("The DM is still waking. Try again in a moment.");
+      else screen.setProblems(["The AI writer lives on claude.ai: open the published bench to use it. Nothing was sent."]);
+      return;
+    }
+    const ctl = new AbortController();
+    writerCtl?.abort();
+    writerCtl = ctl;
+    const cancel = (): void => ctl.abort();
+    const complete = (input: CompleteInput): Promise<string> =>
+      new Promise<string>((resolve, reject) => {
+        if (ctl.signal.aborted) return reject(new Error("The writer was stopped."));
+        const onAbort = (): void => reject(new Error("The writer was stopped."));
+        ctl.signal.addEventListener("abort", onAbort, { once: true });
+        const done = (): void => ctl.signal.removeEventListener("abort", onAbort);
+        try {
+          sample(input, { modelTier: "complex", cache: false, signal: ctl.signal }).then(
+            (r) => {
+              done();
+              resolve(typeof r?.text === "string" ? r.text : "");
+            },
+            (e: unknown) => {
+              done();
+              reject(new Error(writerFailureWords(e)));
+            },
+          );
+        } catch (e) {
+          done();
+          reject(new Error(writerFailureWords(e)));
+        }
+      });
+    screen.setWriting({ stage: "Starting the writer", canCancel: true }, cancel);
+    let result: Awaited<ReturnType<typeof writeAiAdventure>>;
+    try {
+      result = await writeAiAdventure(complete, { premise, length: "short" }, writerContext(), {
+        onProgress: (stage) => {
+          if (alive && startScr && !ctl.signal.aborted) startScr.setWriting({ stage, canCancel: true }, cancel);
+        },
+      });
+    } catch (e) {
+      result = { ok: false, errors: [`The writer could not finish: ${writerFailureWords(e)}`] };
+    }
+    if (writerCtl === ctl) writerCtl = null;
+    if (!alive) return;
+    const now = startScr;
+    if (ctl.signal.aborted) {
+      now?.setWriting(null);
+      overlay.toast("Stopped. Nothing was kept.");
+      return;
+    }
+    if (!result.ok) {
+      now?.setWriting(null);
+      now?.setProblems([...result.errors, "Nothing was kept. You can try again, or change the idea."]);
+      return;
+    }
+    const entry = registerAiAdventure(result.markdown);
+    if (!entry.adventure) {
+      now?.setWriting(null);
+      now?.setProblems([...entry.problems, "Nothing was kept. You can try again, or change the idea."]);
+      return;
+    }
+    // The new card is on the list (the AI written pill) and stays there on later visits; the start screen is built again to show it.
+    if (now) showStart();
+    overlay.toast(`"${entry.title}" is ready, written by the AI. It is on the list and kept in this browser.`);
+  }
+
+  /** What the AI writer needs to know: the pictures and creatures the game has, and the format by example (adventures/TEMPLATE.md). */
+  function writerContext(): AdventureWriterContext {
+    const template = ADVENTURE_FILES.find((f) => f.file === TEMPLATE_FILE)?.text ?? "";
+    return { assets: adventureAssets(), creatures: BESTIARY.map((b) => b.id), template };
+  }
+
+  /** A sample failure in plain words (raw provider text is never shown). */
+  function writerFailureWords(e: unknown): string {
+    const code = isRec(e) && typeof e.code === "string" ? e.code : "";
+    if (code === "not_granted") return "Claude has not been allowed to write for you here.";
+    if (code === "rate_limited") return "Claude needs a moment. Try again shortly.";
+    if (code === "cancelled") return "The writer was stopped.";
+    return "Claude could not answer.";
+  }
+
+  /** After an adventure is picked: a quick start for each class that can be played (the adventure's own hook and kit for it), or the creator. */
+  function showHero(entry: BenchAdventure): void {
+    const a = entry.adventure;
+    if (!a) return;
+    closeViews();
+    closeScreens();
+    heroScr = overlay.startHero({
+      adventureTitle: a.title,
+      hooks: PLAYABLE_HEROES.map((id): StartHeroHook => {
+        const chassis = getArchetype(id).chassis;
+        return { chassis, label: ARCHETYPE_LABEL[id], hook: heroHook(a, chassis) ?? a.summary, kit: kitWords(startingKitFor(a, chassis)) };
+      }),
+      onCreate: () => openAdventureCreation(entry),
+      onQuick: (chassis) => {
+        const id = PLAYABLE_HEROES.find((h) => getArchetype(h).chassis === chassis);
+        if (id) beginAdventure(entry, adventureHero(a, id));
+      },
+      onBack: () => showStart(),
+    });
+    viewsChanged();
+  }
+
+  /** The character creator, started from the adventure's kit for the first class (it is built again with the kit of the class that was picked). */
+  function openAdventureCreation(entry: BenchAdventure): void {
+    const a = entry.adventure;
+    if (!a) return;
+    closeScreens();
+    creationView = openCreation(
+      stageWrap,
+      { style: () => textStyle, rollDice: rollScoreDice, portrait: portraitCanvas },
+      {
+        start: creatorStartFor(a, PLAYABLE_HEROES[0]!),
+        onBegin: (sheet, input) => {
+          creationView = null;
+          beginAdventure(entry, adventureHeroFromCreator(a, sheet, input));
+        },
+        onCancel: () => {
+          creationView = null;
+          viewsChanged();
+          showHero(entry);
+        },
+      },
+    );
+    viewsChanged();
+  }
+
+  /** A test room: nothing but the rules. The hero stays the one picked in the bench's Hero setting. */
+  function startSandbox(room: RoomChoice): void {
+    closeViews();
+    closeScreens();
+    roomChoice = room;
+    const old = play!;
+    play = newPlay("fantasy", old.archetypeId, ROOM_FLOOR.fantasy, undefined, undefined, room);
+    carryJournals(old, play, "a test room was started");
+    atStart = false;
+    newScene();
+  }
+
+  // The place's card and the scene's card come one after the other (each is up for a reading time), never over each other.
+  let locationUntil = 0;
+  let sceneTimer: ReturnType<typeof setTimeout> | null = null;
+  function dropPendingCards(): void {
+    if (sceneTimer !== null) clearTimeout(sceneTimer);
+    sceneTimer = null;
+    locationUntil = 0;
+  }
+  function showLocationCard(card: { name: string; readAloud: string }): void {
+    overlay.locationCard(card);
+    // The scene's card follows once the place's has had a reading (at most seven seconds); the first stays up its own time, so both are on the board for a while.
+    locationUntil = performance.now() + Math.min(7000, locationHoldMs(card.readAloud.length));
+  }
+  function showSceneCard(card: { title: string; opening?: string }): void {
+    if (sceneTimer !== null) clearTimeout(sceneTimer);
+    sceneTimer = null;
+    const wait = locationUntil - performance.now();
+    if (wait <= 0) return overlay.sceneCard(card);
+    sceneTimer = setTimeout(() => {
+      sceneTimer = null;
+      if (alive) overlay.sceneCard(card);
+    }, wait + 200);
+  }
+
+  /** A new game of an adventure with this hero: a checkpoint, the place's name and read-aloud, the first scene's opening, and a fight at once when something awake and hostile is there. */
+  function beginAdventure(entry: BenchAdventure, sheet: CharacterSheet): void {
+    const a = entry.adventure;
+    if (!a) return;
+    closeViews();
+    closeScreens();
+    const old = play;
+    play = newAdventurePlay(a, sheet);
+    atStart = false;
+    carryJournals(old, play, `began ${a.title}`);
+    const p = st();
+    const hook = heroHook(a, sheet.chassis);
+    if (hook) {
+      p.storyRecent = [hook];
+      p.log.push({ text: hook, tone: "plain" });
+    }
+    newScene();
+    const loc = currentLocation(p);
+    const scene = p.progress ? sceneOf(a, p.progress.sceneId) : undefined;
+    if (loc) showLocationCard({ name: loc.name, readAloud: loc.readAloud });
+    if (scene) showSceneCard({ title: scene.title, ...(scene.opening ? { opening: scene.opening } : {}) });
+    flushAdventure();
+    void arrivalFight();
+  }
+
+  /** Anything awake and hostile where the hero has just arrived starts the fight at once; a sleeper that notices them joins it. */
+  async function arrivalFight(): Promise<void> {
+    const p = st();
+    if (!p.round && awakeHostiles(p).length > 0) await beginFight(false, []);
+    await afterHeroAction();
+  }
+
+  /** What the story did since it was last shown: beats on the strip, objectives in the notice and the Log, a new scene's card, an ending. */
+  function flushAdventure(): void {
+    const p = st();
+    const a = adventureOf(p);
+    if (!a) return;
+    syncItems(p);
+    // What the story tells the player now, in one box (a find's secret first, then each beat that fired, in order).
+    const told: string[] = [...pendingTell];
+    pendingTell.length = 0;
+    while (p.adventurePending.length > 0) {
+      const r = p.adventurePending.shift()!;
+      for (const b of r.fired) if (b.narrate) told.push(b.narrate);
+      for (const o of r.completed) {
+        p.log.push({ text: `Objective done: ${o.text}`, tone: "good" });
+        hud.notice(`Done: ${o.text}`, "good");
+      }
+      if (r.sceneChanged) {
+        if (r.ended) showEnding(a, r.sceneChanged.to, r.ended);
+        else {
+          const scene = sceneOf(a, r.sceneChanged.to);
+          showSceneCard({ title: scene?.title ?? "", ...(r.sceneChanged.opening ? { opening: r.sceneChanged.opening } : {}) });
+        }
+      }
+    }
+    if (told.length > 0) {
+      overlay.narrate({ text: told.join(" "), full: true }).done();
+      for (const line of told) p.log.push({ text: line, tone: "dm" });
+    }
+    flushLog();
+  }
+
+  /** The adventure's own words waiting to be told with the next flush (the secret of something just searched). */
+  const pendingTell: string[] = [];
+
+  /** The ending's text over the board: Continue keeps playing in place (the story is over, the world is still there), Back to the start screen leaves. */
+  function showEnding(a: Adventure, sceneId: string, ending: NonNullable<AdventureStepResult["ended"]>): void {
+    endScr?.close();
+    endScr = overlay.endingCard({
+      title: sceneOf(a, sceneId)?.title ?? a.title,
+      text: ending.text,
+      outcome: ending.outcome,
+      onContinue: () => {
+        endScr?.close();
+        endScr = null;
+        renderHud();
+      },
+      onMenu: () => {
+        closeScreens();
+        showStart();
+      },
+    });
+    renderHud();
+  }
+
+  /** Go through a way out: only on a quiet board and when the story lets it be taken (otherwise its own words say why). The place is built, the hero arrives, a checkpoint is saved and the place's card is shown. */
+  async function useExit(here: ExitHere): Promise<void> {
+    const p = st();
+    const a = adventureOf(p);
+    if (!a || !p.progress) return;
+    if (heroDown(p)) return refuse(DOWN_NOTE);
+    if (p.round) return refuse("You cannot leave in the middle of a fight.");
+    if (!exitIsOpen(p, here.exit)) return refuse(exitLockedWords(here.exit));
+    const dest = exitDestination(a, p.progress.locationId, here.exit.id);
+    const target = dest ? locationOf(a, dest.locationId) : undefined;
+    if (!dest || !target) return refuse("That way leads nowhere the adventure has a place for.");
+    busy = true;
+    walkQueue.length = 0;
+    onArrive = null;
+    steppedOnExit = null;
+    clearOptions();
+    closeLoot();
+    p.log.push({ text: `You go through: ${here.exit.label}.`, tone: "plain" });
+    if (!enterLocation(p, dest.locationId, dest.at)) {
+      busy = false;
+      return refuse("The story has no such place.");
+    }
+    overlay.clear();
+    dropPendingCards();
+    hover = null;
+    previewed = null;
+    marksKey = "";
+    stage.snapCamera();
+    stage.invalidate();
+    addSavePoint(p, "checkpoint", `arrived: ${target.name}`);
+    showLocationCard({ name: target.name, readAloud: target.readAloud });
+    busy = false;
+    skipping = false;
+    flushAdventure();
+    refreshAll();
+    await arrivalFight();
+  }
+
+  /** The adventure's own words for a feature of the place: its name and what anyone sees (a found secret is said once, when it is found). */
+  function showFeature(f: AdventureFeature): void {
+    const p = st();
+    const searched = featureSearchable(f) && featureIsFound(p, f);
+    story({ speaker: f.name, text: `${f.description}${searched ? " You have already searched it." : ""}`, tone: "plain" });
+    refreshAll();
+  }
+
+  /** What Use, a click or the menu's Search does to a feature beside the hero: look at it, or search it (the check is thrown in the tray). */
+  async function featureFlow(at: XY): Promise<void> {
+    const p = st();
+    const f = featureAtSquare(p, at);
+    if (!f) return;
+    if (tileDistance(p.heroAt, at) > 1) return refuse("Too far away. Step next to it.");
+    if (!featureSearchable(f) || featureIsFound(p, f)) return showFeature(f);
+    await searchFeature(f);
+  }
+
+  /** Hand a feature's find to the hero: an adventure item as the adventure describes it (quest flag and all), anything else as a plain thing in the pack. */
+  function handOver(p: PlayState, f: AdventureFeature, give: string): void {
+    const a = adventureOf(p)!;
+    const item = itemOf(a, give);
+    if (item) return giveAdventureItem(p, item);
+    if (p.hero.inventory.some((n) => foldItem(withoutCount(n)) === foldItem(give))) return;
+    p.hero = { ...p.hero, inventory: [...p.hero.inventory, give] };
+    const money = /coin|copper|silver|gold|pieces|purse/i.test(give);
+    p.itemNotes[give] = `Found in ${f.name.toLowerCase()}.${money ? " The game does not track money yet, so it is only something you carry." : ""}`;
+    p.log.push({ text: `You now carry ${give}.`, tone: "good", notice: `+ ${give}` });
+  }
+
+  /**
+   * Search a feature. With a DC the engine rolls the better of Perception and Investigation in the tray (the hero's real modifier against the
+   * adventure's number); without one the secret is simply found. A failure says so and can be tried again. A find is said once on the strip,
+   * the items it gives go in the pack, and the story hears of them (a quest item can finish an objective or fire a beat).
+   */
+  async function searchFeature(f: AdventureFeature): Promise<void> {
+    const p = st();
+    if (heroDown(p)) return refuse(DOWN_NOTE);
+    if (p.round) return refuse("Not in the middle of a fight. Finish it first.");
+    clearOptions();
+    busy = true;
+    let found = true;
+    if (f.searchDc !== undefined) {
+      const dc = f.searchDc;
+      const skill = skillModifierFor(p.hero, "Investigation") > skillModifierFor(p.hero, "Perception") ? "Investigation" : "Perception";
+      const out = skillCheck({ sheet: p.hero, skill, dc, rng: benchRng });
+      await rollStep(`Tap to roll ${skill}`, out.dice, `${skill} ${out.roll} ${signedNum(out.modifier)} = ${out.total} vs DC ${dc}`, out.success ? "YOU FIND SOMETHING" : "NOTHING YET", out.success ? "good" : "bad", { modifier: out.modifier, total: out.total, target: dc });
+      if (!alive || st() !== p) return;
+      p.log.push({ text: `Searching ${f.name.toLowerCase()}: ${out.line}`, tone: out.success ? "good" : "bad" });
+      found = out.success;
+    }
+    if (!found) {
+      story({ text: `You search ${f.name.toLowerCase()} and find nothing yet. You can search it again.`, tone: "plain" });
+      busy = false;
+      flushLog();
+      refreshAll();
+      return;
+    }
+    p.featuresFound.push(featureKey(p, f));
+    pendingTell.push(f.secret ?? `You find something in ${f.name.toLowerCase()}.`);
+    for (const g of f.gives ?? []) handOver(p, f, g);
+    busy = false;
+    flushLog();
+    flushAdventure();
+    refreshAll();
+    await afterHeroAction();
+  }
+
+  /** The text the ask box opens with. Returns false (and says why) when the box is off: no DM here, or the sheet is open. */
+  function prefillAsk(text: string): boolean {
+    const input = trayCol.querySelector<HTMLInputElement>("input.lto-hud-input");
+    if (!input) return false;
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    if (input.disabled) {
+      refuse(dmStatus ?? NO_DM);
+      return false;
+    }
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(text.length, text.length);
+    return true;
+  }
+
+  /**
+   * A person of the adventure: the ask box opens on "I talk to <name>: ". What is said goes to the DM as a freehand ask for THAT person (their id
+   * rides in the ask), so the DM answers in their voice from their entry and says it set talkedTo; the engine then records the talk event.
+   * With no DM to ask (off claude.ai) the person says only what the adventure says they know, and the talk is recorded the same way.
+   */
+  function talkTo(c: Creature): void {
+    const p = st();
+    const a = adventureOf(p);
+    const npc = a ? npcOf(a, c.adv?.npc) : undefined;
+    const name = npc?.name ?? creatureName(p, c);
+    if (npc && sampleState === "none" && !benchHook()) return talkWithoutDm(p, npc);
+    if (prefillAsk(`I talk to ${name}: `) && npc) talkTarget = npc.id;
+  }
+
+  /**
+   * No DM here: the person tells the party what the adventure lists under "knows", word for word and said to be that (not a voice the DM gave
+   * them), and the talk is recorded, so the adventure can be finished without the DM. What they keep secret stays secret.
+   */
+  function talkWithoutDm(p: PlayState, npc: AdventureNpc): void {
+    const told = npc.knows.length > 0 ? npc.knows.join(" ") : "They have nothing to tell you.";
+    const words = `${npc.name}, ${npc.role}. There is no DM to give them a voice here, so this is only what the adventure says they will tell you: ${told}`;
+    overlay.narrate({ text: words, full: true }).done();
+    p.log.push({ text: words, tone: "plain" });
+    const r = advApply(p, { type: "talk", npc: npc.id });
+    if (r?.refused) p.log.push({ text: sentence(`Not recorded: ${r.refused}`), tone: "plain" });
+    flushAdventure();
+    refreshAll();
   }
 
   // ---- gear ----------------------------------------------------------------
@@ -4077,6 +5397,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     | { kind: "loot"; path: XY[]; costFt: number; tile: XY }
     | { kind: "use"; path: XY[]; costFt: number; tile: XY }
     | { kind: "look"; path: XY[]; costFt: number; tile: XY }
+    /** An adventure: walk up to a person and open the ask box on them. */
+    | { kind: "talk"; path: XY[]; costFt: number; tile: XY }
+    /** An adventure: walk up to a feature of the place and search it (or look at it). */
+    | { kind: "feature"; path: XY[]; costFt: number; tile: XY }
+    /** An adventure: the way out the hero stands on. */
+    | { kind: "exit"; path: XY[]; costFt: number; tile: XY }
     | { kind: "none"; tile: XY; reason: string };
 
   function planFor(tile: XY): Plan {
@@ -4095,13 +5421,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (!path) return { kind: "none", tile, reason: p.round ? "You cannot reach it this turn." : "You cannot reach it from here." };
       return { kind: "attack", path, costFt: cost(path), tile };
     }
-    // A creature that is not hostile (a villager, a shopkeeper): a click walks up to it and looks closer (the DM answers).
+    // A creature that is not hostile (a villager, a shopkeeper): a click walks up to it and looks closer (the DM answers). In an adventure it is a person to talk to.
     if (there && creatureInSight(p, there)) {
-      if (tileDistance(p.heroAt, tile) <= 1) return { kind: "look", path: [], costFt: 0, tile };
+      const kind = p.adventureId ? "talk" : "look";
+      if (tileDistance(p.heroAt, tile) <= 1) return { kind, path: [], costFt: 0, tile };
       const spot = approachTile(field, tile, 1);
       const path = spot ? pathTo(field, spot) : null;
       if (!path) return { kind: "none", tile, reason: p.round ? "Too far to reach this turn." : "You cannot get next to it from here." };
-      return { kind: "look", path, costFt: cost(path), tile };
+      return { kind, path, costFt: cost(path), tile };
     }
     // A body that has not been searched, or things lying on the ground: a click walks up and opens what is there.
     if (bodyAt(p, tile) || pileAt(p, tile)) {
@@ -4122,8 +5449,25 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (!path) return { kind: "none", tile, reason: p.round ? "Too far to reach this turn." : blockedWords(p, tile) };
       return { kind: "look", path, costFt: cost(path), tile };
     }
-    const isDoor = same(tile, DOOR_AT);
-    const isChest = same(tile, CONTAINER_AT);
+    // An adventure's place: a feature to search (until its secret is found) or look at, and the exits.
+    if (p.adventureId) {
+      const feature = featureAtSquare(p, tile);
+      const way = exitOn(p, tile);
+      // A feature is looked at or searched; on a square that is also a way out (the sacks over the tunnel mouth) it is searched until its secret is found, then walked onto.
+      if (feature && (!way || (featureSearchable(feature) && !featureIsFound(p, feature)))) {
+        if (tileDistance(p.heroAt, tile) <= 1) return { kind: "feature", path: [], costFt: 0, tile };
+        const spot = approachTile(field, tile, 1);
+        const path = spot ? pathTo(field, spot) : null;
+        if (!path) return { kind: "none", tile, reason: p.round ? "Too far to reach this turn." : "You cannot get next to it from here." };
+        return { kind: "feature", path, costFt: cost(path), tile };
+      }
+      if (way) {
+        if (!exitIsOpen(p, way.exit)) return { kind: "none", tile, reason: exitLockedWords(way.exit) };
+        if (same(tile, p.heroAt)) return { kind: "exit", path: [], costFt: 0, tile };
+      }
+    }
+    const isDoor = same(tile, doorAt(p));
+    const isChest = same(tile, containerAt(p));
     if (isChest || (isDoor && !p.doorOpen)) {
       const spot = approachTile(field, tile, 1);
       const path = spot ? pathTo(field, spot) : null;
@@ -4148,7 +5492,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const ts = tileScale();
     const plan = !busy && hover ? planFor(hover) : null;
     const lootSig = `${p.piles.map((q) => `${q.at.x},${q.at.y},${q.items.length}`).join(";")}|${p.bodies.map((b) => `${b.at.x},${b.at.y},${b.looted ? 1 : 0}`).join(";")}`;
-    const key = [canvas.width, canvas.height, ts, busy, walkQueue.length, p.heroAt.x, p.heroAt.y, p.creatures.map((c) => `${c.at.x},${c.at.y},${creatureInSight(p, c) ? 1 : 0},${c.prone ? 1 : 0},${c.hostile ? 1 : 0}`).join(";") || "-", p.exploredRev, p.worldRev, p.doorOpen, p.doorLocked, p.searched, p.round ? `${p.round.activeIndex},${p.round.roundNumber},${activeCombatant(p.round)?.economy.movementRemaining},${activeCombatant(p.round)?.economy.action}` : "x", hover ? `${hover.x},${hover.y}` : "-", heroDown(p), lootSig].join("|");
+    const key = [canvas.width, canvas.height, ts, busy, walkQueue.length, p.heroAt.x, p.heroAt.y, p.creatures.map((c) => `${c.at.x},${c.at.y},${creatureInSight(p, c) ? 1 : 0},${c.prone ? 1 : 0},${c.hostile ? 1 : 0}`).join(";") || "-", p.exploredRev, p.worldRev, p.boardEpoch, p.doorOpen, p.doorLocked, p.searched, p.round ? `${p.round.activeIndex},${p.round.roundNumber},${activeCombatant(p.round)?.economy.movementRemaining},${activeCombatant(p.round)?.economy.action}` : "x", hover ? `${hover.x},${hover.y}` : "-", heroDown(p), lootSig].join("|");
     if (key === marksKey) return;
     marksKey = key;
     if (marks.width !== canvas.width || marks.height !== canvas.height) {
@@ -4190,7 +5534,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       return;
     }
     // The path as dots, its end as a ring, and its length in feet.
-    const colour = plan.kind === "attack" ? "rgba(255, 120, 90, 0.95)" : plan.kind === "use" || plan.kind === "loot" ? "rgba(255, 205, 90, 0.95)" : plan.kind === "look" ? "rgba(170, 215, 255, 0.95)" : "rgba(255, 245, 210, 0.95)";
+    const colour = plan.kind === "attack" ? "rgba(255, 120, 90, 0.95)" : plan.kind === "use" || plan.kind === "loot" || plan.kind === "feature" || plan.kind === "exit" ? "rgba(255, 205, 90, 0.95)" : plan.kind === "look" || plan.kind === "talk" ? "rgba(170, 215, 255, 0.95)" : "rgba(255, 245, 210, 0.95)";
     ctx.fillStyle = colour;
     for (const t of plan.path) {
       ctx.beginPath();
@@ -4200,7 +5544,16 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     ctx.strokeStyle = colour;
     ctx.lineWidth = Math.max(2, ts / 14);
     ctx.strokeRect(plan.tile.x * ts + 3, plan.tile.y * ts + 3, ts - 6, ts - 6);
-    const words = plan.kind === "attack" ? (plan.costFt ? `${plan.costFt} ft, attack` : "Attack") : plan.kind === "loot" ? (plan.costFt ? `${plan.costFt} ft, search` : "Search") : plan.kind === "use" ? (plan.costFt ? `${plan.costFt} ft, use` : "Use") : plan.kind === "look" ? (plan.costFt ? `${plan.costFt} ft, look` : "Look closer") : `${plan.costFt} ft`;
+    const featureVerb = plan.kind === "feature" ? (() => { const f = featureAtSquare(p, plan.tile); return f && featureSearchable(f) && !featureIsFound(p, f) ? "search" : "look"; })() : "";
+    const words =
+      plan.kind === "attack" ? (plan.costFt ? `${plan.costFt} ft, attack` : "Attack")
+      : plan.kind === "loot" ? (plan.costFt ? `${plan.costFt} ft, search` : "Search")
+      : plan.kind === "use" ? (plan.costFt ? `${plan.costFt} ft, use` : "Use")
+      : plan.kind === "look" ? (plan.costFt ? `${plan.costFt} ft, look` : "Look closer")
+      : plan.kind === "talk" ? (plan.costFt ? `${plan.costFt} ft, talk` : "Talk")
+      : plan.kind === "feature" ? (plan.costFt ? `${plan.costFt} ft, ${featureVerb}` : featureVerb === "search" ? "Search" : "Look")
+      : plan.kind === "exit" ? "Go through"
+      : `${plan.costFt} ft`;
     const end = plan.path[plan.path.length - 1] ?? plan.tile;
     const fontPx = Math.max(11, Math.round(ts / 4));
     ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
@@ -4486,6 +5839,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (!p.round && noticers(p).length > 0 && !stealthy(p)) await beginFight();
     // A fight already on: a sleeper that notices the hero now joins it.
     else if (p.round && heroesTurn(p) && !heroDown(p) && noticers(p).length > 0) await beginFight();
+    // The walk ended on a way out (and nothing woke): the hero goes through it.
+    if (steppedOnExit && !st().round && same(steppedOnExit, st().heroAt)) {
+      const way = exitOn(st(), st().heroAt);
+      steppedOnExit = null;
+      if (way) await useExit(way);
+    }
   }
   let fightWasOn = false;
 
@@ -4526,15 +5885,20 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     await afterHeroAction();
   }
 
+  /** The way out the hero's last step landed on (adventure only): taken once the walk is over, never as a square passed through. */
+  let steppedOnExit: XY | null = null;
+
   /** One square of a walk (a click's path, or a key). False when it was refused, which ends the walk. */
   function takeStep(to: XY): boolean {
     const p = st();
     const from = { ...p.heroAt };
+    steppedOnExit = null;
     const r = heroStepTo(p, to);
     if (r.refused) {
       refuse(r.refused);
       return false;
     }
+    if (exitOn(p, to)) steppedOnExit = { ...to };
     stepAnim(p.heroActor, from, to);
     // Walking away leaves the DM's suggestions behind.
     clearOptions();
@@ -4553,6 +5917,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       const at = lootTarget.kind === "body" ? p.bodies.find((b) => b.id === (lootTarget as { id: string }).id)?.at : lootTarget.at;
       if (busy || p.round !== null || heroDown(p) || !at || tileDistance(p.heroAt, at) > 1) closeLoot();
     }
+    // The story hears about items that came or went, and plays out what it did (cards, the strip, the journal) once the table is free.
+    if (!busy && st().adventureId) flushAdventure();
     if (busy) return;
     const h = st().heroActor;
     if (stepBusy(h, now)) return;
@@ -4673,6 +6039,20 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
           ? async () => {
               examineAt(plan.tile);
             }
+          : plan.kind === "talk"
+            ? async () => {
+                const who = creatureAt(st(), plan.tile);
+                if (who) talkTo(who);
+              }
+          : plan.kind === "feature"
+            ? async () => {
+                await featureFlow(plan.tile);
+              }
+          : plan.kind === "exit"
+            ? async () => {
+                const way = exitOn(st(), plan.tile);
+                if (way) await useExit(way);
+              }
           : plan.kind === "use"
             ? async () => {
                 const r = heroInteractRules(st());
@@ -4834,6 +6214,15 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   async function useNearby(): Promise<void> {
     if (busy) return;
     const p = st();
+    // An adventure's place: go through the way out underfoot, search or look at what is beside the hero, else search a body or a pile.
+    if (p.adventureId) {
+      const u = advUseFor(p);
+      if (u?.kind === "exit") return useExit(u.exit);
+      if (u?.kind === "feature") return featureFlow(u.at);
+      const loot = lootNear(p);
+      if (loot) return openLootAt(loot.kind === "body" ? loot.body.at : loot.at);
+      return refuse("Nothing to use here. Stand on a way out, or next to something you can search.");
+    }
     // Something to search beside you, and no door or chest to use: E searches it.
     const loot = lootNear(p);
     if (loot && !doorOrChestUsable(p)) return openLootAt(loot.kind === "body" ? loot.body.at : loot.at);
@@ -4907,6 +6296,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (!save) return refuse("There is no save to load.");
     const restored = fromSnapshot(save.data);
     if (!restored) return refuse("That save could not be read.");
+    closeScreens();
+    atStart = false;
     // A number the sight and tile caches have never seen under this scene's name (they key on it).
     restored.worldRev = Math.max(st().worldRev, restored.worldRev) + 1;
     const words = saveLabel(save);
@@ -4925,6 +6316,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   /** Start the scene again from the hero as it began (gear and pack kept). */
   function resetScene(): void {
     const p = st();
+    // An adventure starts again from its beginning, as the hero began.
+    const running = adventureOf(p);
+    const entry = running ? benchAdventures().find((e) => e.adventure === running) : undefined;
+    if (running && entry) return beginAdventure(entry, p.start);
+    closeScreens();
+    atStart = false;
     play = newPlay(p.template, p.archetypeId, p.floorId, p.hero, p.start, p.room);
     carryJournals(p, play, "the scene was reset");
     newScene();
@@ -4957,6 +6354,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   let sampleFn: SampleFn | null = null;
   let dmStatus: string | undefined;
   let alive = true;
+  /** The person of the adventure the hero walked up to and chose to talk to (their adventure id): the next freehand ask is for them. */
+  let talkTarget: string | null = null;
+  /** The adventure brief the DM was last given (the debug export keeps it); null before the first ask of a game. */
+  let lastBrief: string | null = null;
+  /** The AI writer's call in progress, so Cancel (and leaving the tab) can stop it. */
+  let writerCtl: AbortController | null = null;
   /** The call in progress (a turn that is being asked for or played); null when the table is free. */
   let dmCtl: AbortController | null = null;
   /** True only while waiting on the model: the Cancel button shows. `busy` covers the whole turn. */
@@ -5001,7 +6404,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   /** What the HUD's freehand field shows right now. */
   function askStateFor(p: PlayState): NonNullable<Parameters<Hud["render"]>[0]["ask"]> {
     if (dmThinking) return { enabled: false, busy: true };
-    if (overlayOpen()) return { enabled: false, status: "Close the sheet to act." };
+    if (overlayOpen()) return { enabled: false, status: screenOpen() ? "Choose how to begin." : "Close the sheet to act." };
     if (sampleState === "pending") return { enabled: false, status: "Waking the DM..." };
     if (sampleState === "none") return { enabled: false, status: dmStatus ?? NO_DM };
     const myMove = !p.round || heroesTurn(p);
@@ -5032,13 +6435,47 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (busy || overlayOpen()) return;
     const p = st();
     if (sightLevel(p, at) === 0) return refuse(NOT_SEEN);
+    // A feature of an adventure's place is described by the adventure, in its own words; the DM is for what the adventure does not say.
+    const feature = p.adventureId ? featureAtSquare(p, at) : undefined;
+    if (feature) return showFeature(feature);
     void runDm({ kind: "examine", at: { ...at }, what: whatIsAt(p, at) });
   }
 
+  /** The adventure's people standing on this board: their ids, their adventure names and where they are. */
+  function npcsOnBoard(p: PlayState): { id: string; name: string; at: XY }[] {
+    return dmAdventureView(p)?.npcsHere ?? [];
+  }
+
+  /** Whether a name is spoken in some words: the whole name, or its first word when that is a name (Tobin Hale: "Tobin"), as a word of its own. */
+  function mentions(text: string, name: string): boolean {
+    const t = text.toLowerCase();
+    const parts = [name.toLowerCase(), name.toLowerCase().split(/\s+/)[0] ?? ""].filter((w) => w.length >= 3);
+    return parts.some((w) => new RegExp(`(^|[^a-z])${w.replace(/[^a-z0-9 ]/g, "")}([^a-z]|$)`).test(t));
+  }
+
+  /**
+   * An ask in an adventure, with the person it is for: the one the hero walked up to and chose to talk to (the ask box was opened on them), else
+   * the only person of the adventure whose name the words use. The DM then answers in that person's voice and says it set talkedTo. Words that
+   * speak to nobody go as they are.
+   */
+  function askWithPerson(p: PlayState, ask: DmAsk): DmAsk {
+    if (ask.kind !== "freehand" || ask.npc || !adventureOf(p)) return ask;
+    const here = npcsOnBoard(p);
+    const target = talkTarget ? here.find((n) => n.id === talkTarget) : undefined;
+    talkTarget = null;
+    const named = here.filter((n) => mentions(ask.text, n.name));
+    // The person the box was opened on, as long as the words are still for them ("I talk to ..." kept, or their name used) and do not name somebody
+    // else; failing that, the one person the words name. Words about something else (the box was cleared and the hero searches a barrel) are for nobody.
+    const stillTalking = /^\s*I (talk|speak) (to|with)\b/i.test(ask.text);
+    const who = target && ((named.length === 0 && stillTalking) || named.some((n) => n.id === target.id)) ? target : named.length === 1 ? named[0] : undefined;
+    return who ? { ...ask, npc: { id: who.id, name: who.name } } : ask;
+  }
+
   /** One DM turn: ask, then play the reply. The table is busy from the ask to the last effect. */
-  async function runDm(ask: DmAsk): Promise<void> {
+  async function runDm(first: DmAsk): Promise<void> {
     if (dmCtl || busy) return;
     const p = st();
+    const ask = askWithPerson(p, first);
     if (heroDown(p)) return refuse(DOWN_NOTE);
     if (p.round && !isPlayersTurn(p.round)) return refuse("Wait for your turn.");
     const sample = benchHook() ?? sampleFn;
@@ -5056,6 +6493,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const handle = overlay.narrate({ text: "" });
     renderHud();
     const view = dmViewFor(p);
+    lastBrief = view.adventure?.brief ?? null;
     // Every ask goes in the debug journal, whichever way it ends; what the engine applied and refused is added when the reply has played.
     const exchange: { current: DmExchange | null } = { current: null };
     const outcome = await askDm(sample, view, ask, validationContextFor(view), {
@@ -5102,6 +6540,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     // Whoever the DM woke (or struck, or shoved) starts the fight, or joins the one that is on.
     const wake = woken.flatMap((id) => creatureById(p, id) ?? []).filter((c) => needsFight(p, c));
     if (wake.length > 0) await beginFight(false, wake);
+    // The story may have brought something awake and hostile onto the board (a beat's spawn): the fight starts at once, as on arrival.
+    else if (adventureOf(p) && !p.round && awakeHostiles(p).length > 0) await beginFight(false, []);
     await afterHeroAction();
   }
 
@@ -5292,6 +6732,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         stage.invalidate();
         // An item gained flashes its notice now, not when the whole answer is over.
         flushLog();
+        // A story step, or an adventure item handed over: whatever the story did with it (a beat, an objective, a new scene, an ending) is shown now.
+        if (p.adventureId) flushAdventure();
       }
     };
 
@@ -5426,6 +6868,20 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         }
       }
     }
+    // The hero spoke with somebody of the adventure: the story hears of it (the engine records it, never the DM's say-so alone: the id was checked
+    // against the people standing here when the DM was asked, and the story refuses a person it does not have).
+    if (!stale() && reply.talkedTo !== undefined) {
+      const r = advApply(p, { type: "talk", npc: reply.talkedTo });
+      const who = adventureOf(p)?.npcs.find((n) => n.id === reply.talkedTo)?.name ?? reply.talkedTo;
+      if (!r || r.refused) {
+        const why = r?.refused ?? "there is no adventure running";
+        refusedNotes.push(why);
+        refusedLog.push(`talked to ${who}: ${why}`);
+      } else {
+        appliedLog.push(`talked to ${who}`);
+        flushAdventure();
+      }
+    }
     record();
     if (stale()) return [];
     for (const fact of reply.remember ?? []) {
@@ -5488,8 +6944,16 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const body = p.bodies.find((b) => same(b.at, at));
     if (body) return { target: { kind: "body", id: body.id, name: `the ${body.name.toLowerCase()}'s body`, distanceTiles, inSight, body: { looted: body.looted, harvested: body.harvested, beast: body.beast } } };
     if (pileAt(p, at)) return { target: { kind: "prop", name: "the things lying here", distanceTiles, inSight }, pile: true };
-    if (same(at, DOOR_AT)) return { target: { kind: "door", id: "door", name: kit.doorLabel, distanceTiles, inSight, door: { open: p.doorOpen, locked: p.doorLocked, lockDc: p.doorLockDc } } };
-    if (same(at, CONTAINER_AT)) return { target: { kind: "chest", id: "container", name: kit.containerLabel, distanceTiles, inSight, searched: p.searched } };
+    if (same(at, doorAt(p))) return { target: { kind: "door", id: "door", name: kit.doorLabel, distanceTiles, inSight, door: { open: p.doorOpen, locked: p.doorLocked, lockDc: p.doorLockDc } } };
+    if (same(at, containerAt(p))) return { target: { kind: "chest", id: "container", name: kit.containerLabel, distanceTiles, inSight, searched: p.searched } };
+    // A feature of the adventure's place: one with a secret to find is a thing to search (the Search line), any other only to look at.
+    const feature = featureAtSquare(p, at);
+    if (feature) {
+      const name = advPropWords(p, at) ?? feature.name;
+      return featureSearchable(feature)
+        ? { target: { kind: "chest", id: feature.id, name, distanceTiles, inSight, searched: featureIsFound(p, feature) } }
+        : { target: { kind: "prop", id: feature.id, name, distanceTiles, inSight } };
+    }
     const prop = p.extraProps.find((e) => same(e, at));
     if (prop) return { target: { kind: "prop", id: prop.id, name: prop.label, distanceTiles, inSight } };
     if (isGrate(p, at)) return { target: { kind: "prop", id: grateId(at), name: "the drain grate", distanceTiles, inSight } };
@@ -5566,6 +7030,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (!found.enabled) return refuse(found.reason ?? "You cannot do that now.");
     clearOptions();
     if (id === "look") return examineAt(tile);
+    // In an adventure: talking to a person opens the ask box on them, and Search on a feature is the engine's own check, not a DM answer.
+    if (id === "talk" && st().adventureId) {
+      const who = creatureAt(st(), tile);
+      if (who && !who.hostile) return talkTo(who);
+    }
+    if (id === "search" && st().adventureId && featureAtSquare(st(), tile)) return void featureFlow(tile);
     if (found.resolver === "dm") {
       void runDm({ kind: "freehand", text: found.say });
       return;
@@ -5873,10 +7343,67 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   // ---- the debug export ----------------------------------------------------------------------------
 
-  /** The whole adventure so far, as the export's bundle: the state, the sheet, the scene, every save, the full log, every DM exchange and every roll. */
-  function adventureBundle(): AdventureBundle {
-    const p = st();
+  /**
+   * The adventure part of the export: which adventure (id, title, version, author, the file it came from), where the story stands (the
+   * progress record, the scene, the place), the whole Markdown the adventure was read from (so a debug export can reproduce the run) and the
+   * brief the DM was last given. Null in a test room.
+   */
+  function exportedAdventure(p: PlayState): BenchBundle["adventure"] {
+    const a = adventureOf(p);
+    if (!a || !p.progress) return null;
+    const entry = benchAdventures().find((e) => e.adventure === a);
     return {
+      id: a.id,
+      title: a.title,
+      version: a.version,
+      author: a.author,
+      file: entry?.file ?? "",
+      progress: JSON.parse(JSON.stringify(p.progress)) as AdventureProgress,
+      sceneId: p.progress.sceneId,
+      locationId: p.progress.locationId,
+      source: entry?.source ?? "",
+      lastBrief,
+    };
+  }
+
+  /** The bundle plus the adventure: the zip's adventure.json carries every field (the engine's file list is written from the bundle as it is). */
+  type BenchBundle = AdventureBundle & {
+    adventure: {
+      id: string;
+      title: string;
+      version: number;
+      author: "owner" | "ai";
+      file: string;
+      progress: AdventureProgress;
+      sceneId: string;
+      locationId: string;
+      source: string;
+      lastBrief: string | null;
+    } | null;
+  };
+
+  /** The files of the zip: the engine's own list, and for an adventure its Markdown and the last brief on their own as readable text. */
+  function exportFiles(bundle: BenchBundle): { name: string; data: string }[] {
+    const files = adventureFiles(bundle);
+    const ad = bundle.adventure;
+    if (ad) {
+      files.push({ name: "adventure-source.md", data: ad.source });
+      files.push({ name: "dm-brief.txt", data: ad.lastBrief ?? "The DM has not been asked anything in this game yet.\n" });
+    }
+    return files;
+  }
+
+  function exportZip(bundle: BenchBundle, now: Date = new Date()): { filename: string; bytes: Uint8Array } {
+    return { filename: adventureFilename(now), bytes: zipStore(exportFiles(bundle).map((f) => ({ name: f.name, data: f.data, modified: now }))) };
+  }
+
+  /** The whole adventure so far, as the export's bundle: the state, the sheet, the scene, every save, the full log, every DM exchange and every roll. */
+  function adventureBundle(): BenchBundle {
+    const p = st();
+    const adventure = exportedAdventure(p);
+    return {
+      ...(adventure ? { notes: `Adventure: ${adventure.title} (${adventure.id}, version ${adventure.version}). adventure-source.md is the Markdown it was played from, dm-brief.txt is the brief the DM was last given, and adventure.json has the story's progress.` } : {}),
+      adventure,
       format: ADVENTURE_FORMAT,
       version: ADVENTURE_VERSION,
       exportedAt: new Date().toISOString(),
@@ -5956,7 +7483,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     try {
       let built: { filename: string; bytes: Uint8Array };
       try {
-        built = adventureZip(adventureBundle());
+        built = exportZip(adventureBundle());
       } catch (err) {
         setExportStatus(`Could not build the export: ${err instanceof Error ? err.message : "unknown error"}. Try Copy adventure JSON.`, true);
         return;
@@ -6151,14 +7678,17 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const foesLeft = hostilesOf(p).length > 0;
     let title: string;
     const lines: string[] = [];
+    const adv = adventureOf(p);
+    const sceneName = adv && p.progress ? (sceneOf(adv, p.progress.sceneId)?.title ?? adv.title) : "";
+    if (adv) lines.push(`At ${currentLocation(p)?.name ?? "the place"}`);
     if (heroDown(p)) title = "You are down";
-    else if (!p.round) title = foesLeft ? "Exploring" : downTitle(p);
+    else if (!p.round) title = adv ? (p.progress?.ended ? `${adv.title}: finished` : sceneName) : foesLeft ? "Exploring" : downTitle(p);
     else if (mine) title = `Round ${p.round.roundNumber}: your turn`;
     else title = `Round ${p.round.roundNumber}: ${foeTurn?.seen ? `${creatureName(p, foeTurn).toLowerCase()}'s turn` : "something moves"}`;
     if (mine && c) {
       lines.push(`Move: ${c.economy.movementRemaining} ft left`, `Action: ${c.economy.action ? "ready" : "used"}`);
     } else if (!p.round && !heroDown(p)) {
-      lines.push(foesLeft ? "Click a square to walk" : "Open the chest, or Reset scene");
+      lines.push(foesLeft || adv ? "Click a square to walk" : "Open the chest, or Reset scene");
     } else if (p.round && !mine) {
       lines.push("Space or a click skips");
     } else if (heroDown(p)) {
@@ -6171,7 +7701,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     else if (p.sneaking) lines.push("Sneaking (steps it could notice are Stealth checks)");
     const bars: HudBar[] = [{ id: HERO_ID, label: h.name, hp: h.currentHp, max: h.maxHp, side: "hero", down: heroDown(p) }, ...foeBars(p)];
     // The door when it can be used (shut or open, not locked, nobody standing in it), or the chest when it is still shut.
-    const useDoor = doorOrChestUsable(p);
+    const advUse = adv ? advUseFor(p) : null;
+    const useDoor = adv ? advUse !== null : doorOrChestUsable(p);
     // A body to search or a pile to look through beside you (and no door or chest to use) is what the Use button, E, does: it says Search.
     const searchable = !useDoor && lootNear(p) !== null;
     const near = useDoor || searchable;
@@ -6195,20 +7726,20 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     } else {
       actions.push(
         { id: "attack", label: "Attack", key: "F", enabled: free && !busy, hidden: !canAttack },
-        { id: "use", label: searchable ? "Search" : "Use", key: "E", enabled: free && !busy && myMove, hidden: !(near && myMove) },
+        { id: "use", label: advUse ? advUse.label : searchable ? "Search" : "Use", key: "E", enabled: free && !busy && myMove, hidden: !(near && myMove) },
         { id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: free && !busy, hidden: !canPotion },
         // The thing to press once the action is spent, or nothing is left to do.
         { id: "end", label: "End turn", key: "T", enabled: free && !busy && mine, hidden: !mine, emphasis: free && !busy && mine && (!actionLeft || (!moveLeft && !near)) },
         { id: "rest", label: "Rest", key: "R", enabled: free && !busy, hidden: restRefusal(p) !== null },
       );
     }
-    actions.push({ id: "sheet", label: "Sheet", key: "C", enabled: creationView === null });
+    actions.push({ id: "sheet", label: "Sheet", key: "C", enabled: creationView === null && !screenOpen() });
     // While the DM thinks, the one live button is Cancel (Escape does the same).
     if (dmThinking) actions.push({ id: "cancel", label: "Cancel", key: "Esc", enabled: true });
     // The DM's suggested next moves show only while the table is free (they are buttons that act when pressed).
     const options: HudOption[] = free && !busy && !down ? p.options.map((o, i) => ({ id: `opt:${i}`, label: o.label, key: String(i + 1) })) : [];
     const saveRows: HudSave[] = saves.map((s) => ({ id: s.id, label: saveLabel(s), detail: saveDetail(s), canLoad: free && !busy }));
-    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) }, options, log: p.log.map((l) => ({ text: l.text, tone: l.tone })), saves: saveRows, ...(exportStatus ? { exportStatus } : {}), ...(exportCopyShown ? { exportCopy: true } : {}) });
+    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) }, options, log: p.log.map((l) => ({ text: l.text, tone: l.tone })), saves: saveRows, ...(adv ? { journal: journalFor(p) } : {}), ...(exportStatus ? { exportStatus } : {}), ...(exportCopyShown ? { exportCopy: true } : {}) });
     // The open sheet follows the hero: hit points, potions and anything the DM hands over.
     if (sheetView) {
       const sig = sheetSigFor(p);
@@ -6282,6 +7813,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   function renderArmoury(): void {
     const p = st();
     armouryEl.innerHTML = "";
+    // An adventure gives what it says and nothing else (the first one: no armor at all): the free armoury is for the test rooms.
+    if (p.adventureId) {
+      armouryEl.appendChild(el_("p", "lt-note", "The armoury is for the test rooms. In an adventure you have only what the story gives you."));
+      return;
+    }
     const bag = p.hero.bag ?? [];
     for (const role of GEAR_ROLES) {
       const row = el_("div", "lt-armoury-row");
@@ -6335,13 +7871,15 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     renderHud();
     refresh("slots", `${p.archetypeId}|${worn}|${look}`, renderSlots);
     refresh("pack", `${p.archetypeId}|${bag}|${look}`, renderPack);
-    refresh("armoury", `${p.archetypeId}|${worn}|${bag}|${look}`, renderArmoury);
+    refresh("armoury", `${p.archetypeId}|${worn}|${bag}|${look}|${p.adventureId ?? ""}`, renderArmoury);
     stage.invalidate();
   }
 
   function renderAll(): void {
     heroSelect.value = st().archetypeId;
     roomSelect.value = st().room;
+    // A test room's setting: it has no meaning inside an adventure (the start screen is the way to another game).
+    roomSelect.disabled = st().adventureId !== null;
     refreshAll();
   }
 
@@ -6361,11 +7899,15 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     fightWasOn = false;
     hover = null;
     said = st().log.length;
+    // Nobody has been asked in this game yet.
+    lastBrief = null;
+    talkTarget = null;
     closeLoot();
     overlay.clear();
+    dropPendingCards();
     tray.clear();
     stage.snapCamera();
-    if (checkpoint) addSavePoint(st(), "checkpoint", "start of the scene");
+    if (checkpoint) addSavePoint(st(), "checkpoint", st().adventureId ? "start of the adventure" : "start of the scene");
     renderAll();
   }
 
@@ -6405,6 +7947,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
     if (key === "l" && !e.repeat) {
       hud.toggleLog();
+      e.preventDefault();
+      return;
+    }
+    if (key === "j" && !e.repeat) {
+      hud.toggleJournal();
       e.preventDefault();
       return;
     }
@@ -6483,6 +8030,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   const shroudRevealAt = new Float64Array(CELL_WIDTH * CELL_HEIGHT);
   let shroudPrev: Uint8Array | null = null;
   let shroudScene: PlayState | null = null;
+  let shroudEpoch = -1;
   let shroudKey = "";
   let shroudTickAt = -Infinity;
 
@@ -6503,7 +8051,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (shroud.style.height !== cssH) shroud.style.height = cssH;
 
     const states = visibilityStates(heroSees(p), p.explored);
-    if (shroudScene !== p || !shroudPrev) {
+    if (shroudScene !== p || !shroudPrev || shroudEpoch !== p.boardEpoch) {
+      shroudEpoch = p.boardEpoch;
       // A new scene starts clear of any dissolve in progress.
       shroudReveal.fill(1);
       shroudScene = p;
@@ -6558,14 +8107,52 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     saves = readStoredSaves();
     savesLoaded = true;
   }
-  if (startedNew) addSavePoint(st(), "checkpoint", "start of the scene");
+  if (startedNew && !atStart) addSavePoint(st(), "checkpoint", "start of the scene");
   renderAll();
   said = st().log.length;
   if (st().round) void runHostiles();
+  // The Play tab opens on its start screen until something is chosen (coming back to the tab mid-game does not).
+  if (atStart) showStart();
   // The DM's transport, asked for once, after the first paint.
   void loadSample();
   // A read-only handle for the bench's own headless checks: the scene state, never written through.
   (globalThis as { __ltBenchPlay?: () => PlayState }).__ltBenchPlay = st;
+  // The adventure's own handle for the same checks (the DM is what talks to people and decides judgment calls: until it tells the story, a check does):
+  //   startScreen()   the start screen, as the button does
+  //   event(e)        tell the story something happened ({ type: "talk", npc: "tobin" }, a flag, a kill...), exactly as the game would; returns the refusal, or null
+  //   state()         what the story says now: adventure id, scene, place, flags, kills, items held, what is waiting to be shown
+  //   dmView()        what the DM is told about the adventure now; lastBrief() the brief it was last given; exportFiles() the debug zip's files as text
+  (globalThis as { __ltBenchAdventure?: unknown }).__ltBenchAdventure = {
+    startScreen: () => showStart(),
+    event: (e: AdventureEvent) => {
+      const r = advApply(st(), e);
+      flushAdventure();
+      refreshAll();
+      return r?.refused ?? null;
+    },
+    // What the DM is told about the adventure right now (the brief, the steps it may propose, the people here, the item ids), and the brief it was last given.
+    dmView: () => {
+      const v = dmAdventureView(st());
+      return v ? JSON.parse(JSON.stringify(v)) : null;
+    },
+    lastBrief: () => lastBrief,
+    // The files the Saves tab's Export would put in the zip, as text.
+    exportFiles: () => exportFiles(adventureBundle()).map((f) => ({ name: f.name, data: f.data })),
+    state: () => {
+      const p = st();
+      return {
+        adventureId: p.adventureId,
+        // The table is busy (a DM turn, a walk, a roll): clicks on the board only skip.
+        busy,
+        progress: p.progress ? JSON.parse(JSON.stringify(p.progress)) : null,
+        pending: p.adventurePending.length,
+        places: Object.keys(p.places),
+        found: [...p.featuresFound],
+        exits: exitsHere(p).map((e) => ({ id: e.exit.id, to: e.exit.to, label: e.exit.label, at: { ...e.at }, open: exitIsOpen(p, e.exit) })),
+        features: (currentLocation(p)?.features ?? []).map((f) => ({ id: f.id, at: advBoard(p)?.featuresAt[f.id] ?? null, searchable: featureSearchable(f), found: featureIsFound(p, f) })),
+      };
+    },
+  };
   // And a way to make a save at any moment, mid-fight included (the buttons only save while nothing is fighting): for the same checks.
   (globalThis as { __ltBenchSave?: (label: string) => void }).__ltBenchSave = (label) => addSavePoint(st(), "checkpoint", label);
   // And what the hero sees, for the same checks: the sight level of every square (0 never seen, 1 remembered, 2 in sight) and which creatures are in sight.
@@ -6579,8 +8166,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   return () => {
     alive = false;
     dmCtl?.abort();
+    // The AI writer costs real usage and its Cancel button goes with the tab: leaving stops it.
+    writerCtl?.abort();
     diceSkin = tray.skin().id;
     closeViews();
+    closeScreens();
     hud.destroy();
     stage.dispose();
     overlay.destroy();
@@ -7458,4 +9048,56 @@ export const PLAY_RULES = {
   SECOND_START,
   HERO_START,
   DOOR_AT,
+};
+
+/**
+ * The Play tab's adventure rules with no DOM (the checked adventures, a new game of one, the places and their exits, creatures from spawns,
+ * features, the story's events, items, the Journal, saves), for test/livingtable-bench-adventures.test.ts. The panel is the only other
+ * caller; nothing here draws.
+ */
+export const ADVENTURE_RULES = {
+  benchAdventures,
+  adventureById,
+  checkAdventureText,
+  registerAiAdventure,
+  startCardsFor,
+  kitWords,
+  adventureHero,
+  adventureHeroFromCreator,
+  newAdventurePlay,
+  adventureOf,
+  currentLocation,
+  locationBoard,
+  advBoard,
+  populateLocation,
+  enterLocation,
+  advApply,
+  syncItems,
+  giveAdventureItem,
+  exitsHere,
+  exitOn,
+  exitIsOpen,
+  exitLockedWords,
+  featureAtSquare,
+  featureSearchable,
+  featureIsFound,
+  featureKey,
+  advUseFor,
+  journalFor,
+  dmViewFor,
+  dmAdventureView,
+  dmGivableItemIds,
+  applyWorldEffect,
+  heroStepTo,
+  slayCreature,
+  toSnapshot,
+  fromSnapshot,
+  isSnapshot,
+  sceneTiles,
+  sceneProps,
+  engineLayout,
+  noteSight,
+  addCreature,
+  creatureName,
+  creatureLabel,
 };
