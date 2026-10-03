@@ -3,8 +3,9 @@
  * scripts/kaykit/cast.py through the same pipeline as the KayKit Knight
  * (same camera, framing and styles), with each hero's gear as separate
  * animated layers so whatever is worn shows on the moving figure. The
- * exception is a figure kept hand-drawn (the goblin): it has no frames here
- * and is posed from its one drawing by spritePose, at the end of this file.
+ * exception is a figure kept hand-drawn (the goblin, or any creature not yet
+ * rendered): it has no frames here and is posed from its one drawing by
+ * spritePose, at the end of this file.
  *
  * Embedded with build-bench.mjs --data kaycast=.cache/kaykit/bench-cast.json
  * (scripts/kaykit/pack-cast.mjs). Per clip: every frame's palette indices
@@ -512,10 +513,14 @@ export function easeToward(current: number, target: number, dtMs: number, tauMs:
 }
 
 // ---------------------------------------------------------------------------
-// A figure with no rendered animation: a single hand-drawn sprite the owner
-// chose to keep (the goblin, 2026-10-01). It plays the same clips as the cast
+// A figure with no rendered animation: a single hand-drawn sprite, whatever
+// the token (the goblin, which the owner chose to keep on 2026-10-01, and any
+// creature that has no KayKit render yet). It plays the same clips as the cast
 // so the Actor drives it unchanged, but each clip is a pose of the one
-// drawing (a bob, a hop, a lunge, a flinch, a fall) rather than drawn frames.
+// drawing (a bob, a hop, a lunge, a flinch, a fall) rather than drawn frames:
+// every hand-drawn token gets a simple idle and step, and a token the art has
+// no sprite for is simply not drawn. Each creature on the board has its own
+// Actor, so two of them move, step and fall independently.
 // spritePose is a pure function of the clip and frame, so the same frame
 // always shows the same pose.
 // ---------------------------------------------------------------------------
