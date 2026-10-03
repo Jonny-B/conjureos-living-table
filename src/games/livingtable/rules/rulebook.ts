@@ -218,6 +218,11 @@ const KNIGHT_ATTACK = attackerBonusFor(KNIGHT);
 const KNIGHT_DAMAGE = parseDiceNotation(weaponDamageNotationFor(KNIGHT));
 const GOBLIN = MONSTER_STATBLOCKS["token_goblin"]!;
 const SKELETON = MONSTER_STATBLOCKS["token_skeleton"]!;
+const RAT = MONSTER_STATBLOCKS["token_rat"]!;
+const GIANT_RAT = MONSTER_STATBLOCKS["token_giant_rat"]!;
+/** A Knight with no armour and no shield, and the same Knight in chain mail: the two figures the armour rule quotes, both made by the creator itself. */
+const KNIGHT_BARE = createCharacter({ archetypeId: "knight", name: "Example", appearanceAssetId: "token_knight", startingKit: { armor: "none" } });
+const KNIGHT_IN_MAIL = sampleHero("knight", { fightingStyle: "dueling" });
 const KNIGHT_PERCEPTION = skillModifierFor(KNIGHT, "Perception");
 /**
  * Fire Bolt twice over. Through the Attack button the Fireball Person swings it as a weapon (session/combat.ts
@@ -510,7 +515,7 @@ const COMBAT: RuleSection = {
     p("A creature that reaches 0 hit points is out of the fight and leaves the board. Monsters do not make death saves."),
     table(
       ["Creature", "AC", "Hit points", "To hit", "Damage", "Speed"],
-      [GOBLIN, SKELETON].map((m) => [m.name, String(m.armorClass), String(m.maxHp), signed(m.attackBonus), m.damageNotation, `${SPEED_FT} ft`]),
+      [GOBLIN, SKELETON, RAT, GIANT_RAT].map((m) => [m.name, String(m.armorClass), String(m.maxHp), signed(m.attackBonus), m.damageNotation, `${SPEED_FT} ft`]),
     ),
     p("A monster's turn: it walks toward you along the shortest route, around walls and through open doors, as far as its speed allows. If it ends next to you and still has its action, it makes one attack with its to-hit bonus against your AC. If it cannot reach you it walks as near as it can and stops. A monster never flees or surrenders on its own. Only the DM can make that happen, in the story."),
     p("There are no opportunity attacks. Walking away from a creature next to you does not give it a free swing, although it will follow you on its own turn. The SRD's other combat actions (Dash, Dodge, Disengage, Help and Ready) are not in the engine: nothing doubles your movement or gives anyone disadvantage. Type one and the DM rules on it in the story."),
@@ -589,6 +594,7 @@ const EQUIPMENT: RuleSection = {
     p(`A weapon's bonus adds to both its attack roll and its damage. An armor piece's bonus adds to your Armor Class. A saving-throw piece's bonus adds to every saving throw. All the bonuses to Armor Class from your gear together never add more than ${signed(MAX_TOTAL_AC_BONUS)}, and to saving throws never more than ${signed(MAX_TOTAL_SAVE_BONUS)}. Bonuses to skill checks never add more than ${signed(MAX_TOTAL_CHECK_BONUS)}. No magic bonus is above ${signed(MAGIC_ITEM_BONUS_MAX)}.`),
     p("A legendary weapon also rolls extra damage dice of its own type on every hit (radiant for the Knight's, poison for the Shadow's, fire for the Fireball Person's). The extra dice are doubled on a critical hit."),
     p("A shield needs a free hand. A two-handed weapon leaves none, so a shield's bonus does not apply with one. Heavy armor that needs more Strength than you have slows you."),
+    p(`A hero can wear no armor at all, and an adventure can start them that way. With no armor and no shield, Armor Class is 10 plus your Dexterity modifier and nothing slows you: a Knight with Dexterity ${KNIGHT_BARE.abilities.dex} is Armor Class ${KNIGHT_BARE.armorClass} bare and ${KNIGHT_IN_MAIL.armorClass} in chain mail. The armor-kind gear rows (a shield, a cloak, body armor) then read Nothing worn, and a bare hero is not drawn wearing them. Armor you find goes in your pack: Equip puts it on and your Armor Class is worked out from it, Unequip takes it off again. Both are free, and like any gear change they are refused with something hostile in the room. A magic piece worn in an armor row is real and adds its bonus whether or not you wear armor. Defense, the fighting style, is a point of Armor Class only while you wear armor, so a hero who starts bare is not offered it.`),
     p("Ring, amulet and boots are shared by every hero. Each does one thing, from its SRD text, and the number is on the item:"),
     // equipmentTypes.ts ACCESSORY_ITEMS, fantasy names
     table(

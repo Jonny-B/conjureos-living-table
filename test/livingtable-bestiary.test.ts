@@ -4,8 +4,8 @@
  * The data is hand-authored SRD 5.1 numbers, so these tests check it is
  * internally consistent (HP against hit dice, XP against CR, damage
  * averages against dice, passive Perception against skills) and that the
- * two creatures the game already fights with, the goblin and the skeleton,
- * agree exactly with MONSTER_STATBLOCKS in session/combat.ts.
+ * creatures the game fights with (the goblin, the skeleton, the rat and the
+ * giant rat) agree exactly with MONSTER_STATBLOCKS in session/combat.ts.
  *
  * Run: npx tsx --test test/livingtable-bestiary.test.ts
  */
@@ -184,9 +184,21 @@ test("the skeleton matches MONSTER_STATBLOCKS.token_skeleton exactly", () => {
   matchesStatblock(skeleton, "token_skeleton");
 });
 
-test("only the goblin and skeleton claim a token", () => {
+test("the rat matches MONSTER_STATBLOCKS.token_rat exactly", () => {
+  const rat = beastById("rat");
+  assert.ok(rat);
+  matchesStatblock(rat, "token_rat");
+});
+
+test("the giant rat matches MONSTER_STATBLOCKS.token_giant_rat exactly", () => {
+  const giant = beastById("giant-rat");
+  assert.ok(giant);
+  matchesStatblock(giant, "token_giant_rat");
+});
+
+test("only the goblin, skeleton, rat and giant rat claim a token", () => {
   const withTokens = BESTIARY.filter((b) => b.tokenAssetId).map((b) => b.id).sort();
-  assert.deepEqual(withTokens, ["goblin", "skeleton"]);
+  assert.deepEqual(withTokens, ["giant-rat", "goblin", "rat", "skeleton"]);
 });
 
 test("no em dash, en dash or minus sign characters anywhere in the data", () => {

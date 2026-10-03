@@ -27,9 +27,13 @@ import { normalizeEquipment } from "./equipment";
 import {
   GEAR_ROLES,
   MAGIC_TIERS,
+  SLOTS_BY_ARCHETYPE,
   STARTING_LOADOUT,
+  UNARMORED_LABEL,
   accessoryEffect,
   gearItemKey,
+  type ArchetypeId,
+  type ArmorState,
   type BagItem,
   type Equipment,
   type GearItemKey,
@@ -123,6 +127,66 @@ export const ARMOR_INCLUDES_SHIELD: Readonly<Record<Chassis, boolean>> = Object.
   wizard: false,
 });
 
+/** The armour a chassis is issued, as an item a hero can put on and take off, or null for a chassis that is issued none (the wizard). */
+export interface ClassArmor {
+  /** The armour line's own words, as the sheet prints it when worn: "chain mail". */
+  label: string;
+  /** The item's name in a pack: "Chain mail". */
+  itemName: string;
+  /** The armour table's base AC (a cleric's shield is folded into it, see ARMOR_INCLUDES_SHIELD). */
+  base: number;
+  category: ArmorCategory;
+}
+
+/** What a chassis wears when it wears its armour, or null for the wizard, whose "armour line" is no armour at all. The one export of ARMOR_BY_CHASSIS, so nothing else restates it. */
+export function classArmorFor(chassis: Chassis): ClassArmor | null {
+  const armor = ARMOR_BY_CHASSIS[chassis];
+  if (!armor || armor.category === "unarmored") return null;
+  return { label: armor.label, itemName: armor.label.charAt(0).toUpperCase() + armor.label.slice(1), base: armor.base, category: armor.category };
+}
+
+/**
+ * The stored armour class and armour line for a hero in one armour state.
+ * "class": the chassis's own armour (SRD `computeAC` over the table above) plus
+ * Defense's point when that style was chosen. "none": SRD 5.1 unarmored, 10
+ * plus the Dexterity modifier, no shield, and no Defense point (SRD Defense is
+ * "while you are wearing armor"). One function so creation, putting armour on
+ * and taking it off can never come to two answers.
+ */
+export function armorStatsFor(
+  chassis: Chassis,
+  dexModifier: number,
+  armor: ArmorState,
+  defense: boolean,
+): { armorClass: number; armorLabel: string } {
+  if (armor === "none") {
+    return { armorClass: computeAC({ baseArmor: { category: "unarmored", base: 10 }, dexModifier }), armorLabel: UNARMORED_LABEL };
+  }
+  const table = ARMOR_BY_CHASSIS[chassis];
+  const armorClass = computeAC({ baseArmor: { category: table.category, base: table.base }, dexModifier }) + (defense ? 1 : 0);
+  return { armorClass, armorLabel: table.label };
+}
+
+/** The slice of a sheet `withArmor` reads and rewrites. */
+type ArmorSheet = Pick<CharacterSheet, "chassis" | "modifiers" | "choices" | "armorClass" | "armorLabel" | "armor">;
+
+/**
+ * The same sheet with its armour put on ("class") or taken off ("none"): the
+ * stored armour class and armour line are recomputed by `armorStatsFor`, and
+ * `armor` is written ("none") or dropped ("class", so a sheet that is armored
+ * stays exactly the shape every older sheet has). The same object when the
+ * state would not change. Pure; gear, pack and bag are not touched (the item
+ * actions in inventory/itemActions.ts own those).
+ */
+export function withArmor<S extends ArmorSheet>(sheet: S, armor: ArmorState): S {
+  if ((sheet.armor ?? "class") === armor) return sheet;
+  const stats = armorStatsFor(sheet.chassis, sheet.modifiers.dex, armor, sheet.choices?.fightingStyle === "defense");
+  const next: S = { ...sheet, ...stats };
+  if (armor === "none") next.armor = "none";
+  else delete next.armor;
+  return next;
+}
+
 function isCasterChassis(chassis: Chassis): chassis is CasterClass {
   return chassis === "cleric" || chassis === "wizard";
 }
@@ -212,10 +276,19 @@ const FIGHTING_STYLE_OPTIONS: ChoiceOption[] = [
 ];
 
 /** The fighting-style options this specific archetype's kit actually supports (templates.ts's `fightingStyles`, defaulting to all three when unset). Shared by creationChoicesFor (what's offered) and createCharacter (what's valid), so the gate can't be bypassed by one and not the other. */
-function fightingStyleOptionsFor(archetype: Archetype): ChoiceOption[] {
+function fightingStyleOptionsFor(archetype: Archetype, kit?: StartingKit): ChoiceOption[] {
   const viable = archetype.fightingStyles;
-  if (!viable) return FIGHTING_STYLE_OPTIONS;
-  return FIGHTING_STYLE_OPTIONS.filter((option) => viable.includes(option.id));
+  const offered = viable ? FIGHTING_STYLE_OPTIONS.filter((option) => viable.includes(option.id)) : FIGHTING_STYLE_OPTIONS;
+  if (kit?.armor !== "none") return offered;
+  // A hero who starts with no armour and a bare pack. SRD Defense is "while
+  // you are wearing armor", so it is not offered. The Knight's Archery is the
+  // thrown handaxe the standard kit carries (session/combat.ts weaponFor swaps
+  // to it), so it is offered only when the kit lists a handaxe: a style that
+  // would make the engine swing a weapon the hero does not have is exactly
+  // the label-with-no-backing the `notYet` rule exists to end.
+  const needsHandaxe = archetype.startingInventory.some((item) => /^handaxe/i.test(item));
+  const carriesHandaxe = (kit.items ?? []).some((item) => /^handaxe/i.test(item));
+  return offered.filter((option) => option.id !== "defense" && !(option.id === "archery" && needsHandaxe && !carriesHandaxe));
 }
 
 function expertiseChoiceFor(skills: readonly string[]): CreationChoice {
@@ -264,10 +337,10 @@ export function appliedEffectFor(option: ChoiceOption, prefix = ""): LevelUpChan
  * the skills they actually have. Omitted, it is the archetype's own list, which
  * is what every caller before the creator existed got.
  */
-export function creationChoicesFor(archetypeId: string, skills?: readonly string[]): CreationChoice[] {
+export function creationChoicesFor(archetypeId: string, skills?: readonly string[], startingKit?: StartingKit): CreationChoice[] {
   const archetype = getArchetype(archetypeId);
   if (archetype.chassis === "fighter") {
-    return [{ id: "fightingStyle", prompt: "Pick a fighting style.", options: fightingStyleOptionsFor(archetype) }];
+    return [{ id: "fightingStyle", prompt: "Pick a fighting style.", options: fightingStyleOptionsFor(archetype, startingKit) }];
   }
   if (archetype.chassis === "rogue") {
     return [expertiseChoiceFor(skills ?? archetype.startingProficiencies.skills)];
@@ -304,7 +377,43 @@ export interface CreateCharacterInput {
   background?: Background;
   alignment?: string;
   backstory?: string;
+  /**
+   * What the hero starts with. Absent is today's kit exactly (the archetype's
+   * armour, pack, potions and gear). See `StartingKit`.
+   */
+  startingKit?: StartingKit;
 }
+
+/**
+ * A starting kit for a hero who does not begin fully equipped (an adventure
+ * decides: the first one starts a village apprentice with a plain weapon and
+ * nothing else).
+ *
+ *   armor "class"  the archetype's own armour (today's behaviour).
+ *   armor "none"   no armour, no shield: SRD unarmored AC, 10 + DEX. The
+ *                  armour-kind gear slots (the Knight's shield and plate, a
+ *                  Shadow's or wizard's cloak) read as bare; the class weapon
+ *                  (the Knight's longsword, the wizard's quarterstaff focus,
+ *                  the Shadow's shortblade) is kept. The pack is `items`
+ *                  (default empty) and the healing potions are `potions`
+ *                  (default 0). Defense is not offered as a fighting style.
+ *
+ * `items` and `potions` also work with armor "class": they replace the
+ * archetype's pack and potion count. `weaponNote` is how the weapon is
+ * described ("a plain dagger"); it changes no number, and the item card says
+ * what the weapon plays as.
+ */
+export interface StartingKit {
+  armor: "none" | "class";
+  items?: string[];
+  potions?: number;
+  weaponNote?: string;
+}
+
+export const STARTING_KIT_MAX_ITEMS = 12;
+export const STARTING_KIT_ITEM_MAX = 60;
+export const STARTING_KIT_MAX_POTIONS = 10;
+export const WEAPON_NOTE_MAX = 80;
 
 export type { Ancestry, AncestryTrait } from "./ancestries";
 export { ANCESTRIES } from "./ancestries";
@@ -352,6 +461,15 @@ export interface CharacterSheet {
   proficiencyBonus: number;
   armorClass: number;
   armorLabel: string;
+  /**
+   * "none" when the hero wears no armour and no shield (the stored armourClass
+   * is then 10 + DEX and armorLabel says so). ABSENT READS AS "class": every
+   * sheet made before this field wears its class's armour. See `ArmorState`
+   * in characters/equipmentTypes.ts, and `withArmor` to change it.
+   */
+  armor?: ArmorState;
+  /** How the weapon is described when a kit says so ("a plain dagger"). Words only: the weapon's numbers are the class weapon's. */
+  weaponNote?: string;
   maxHp: number;
   currentHp: number;
   hitDieSides: number;
@@ -618,6 +736,8 @@ interface CreationPlan {
   expertise?: ChoiceOption;
   skillNames: string[];
   abilities: AbilityScores;
+  /** The validated starting kit, absent for today's kit. */
+  kit?: StartingKit;
   /** Set when any of the creator's inputs was given; absent for a character made the old way. */
   creator?: {
     method: AbilityMethod;
@@ -794,14 +914,26 @@ function resolveCreation(input: CreateCharacterInput): { plan?: CreationPlan; er
   // A skill nobody taught SKILL_ABILITY about is a bug in templates.ts, not a
   // bad pick, so it still throws loudly (the old behavior), via buildSheet.
 
+  // ── starting kit ──
+  let kit: StartingKit | undefined;
+  if (input.startingKit !== undefined) kit = resolveStartingKit(input.startingKit, errors);
+
   // ── class choices ──
   let fightingStyle: ChoiceOption | undefined;
   let expertise: ChoiceOption | undefined;
   if (archetype.chassis === "fighter") {
-    const viableOptions = fightingStyleOptionsFor(archetype);
-    const optionId = chosen.fightingStyle ?? viableOptions[0]!.id;
+    const viableOptions = fightingStyleOptionsFor(archetype, kit);
+    const optionId = chosen.fightingStyle ?? viableOptions[0]?.id;
     fightingStyle = viableOptions.find((o) => o.id === optionId);
-    if (!fightingStyle) errors.push(`"${optionId}" is not a fighting style option for this archetype's kit`);
+    if (!fightingStyle) {
+      errors.push(
+        optionId === undefined
+          ? "this archetype's kit supports no fighting style without its armour"
+          : kit?.armor === "none" && optionId === "defense"
+            ? "Defense needs armour, and this kit has none. Pick another fighting style."
+            : `"${optionId}" is not a fighting style option for this archetype's kit`,
+      );
+    }
   }
   if (archetype.chassis === "rogue") {
     const viableOptions = expertiseChoiceFor(skillNames).options;
@@ -850,9 +982,43 @@ function resolveCreation(input: CreateCharacterInput): { plan?: CreationPlan; er
       expertise,
       skillNames,
       abilities,
+      ...(kit ? { kit } : {}),
       creator: usedCreator ? { method, baseScores, ancestry, background, alignment, backstory } : undefined,
     },
   };
+}
+
+/** Validate a starting kit's shape and clean its text, pushing the reasons it cannot be used. Undefined when it is unusable. */
+function resolveStartingKit(raw: StartingKit, errors: string[]): StartingKit | undefined {
+  if (!raw || typeof raw !== "object" || (raw.armor !== "none" && raw.armor !== "class")) {
+    errors.push('a starting kit says armor "none" or "class"');
+    return undefined;
+  }
+  const kit: StartingKit = { armor: raw.armor };
+  if (raw.items !== undefined) {
+    if (!Array.isArray(raw.items) || raw.items.length > STARTING_KIT_MAX_ITEMS) {
+      errors.push(`a starting kit carries at most ${STARTING_KIT_MAX_ITEMS} items`);
+    } else {
+      const items: string[] = [];
+      for (const item of raw.items) {
+        const text = cleanText(item, STARTING_KIT_ITEM_MAX);
+        if (text) items.push(text);
+      }
+      kit.items = items;
+    }
+  }
+  if (raw.potions !== undefined) {
+    if (typeof raw.potions !== "number" || !Number.isInteger(raw.potions) || raw.potions < 0 || raw.potions > STARTING_KIT_MAX_POTIONS) {
+      errors.push(`a starting kit holds 0 to ${STARTING_KIT_MAX_POTIONS} healing potions`);
+    } else {
+      kit.potions = raw.potions;
+    }
+  }
+  if (raw.weaponNote !== undefined) {
+    const note = cleanText(raw.weaponNote, WEAPON_NOTE_MAX);
+    if (note) kit.weaponNote = note;
+  }
+  return kit;
 }
 
 function optionalText<K extends "personalityTrait" | "ideal" | "bond" | "flaw">(key: K, value: unknown): Partial<Record<K, string>> {
@@ -866,8 +1032,13 @@ function buildSheet(plan: CreationPlan): CharacterSheet {
   const modifiers = abilityModifiers(abilities);
   const profBonus = proficiencyBonus(level);
 
-  const armor = ARMOR_BY_CHASSIS[archetype.chassis];
-  let armorClass = computeAC({ baseArmor: { category: armor.category, base: armor.base }, dexModifier: modifiers.dex });
+  const kit = plan.kit;
+  const unarmored = kit?.armor === "none";
+  // Defense is a point of AC only while armour is worn, so a bare hero never
+  // picks it (fightingStyleOptionsFor does not offer it) and none is added.
+  const defense = plan.fightingStyle?.id === "defense";
+  const armor = armorStatsFor(archetype.chassis, modifiers.dex, unarmored ? "none" : "class", defense);
+  const armorClass = armor.armorClass;
 
   const resolvedChoices: Record<string, string> = {};
   const appliedEffects: LevelUpChange[] = [];
@@ -879,7 +1050,7 @@ function buildSheet(plan: CreationPlan): CharacterSheet {
     // Archery are conditional on weapon choice mid-combat, which is the
     // combat resolver's call at attack time, not something to bake into a
     // flat sheet number that would misrepresent it as unconditional.
-    if (plan.fightingStyle.id === "defense") armorClass += 1;
+    // (Defense's point is already in `armor`, from armorStatsFor above.)
   }
 
   if (plan.expertise) {
@@ -926,21 +1097,21 @@ function buildSheet(plan: CreationPlan): CharacterSheet {
     modifiers,
     proficiencyBonus: profBonus,
     armorClass,
-    armorLabel: armor.label,
+    armorLabel: armor.armorLabel,
     maxHp,
     currentHp: maxHp,
     hitDieSides: archetype.startingHitDie,
     hitDiceRemaining: level,
     skills,
     saves,
-    inventory: [...archetype.startingInventory],
+    inventory: kit?.items ? [...kit.items] : unarmored ? [] : [...archetype.startingInventory],
     // Weapon, outer, crown and boots filled, all four common, from turn one:
     // the token is drawn wearing them, so the sheet has to agree that they
     // are there. Ring and amulet start empty (STARTING_LOADOUT's own value).
     // A common piece is worth +0, which is exactly why it can be the
     // starting kit without moving a single number.
     equipment: { ...STARTING_LOADOUT },
-    consumables: archetype.startingConsumables.map((c) => ({ ...c })),
+    consumables: startingConsumables(archetype, kit),
     spellSlots,
     downed: false,
     stable: false,
@@ -950,8 +1121,10 @@ function buildSheet(plan: CreationPlan): CharacterSheet {
     milestones: 0,
     choices: resolvedChoices,
     appliedEffects,
-    kitDescription: archetype.kitDescription,
+    kitDescription: unarmored ? bareKitDescription(archetype, kit) : archetype.kitDescription,
   };
+  if (unarmored) sheet.armor = "none";
+  if (kit?.weaponNote) sheet.weaponNote = kit.weaponNote;
 
   if (creator) {
     sheet.abilityMethod = creator.method;
@@ -970,6 +1143,24 @@ function buildSheet(plan: CreationPlan): CharacterSheet {
   }
 
   return sheet;
+}
+
+/** The consumables a kit starts with: the archetype's own, or (when the kit gives a potion count) the archetype's first one, the genre's healing potion, at that count (none at 0). */
+function startingConsumables(archetype: Archetype, kit: StartingKit | undefined): Consumable[] {
+  const own = archetype.startingConsumables;
+  if (kit?.potions === undefined && kit?.armor !== "none") return own.map((c) => ({ ...c }));
+  const potions = kit?.potions ?? 0;
+  const potion = own[0];
+  return potion && potions > 0 ? [{ ...potion, uses: potions }] : [];
+}
+
+/** What the sheet says about a bare kit, in plain words that match the sheet: no armour, no pack, the weapon. */
+function bareKitDescription(archetype: Archetype, kit: StartingKit | undefined): string {
+  const weapon = SLOTS_BY_ARCHETYPE[archetype.id as ArchetypeId]?.weapon.nameByTier[0].toLowerCase();
+  const held = kit?.weaponNote ?? (weapon ? `a ${weapon}` : "a plain weapon");
+  const potions = kit?.potions ?? 0;
+  const carried = (kit?.items?.length ?? 0) > 0 || potions > 0 ? "" : " and no pack";
+  return `No armour${carried}: you start with ${held}.`;
 }
 
 // ── the wizard's two entry points ──────────────────────────────────────
@@ -1091,6 +1282,13 @@ export function normalizeSheet(sheet: CharacterSheet): CharacterSheet {
   // not, and never invented. An old sheet comes back with none of them.
   for (const key of CREATOR_SHEET_KEYS) delete normalized[key];
   Object.assign(normalized, sanitiseCreatorFields(sheet));
+  // The armour state: only "none" is ever stored. Absent, "class" or junk all
+  // read as the class's own armour, so a stored sheet never gains the field.
+  delete normalized.armor;
+  if (sheet.armor === "none") normalized.armor = "none";
+  delete normalized.weaponNote;
+  const weaponNote = cleanText(sheet.weaponNote, WEAPON_NOTE_MAX);
+  if (weaponNote) normalized.weaponNote = weaponNote;
   return normalized;
 }
 

@@ -39,6 +39,19 @@
  *     downed hero drink; it passes `potionWhileDown: true` in the context to
  *     get its own rule back. The default is the game's.
  *
+ * BODY ARMOUR. A hero can wear no armour (`sheet.armor` is "none", SRD
+ * unarmored AC 10 + DEX). The class's armour is then an ordinary pack item
+ * ("Chain mail", "Leather armor": `classArmorFor`'s `itemName`), and:
+ *   - `equipItem` of that carried item puts it on (`withArmor` "class"): the
+ *     armour class and armour line are recomputed by the engine, the item
+ *     stops being a pack item (`packItems` hides worn armour);
+ *   - `unequipItem` of slot "armor" (or of the gear slot that draws the
+ *     armour, the Knight's plate, when it is the plain common piece) takes it
+ *     off: back to unarmored, the item in the pack.
+ * Putting on or taking off is free and, like every gear change, refused with
+ * something hostile in the room. A magic piece equipped into the body-armour
+ * slot of an unarmored hero is armour too, so it puts the class armour on.
+ *
  * HONESTY (equipmentTypes.ts rule 7): every string states the real number or
  * the real rule and never implies an effect the engine does not apply. In
  * particular `cost` is what the ENGINE charges: drinking a potion in a fight
@@ -47,8 +60,8 @@
  *
  * SRD 5.1 is CC BY 4.0 (NOTICE.md); the words are our own.
  */
-import type { CharacterSheet } from "../characters/creation";
-import { itemNameFor, slotsForArchetype, tierInSlot } from "../characters/equipment";
+import { classArmorFor, withArmor, type CharacterSheet } from "../characters/creation";
+import { isUnarmored, itemNameFor, slotIsBare, slotIsWornArmor, slotsForArchetype, tierInSlot } from "../characters/equipment";
 import {
   ACCESSORY_SLOT_WORD,
   BAG_CAPACITY,
@@ -65,7 +78,7 @@ import {
   type SlotRole,
 } from "../characters/equipmentTypes";
 import { ARCHETYPES, type Consumable } from "../characters/templates";
-import { packItems, slotLabelFor } from "../menu/equipment";
+import { effectiveArmorClass, packItems, slotLabelFor } from "../menu/equipment";
 import { gearChangeBlockedReason, knownArchetypeId } from "../rules/attunement";
 import { commitLoadout, draftFromSheet, stageEquip, stageUnequip } from "../rules/inventory";
 import { CONSUMABLE_HEAL_NOTATION } from "./itemInfo";
@@ -133,7 +146,10 @@ export const DEAD_HANDS_REASON = "Your hero is dead.";
 export const NOT_CARRYING_REASON = "You do not have that.";
 export const BAG_FULL_REASON = "Your bag is full.";
 export const ALREADY_OWN_REASON = "You already own one of those.";
-export const EQUIP_BAG_ONLY_REASON = "Only magic gear in your bag can be equipped.";
+export const EQUIP_BAG_ONLY_REASON = "Only magic gear in your bag, or armour in your pack, can be equipped.";
+/** The slot name that stands for the class's body armour on a sheet whose chassis has no gear slot drawing it (a Shadow's leather armor). */
+export const ARMOR_SLOT = "armor";
+export const NO_ARMOR_WORN_REASON = "You wear no armour.";
 
 // ── small helpers ───────────────────────────────────────────────────────
 
@@ -192,6 +208,7 @@ function isDown(sheet: CharacterSheet, ctx: ItemActionContext): boolean {
 
 type Subject =
   | { kind: "worn"; role: GearRole; tier: EquipmentTier; name: string }
+  | { kind: "armor"; name: string }
   | { kind: "bag"; index: number; item: BagItem; name: string }
   | { kind: "carried"; invIndex: number; raw: string; base: string; count: number }
   | { kind: "consumable"; c: Consumable | null; name: string; count: number; hostStock: boolean }
@@ -220,6 +237,10 @@ function consumableSubject(sheet: CharacterSheet, name: string, ctx: ItemActionC
 function resolve(sheet: CharacterSheet, ref: ItemRef, ctx: ItemActionContext): Subject | null {
   switch (ref.where) {
     case "worn": {
+      if (ref.slot === ARMOR_SLOT) {
+        const armor = classArmorFor(sheet.chassis);
+        return armor && !isUnarmored(sheet) ? { kind: "armor", name: armor.itemName } : null;
+      }
       if (!isGearRole(ref.slot) || !archetypeIdOf(sheet)) return null;
       const tier = tierInSlot(sheet, ref.slot);
       const name = itemNameFor(sheet, ref.slot);
@@ -257,6 +278,7 @@ function resolve(sheet: CharacterSheet, ref: ItemRef, ctx: ItemActionContext): S
 
 function subjectName(s: Subject): string {
   switch (s.kind) {
+    case "armor":
     case "worn":
     case "bag":
     case "pile":
@@ -307,7 +329,7 @@ function useCarriedBlockedReason(sheet: CharacterSheet, ctx: ItemActionContext):
 
 /** Why this subject cannot be dropped or destroyed, or null: worn, then the quest flag, then the hands. */
 function parkBlockedReason(sheet: CharacterSheet, s: Subject, ctx: ItemActionContext): string | null {
-  if (s.kind === "worn") return WORN_REASON;
+  if (s.kind === "worn" || s.kind === "armor") return WORN_REASON;
   if (s.kind === "pile") return "It is already on the ground.";
   if (s.kind === "consumable" && s.count <= 0) return NONE_LEFT_REASON;
   if (flagsFor(ctx, subjectName(s)).quest) return QUEST_REASON;
@@ -345,6 +367,57 @@ function magicGearNamed(sheet: CharacterSheet, name: string): BagItem | null {
   return null;
 }
 
+// ── body armour: putting the class's armour on and taking it off ───────
+
+/** The gear slot that draws this hero's body armour (the Knight's plate harness, the Healer's vestments), or null when the chassis's armour has no slot. */
+function bodyArmorRole(sheet: CharacterSheet): SlotRole | null {
+  const slots = slotsForArchetype(sheet.archetypeId);
+  if (!slots) return null;
+  return (["weapon", "outer", "crown"] as const).find((role) => slotIsWornArmor(slots[role])) ?? null;
+}
+
+/** True when this gear slot is where the worn class armour shows and what is there is the plain common piece: taking it off takes the ARMOUR off. */
+function isWornArmorPiece(sheet: CharacterSheet, role: GearRole): boolean {
+  return !isUnarmored(sheet) && classArmorFor(sheet.chassis) !== null && role === bodyArmorRole(sheet) && tierInSlot(sheet, role) === "common";
+}
+
+/** The class armour item when `raw` names it (case, curly apostrophes and a trailing count ignored), else null. */
+function armorItemNamed(sheet: CharacterSheet, raw: string): { label: string; itemName: string } | null {
+  const armor = classArmorFor(sheet.chassis);
+  if (!armor) return null;
+  return normKey(splitCount(raw).base) === normKey(armor.itemName) ? armor : null;
+}
+
+/** Put the class armour on: the same sheet, armoured, with the engine's own armour class. Refused in a fight, while down, and when it is already on. */
+function putOnArmor(sheet: CharacterSheet, name: string, hostilesPresent: boolean): EquipResult {
+  const armor = armorItemNamed(sheet, name);
+  if (!armor) return refusedEquip(sheet, EQUIP_BAG_ONLY_REASON);
+  if (!isUnarmored(sheet)) return refusedEquip(sheet, `you are already wearing ${armor.label}`);
+  const gate = gearChangeBlockedReason(sheet, hostilesPresent);
+  if (gate) return refusedEquip(sheet, gate);
+  if (!packItems(sheet).some((item) => normKey(splitCount(item).base) === normKey(armor.itemName))) return refusedEquip(sheet, NOT_CARRYING_REASON);
+  const next = withArmor(sheet, "class");
+  return {
+    sheet: next,
+    line: `You put on the ${armor.label}. Your armour class goes from ${effectiveArmorClass(sheet)} to ${effectiveArmorClass(next)}.`,
+  };
+}
+
+/** Take the class armour off: unarmored, the item in the pack (added when the sheet's list does not already hold the string). */
+function takeOffArmor(sheet: CharacterSheet, hostilesPresent: boolean): EquipResult {
+  const armor = classArmorFor(sheet.chassis);
+  if (!armor || isUnarmored(sheet)) return refusedEquip(sheet, NO_ARMOR_WORN_REASON);
+  const gate = gearChangeBlockedReason(sheet, hostilesPresent);
+  if (gate) return refusedEquip(sheet, gate);
+  const bare = withArmor(sheet, "none");
+  const held = bare.inventory.some((item) => normKey(splitCount(item).base) === normKey(armor.itemName));
+  const next = held ? bare : { ...bare, inventory: [...bare.inventory, armor.itemName] };
+  return {
+    sheet: next,
+    line: `You take off the ${armor.label}. It goes in your pack. Your armour class goes from ${effectiveArmorClass(sheet)} to ${effectiveArmorClass(next)}.`,
+  };
+}
+
 // ── equip and unequip: the engine's own staging ─────────────────────────
 
 export interface EquipResult {
@@ -373,6 +446,12 @@ function tryEquip(sheet: CharacterSheet, bagIndex: number, hostilesPresent: bool
   const name = gearItemName(arch, item.slot, item.tier) ?? "it";
   const outgoing = itemNameFor(sheet, item.slot);
   const swap = outgoing ? ` Your ${outgoing} is put away.` : "";
+  // A magic piece in the slot that draws the body armour IS armour: an
+  // unarmored hero who wears it is armoured from then on.
+  if (isUnarmored(sheet) && item.slot === bodyArmorRole(sheet) && classArmorFor(sheet.chassis)) {
+    const armoured = withArmor(committed, "class");
+    return { sheet: armoured, line: `You equip the ${name}.${swap} It is armour: your armour class goes from ${effectiveArmorClass(sheet)} to ${effectiveArmorClass(armoured)}.` };
+  }
   return { sheet: committed, line: `You equip the ${name}.${swap}` };
 }
 
@@ -383,13 +462,17 @@ function tryEquip(sheet: CharacterSheet, bagIndex: number, hostilesPresent: bool
  * read off the sheet itself.
  */
 export function equipItem(sheet: CharacterSheet, ref: ItemRef, opts?: { hostilesPresent?: boolean }): EquipResult {
+  if (ref.where === "carried") return putOnArmor(sheet, ref.name, opts?.hostilesPresent === true);
   if (ref.where !== "bag") return refusedEquip(sheet, EQUIP_BAG_ONLY_REASON);
   return tryEquip(sheet, ref.index, opts?.hostilesPresent === true);
 }
 
 /** Take off the magic piece worn in `slot`, through stageUnequip and commitLoadout. It goes to the end of the bag. */
 export function unequipItem(sheet: CharacterSheet, slot: string, opts?: { hostilesPresent?: boolean }): EquipResult {
+  if (slot === ARMOR_SLOT) return takeOffArmor(sheet, opts?.hostilesPresent === true);
   if (!isGearRole(slot)) return refusedEquip(sheet, `there is no ${slot} slot`);
+  if (slotIsBare(sheet, slot)) return refusedEquip(sheet, NO_ARMOR_WORN_REASON);
+  if (isWornArmorPiece(sheet, slot)) return takeOffArmor(sheet, opts?.hostilesPresent === true);
   const gate = gearChangeBlockedReason(sheet, opts?.hostilesPresent === true);
   if (gate) return refusedEquip(sheet, gate);
   const arch = archetypeIdOf(sheet);
@@ -419,6 +502,12 @@ function confirmFor(name: string, count: number): string {
   return count > 1 ? `Destroy one ${name}? You have ${count}; this one is gone for good.` : `Destroy the ${name}? It is gone for good.`;
 }
 
+/** The Unequip button for the worn class armour: free, refused in the engine's own words when gear cannot change right now. */
+function armorUnequipAction(sheet: CharacterSheet, ctx: ItemActionContext): ItemAction {
+  const gate = gearBlockedReason(sheet, ctx);
+  return gate ? disabled("unequip", "Unequip", sentence(gate)) : { id: "unequip", label: "Unequip", enabled: true, cost: "free" };
+}
+
 function dropDestroy(sheet: CharacterSheet, s: Subject, ctx: ItemActionContext): ItemAction[] {
   const reason = parkBlockedReason(sheet, s, ctx);
   const name = subjectName(s);
@@ -436,10 +525,13 @@ export function itemActionsFor(sheet: CharacterSheet, ref: ItemRef, ctx: ItemAct
   const s = resolve(sheet, ref, ctx);
   if (!s) return [];
   switch (s.kind) {
+    case "armor":
+      return [armorUnequipAction(sheet, ctx), disabled("drop", "Drop", WORN_REASON), disabled("destroy", "Destroy", WORN_REASON)];
     case "worn": {
       const gate = gearBlockedReason(sheet, ctx);
       let unequip: ItemAction;
-      if (gate) unequip = disabled("unequip", "Unequip", sentence(gate));
+      if (isWornArmorPiece(sheet, s.role)) unequip = armorUnequipAction(sheet, ctx);
+      else if (gate) unequip = disabled("unequip", "Unequip", sentence(gate));
       else {
         const staged = stageUnequip(sheet.archetypeId, draftFromSheet(sheet), s.role);
         if (!staged.ok) unequip = disabled("unequip", "Unequip", sentence(staged.reason));
@@ -463,6 +555,12 @@ export function itemActionsFor(sheet: CharacterSheet, ref: ItemRef, ctx: ItemAct
     }
     case "carried": {
       const flags = flagsFor(ctx, s.base);
+      const armor = armorItemNamed(sheet, s.base);
+      if (armor && isUnarmored(sheet)) {
+        const gate = gearBlockedReason(sheet, ctx);
+        const equip: ItemAction = gate ? disabled("equip", "Equip", sentence(gate)) : { id: "equip", label: "Equip", enabled: true, cost: "free" };
+        return [equip, ...dropDestroy(sheet, s, ctx)];
+      }
       let use: ItemAction;
       if (!flags.usable) use = disabled("use", useLabelFor(), CANNOT_USE_REASON);
       else {
@@ -516,8 +614,17 @@ export function itemStatusLine(sheet: CharacterSheet, ref: ItemRef, ctx: ItemAct
   const actions = itemActionsFor(sheet, ref, ctx);
   const action = (id: ItemActionId): ItemAction | undefined => actions.find((a) => a.id === id);
   switch (s.kind) {
+    case "armor": {
+      const un = action("unequip");
+      const base = "You are wearing it as your armour.";
+      return un && !un.enabled && un.reason ? `${base} ${un.reason}` : `${base} Unequip takes it off and puts it in your pack: your armour class drops to 10 plus your Dexterity modifier.`;
+    }
     case "worn": {
       const base = `Worn in your ${slotWordOf(sheet, s.role)} slot.`;
+      if (isWornArmorPiece(sheet, s.role)) {
+        const un = action("unequip");
+        return un && !un.enabled && un.reason ? `${base} ${un.reason}` : `${base} It is your armour: Unequip takes it off and puts it in your pack, and your armour class drops to 10 plus your Dexterity modifier.`;
+      }
       if (s.tier === "common") return `${base} It is your own piece, so there is nothing magic to take off.`;
       const un = action("unequip");
       return un && !un.enabled && un.reason ? `${base} ${un.reason}` : `${base} Unequip puts it in your bag.`;
@@ -531,6 +638,12 @@ export function itemStatusLine(sheet: CharacterSheet, ref: ItemRef, ctx: ItemAct
     case "carried": {
       const flags = flagsFor(ctx, s.base);
       const parts: string[] = [];
+      if (armorItemNamed(sheet, s.base) && isUnarmored(sheet)) {
+        const eq = action("equip");
+        parts.push(eq && !eq.enabled && eq.reason ? `Armour you are not wearing. ${eq.reason}` : "Armour you are not wearing. Equip puts it on and sets your armour class from it.");
+        if (flags.quest) parts.push(QUEST_REASON);
+        return parts.join(" ");
+      }
       if (flags.quest) parts.push(QUEST_REASON);
       if (flags.usable) {
         const use = action("use");

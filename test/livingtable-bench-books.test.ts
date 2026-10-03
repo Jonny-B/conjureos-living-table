@@ -199,7 +199,7 @@ test("saves, skills, senses, CR, HP and AC lines", () => {
 
 test("the engine note is honest: only creatures with a token are applied", () => {
   const board = BESTIARY.filter((b) => b.tokenAssetId);
-  assert.deepEqual(board.map((b) => b.id).sort(), ["goblin", "skeleton"]);
+  assert.deepEqual(board.map((b) => b.id).sort(), ["giant-rat", "goblin", "rat", "skeleton"]);
   for (const b of board) assert.match(engineNote(b), /^On the board: the game applies/);
   for (const b of BESTIARY.filter((x) => !x.tokenAssetId)) assert.match(engineNote(b), /^Reference only/);
   assert.match(engineNote(goblin), /The DM rules on every trait/);

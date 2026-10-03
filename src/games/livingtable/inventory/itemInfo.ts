@@ -34,10 +34,11 @@
  * Pure: no React, no canvas, no model call, nothing spent. SRD 5.1 content is
  * CC BY 4.0 (NOTICE.md); the descriptions are our own words.
  */
-import { ARMOR_INCLUDES_SHIELD, type CharacterSheet } from "../characters/creation";
+import { ARMOR_INCLUDES_SHIELD, classArmorFor, withArmor, type CharacterSheet } from "../characters/creation";
 import {
   armorSpeedPenaltyFt,
   equipmentOf,
+  isUnarmored,
   itemNameFor,
   slotIsHandHeld,
   slotIsWornArmor,
@@ -261,8 +262,40 @@ function weaponEntry(o: {
   };
 }
 
+/**
+ * What putting the class's armour on would do, read off the same engine
+ * readers on a throwaway sheet (`withArmor`), for a hero who is not wearing
+ * it: the armour class before and after, and the speed it would cost.
+ */
+function putOnLine(sheet: CharacterSheet): string {
+  const after = withArmor(sheet, "class");
+  const penalty = armorSpeedPenaltyFt(after);
+  const slow = penalty > 0 ? ` It would cost you ${penalty} feet of speed (your Strength is ${sheet.abilities.str}).` : "";
+  return `You are not wearing it. Equip it and your armour class goes from ${effectiveArmorClass(sheet)} to ${effectiveArmorClass(after)}.${slow}`;
+}
+
+/** A body-armour entry that is one chassis's armour line: worn it is the armour line, carried it can be put on. */
+function classArmourEntry(label: string, o: { summary: string; facts: readonly string[] }): Entry {
+  return {
+    kind: "armor",
+    summary: o.summary,
+    facts: o.facts,
+    game: (sheet) => {
+      if (classArmorFor(sheet.chassis)?.label !== label) {
+        return `${DM_RULES_LABEL}. The game does not work your armour class from this entry: your armour line is "${sheet.armorLabel}", armour class ${sheet.armorClass} on the sheet.`;
+      }
+      if (isUnarmored(sheet)) return `${APPLIES_LABEL} once you wear it. ${putOnLine(sheet)}`;
+      return `${APPLIES_LABEL}: it is your body armour. ${armourLine(sheet)} The game does not apply the Stealth disadvantage.`;
+    },
+  };
+}
+
 /** The live armour sentence every body-armour entry shares: the class's armour line is what the engine reads. */
 function armourLine(sheet: CharacterSheet): string {
+  if (isUnarmored(sheet)) {
+    const gear = effectiveArmorClass(sheet) - sheet.armorClass;
+    return `Your armour class is ${effectiveArmorClass(sheet)}: you wear no armour, so it is 10 plus your Dexterity modifier (${signed(sheet.modifiers.dex)})${gear > 0 ? `, plus ${gear} from your gear` : ""}.`;
+  }
   return `Your armour class is ${effectiveArmorClass(sheet)}, built on your class's armour line ("${sheet.armorLabel}", ${sheet.armorClass} on the sheet before gear bonuses).`;
 }
 
@@ -337,9 +370,10 @@ const CATALOGUE: Readonly<Record<string, Entry>> = Object.freeze({
       "The SRD also gives disadvantage on Stealth checks.",
     ],
     game: (sheet) => {
-      if (sheet.armorLabel.toLowerCase() !== "chain mail") {
+      if (classArmorFor(sheet.chassis)?.label !== "chain mail") {
         return `${DM_RULES_LABEL}. The game does not work your armour class from this entry: your class's armour line is "${sheet.armorLabel}", armour class ${sheet.armorClass} on the sheet.`;
       }
+      if (isUnarmored(sheet)) return `${APPLIES_LABEL} once you wear it. ${putOnLine(sheet)} The SRD also gives disadvantage on Stealth checks, which the game does not apply.`;
       const penalty = armorSpeedPenaltyFt(sheet);
       const strength =
         penalty > 0
@@ -359,6 +393,17 @@ const CATALOGUE: Readonly<Record<string, Entry>> = Object.freeze({
     game: (sheet) =>
       `${APPLIES_LABEL}, but not with the SRD's numbers: ${armourLine(sheet)} The game reads your class's armour line, not this entry, and does not apply the Stealth disadvantage.`,
   },
+  "leather armor": classArmourEntry("leather armor", {
+    summary: "Armour of stiffened, boiled leather, light enough to move quietly in.",
+    facts: ["SRD 5.1 light armour.", "Armour class 11 plus your Dexterity modifier."],
+  }),
+  "chain shirt and shield": classArmourEntry("chain shirt and shield", {
+    summary: "A shirt of interlocking rings worn under the clothes, and a shield to go with it.",
+    facts: [
+      "SRD 5.1 medium armour (the chain shirt) and shield.",
+      "Armour class 13 plus Dexterity (at most +2), and +2 for the shield: 15 plus that Dexterity.",
+    ],
+  }),
   shield: {
     kind: "armor",
     summary: "A wooden or metal shield carried on the arm to turn blows aside.",
@@ -653,10 +698,19 @@ function describeWornSlotPiece(sheet: CharacterSheet, role: SlotRole, tier: Equi
         : `${APPLIES_LABEL}: its bonus goes on every saving throw you make, never on armour class. Gear never adds more than +${MAX_TOTAL_SAVE_BONUS} to saves in total.`;
   }
 
+  let summary = tier === "common" ? (base?.summary ?? `Your plain ${commonName}.`) : `The ${TIER_WORD[tier].toLowerCase()} magic version of your ${commonName}.`;
+  // A kit that describes the weapon in its own words (a plain dagger). Words
+  // only: the card says so, and the numbers stay the class weapon's.
+  const note = def.bonusKind === "weapon" ? sheet.weaponNote : undefined;
+  if (note && tier === "common") {
+    summary = `${note.charAt(0).toUpperCase()}${note.slice(1)}.`;
+    facts.push(`That is how the weapon is described. The game's numbers for it are your ${commonName}'s, the ones on this card.`);
+  }
+
   return {
     name,
     kind: slotPieceKind(def.bonusKind),
-    summary: tier === "common" ? (base?.summary ?? `Your plain ${commonName}.`) : `The ${TIER_WORD[tier].toLowerCase()} magic version of your ${commonName}.`,
+    summary,
     facts,
     inGame,
     source: tier === "common" ? "Starting kit" : "Loot",

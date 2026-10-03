@@ -1068,6 +1068,32 @@ export const STARTING_LOADOUT: Equipment = Object.freeze({
 });
 
 /**
+ * WHETHER A HERO WEARS THEIR CLASS'S ARMOUR, as one word on the sheet.
+ *
+ *   "class"  the armour line the class is issued (chain mail, leather, and so
+ *            on; `ARMOR_BY_CHASSIS` in creation.ts). The only state every
+ *            sheet stored before this field existed can be in, so ABSENT
+ *            READS AS "class".
+ *   "none"   no armour and no shield: SRD 5.1 unarmored AC, 10 plus the
+ *            Dexterity modifier. Written by createCharacter for a starting
+ *            kit with `armor: "none"`, and by `withArmor` when a hero takes
+ *            their armour off.
+ *
+ * It is a state of the SHEET and not an empty gear slot, on purpose: the gear
+ * contract above says the four drawn roles are never empty after
+ * normalisation (normalizeEquipment refills them on every load, and that
+ * function sees no sheet). So the storage is unchanged and the READERS
+ * (`tierInSlot`, `equipmentStatus`, `renderPlanFor`, `gearView`) treat an
+ * armour-kind slot whose piece is only the plain common one as bare when the
+ * sheet says "none". A magic armour-kind piece worn on a bare sheet is a real
+ * piece and pays out as ever.
+ */
+export type ArmorState = "class" | "none";
+
+/** What the armour line reads on a hero who wears none. Says the real number's formula, per the honesty rule. */
+export const UNARMORED_LABEL = "No armor (10 + DEX)";
+
+/**
  * Bound on stacked AC from equipment, and the honest reason for it.
  *
  * The Fighter chassis is the only one with two `armor`-kind slots (the owner's
