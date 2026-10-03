@@ -84,7 +84,7 @@ import {
 } from "../../src/games/livingtable/session/combat";
 import { armorDisplayLabel } from "../../src/games/livingtable/menu/equipment";
 import type { TextStyle } from "./overlay";
-import { attachTip, type TipContent } from "./tip";
+import { attachItemCard, attachTip, itemCardIsUp, type ItemCardContent, type TipContent } from "./tip";
 import { pixelText } from "./pixelFont";
 
 // ---- the public contract ----------------------------------------------------
@@ -96,6 +96,23 @@ export interface SheetExtras {
   notes?: Readonly<Record<string, string>>;
   /** The hero's picture, drawn small in the header. Copied, never moved. */
   portrait?: HTMLCanvasElement | null;
+}
+
+/**
+ * What the sheet hands `itemCard` and `onItemAction` for a thing in its equipment list: the section it is under ("Worn", "Bag",
+ * "Carried", "Consumables"), a colon, and the item's name ("Worn:Chain shirt"). One name can appear under two sections, so the section
+ * is part of the key.
+ */
+export function sheetItemKey(section: string, name: string): string {
+  return `${section}:${name}`;
+}
+
+/** The part of openSheet's options that turns equipment chips into item cards. Without `itemCard` the chips keep their plain hover help. */
+export interface SheetItemCards {
+  /** The card for one chip (see sheetItemKey), read when the chip is drawn; null leaves that chip with plain hover help. The card's own content function is read each time it opens. */
+  itemCard?: (key: string) => ItemCardContent | null;
+  /** A button of a pinned card: the chip's key and the action's id. */
+  onItemAction?: (key: string, actionId: string) => void;
 }
 
 export interface SheetView {
@@ -726,6 +743,8 @@ interface Ctx {
   /** The width the view has, for wrapping bitmap text. */
   width(): number;
   offs: Array<() => void>;
+  /** Equipment chips become item cards when the host supplies them (openSheet only; the creation review leaves them plain). */
+  cards?: SheetItemCards;
 }
 
 const STYLE_ID = "lt-sheet-style";
@@ -841,6 +860,7 @@ const CSS = `
 .lts-chips{display:flex;flex-wrap:wrap;gap:5px}
 .lts-item{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:3px 9px;background:var(--s-soft);border:1px solid var(--s-edge);border-radius:99px;overflow-wrap:anywhere}
 .lts-item .k{color:var(--s-muted);font-size:12px}
+.lts-item[data-lt-card]{cursor:pointer}
 .lts-root[data-style="pixel"] .lts-item{border-radius:0;border-width:2px}
 
 .lts-pers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
@@ -1315,7 +1335,15 @@ function equipmentCard(ctx: Ctx, sheet: CharacterSheet, extras: SheetExtras): HT
       chip.append(h("span", undefined, info.name));
       const n = itemCount(info);
       if (n) chip.append(h("span", "k", n));
-      tipOn(ctx, chip, itemTip(info));
+      const key = sheetItemKey(section.label, info.name);
+      const card = ctx.cards?.itemCard?.(key) ?? null;
+      if (card && ctx.cards?.itemCard) {
+        const read = ctx.cards.itemCard;
+        ctx.offs.push(attachItemCard(chip, () => read(key) ?? card, (id) => ctx.cards?.onItemAction?.(key, id), { boundary: ctx.bound(), style: () => ctx.style() }));
+        chip.dataset.ltsItemKey = key;
+      } else {
+        tipOn(ctx, chip, itemTip(info));
+      }
       chips.append(chip);
     }
     sec.append(chips);
@@ -1390,7 +1418,7 @@ function boundaryFor(host: HTMLElement): HTMLElement {
 
 function tipIsUp(): boolean {
   const t = document.getElementById("lt-tip");
-  return !!t && !t.hidden;
+  return (!!t && !t.hidden) || itemCardIsUp();
 }
 
 function isTextTarget(t: EventTarget | null): boolean {
@@ -1402,7 +1430,7 @@ function isTextTarget(t: EventTarget | null): boolean {
 export function openSheet(
   host: HTMLElement,
   sheet: CharacterSheet,
-  opts: { style: TextStyle; extras?: SheetExtras; onNewCharacter?: () => void; onClose: () => void },
+  opts: { style: TextStyle; extras?: SheetExtras; onNewCharacter?: () => void; onClose: () => void } & SheetItemCards,
 ): SheetView {
   injectStyle();
   const restorePosition = ensurePositioned(host);
@@ -1416,7 +1444,7 @@ export function openSheet(
   root.tabIndex = -1;
   root.setAttribute("role", "dialog");
   root.setAttribute("aria-label", "Character sheet");
-  const ctx: Ctx = { style: () => style, bound: () => boundaryFor(host), width: () => root.clientWidth || 358, offs: [] };
+  const ctx: Ctx = { style: () => style, bound: () => boundaryFor(host), width: () => root.clientWidth || 358, offs: [], cards: { itemCard: opts.itemCard, onItemAction: opts.onItemAction } };
 
   function render(): void {
     const keepScroll = root.scrollTop;

@@ -13,7 +13,7 @@
  *               few exchanges. The DM knows everything and narrates only what
  *               the hero can see or hear.
  *   total power A closed set of effects (give, take, potion, loot, heal, harm,
- *               place, remove, alter, tile, door, monster), each bounded by the
+ *               place, remove, alter, tile, door, monster, push, hurt, prone), each bounded by the
  *               validator, never a raw number the engine did not roll: dice
  *               are the engine's, damage and healing are dice strings the
  *               engine rolls in the tray, chests are the engine's own loot
@@ -25,7 +25,14 @@
  *               cache), parses and validates the answer with this module's own
  *               code, and on a bad answer sends the errors back for ONE repair
  *               round. Provider errors are mapped to short player-facing words;
- *               raw provider text is never shown.
+ *               raw provider text is never shown. Every askDm can report its
+ *               whole exchange (the input, every raw answer, the errors, the
+ *               outcome, the time) through opts.onExchange, for the adventure
+ *               export.
+ *   the board   Narration never moves a creature. A creature moves, is hurt or
+ *               is knocked down only through a push, hurt or prone effect, and
+ *               a kick or a shove is an attack or contest check the engine rolls,
+ *               with those effects in the success branch.
  *
  * The game's own rules are reused by symbol: SKILL_ABILITY (the 18 skills) and
  * the magic-gear name filter the game applies to DM-placed props. The filter is
@@ -35,6 +42,7 @@
 import { SKILL_ABILITY } from "../../src/games/livingtable/characters/creation";
 import { findMagicGearNameIn } from "../../src/games/livingtable/dm/turnSchema";
 import { parseDiceNotation } from "../../src/games/livingtable/rules/dice";
+import type { DmExchange } from "../../src/games/livingtable/session/adventureExport";
 
 // ── the shapes the integration lane codes against ────────────────────────
 
@@ -78,8 +86,27 @@ export interface DmSceneView {
     languages?: string[];
     /** What each carried item is, one line each (the text the player reads when hovering it). */
     items?: { name: string; what: string }[];
+    /** True while the hero is hidden (a successful sneak or hide). Left out or false renders nothing. */
+    hidden?: boolean;
   };
-  monsters: { id: string; name: string; hp: number; maxHp: number; ac: number; at: { x: number; y: number }; awake: boolean; seenByHero: boolean }[];
+  monsters: {
+    id: string;
+    name: string;
+    hp: number;
+    maxHp: number;
+    ac: number;
+    at: { x: number; y: number };
+    awake: boolean;
+    seenByHero: boolean;
+    /** Knocked down. Left out or false renders nothing. */
+    prone?: boolean;
+    /** True when it has noticed the hero, false when it has not; left out says nothing about it. */
+    awareOfHero?: boolean;
+  }[];
+  /** Slain creatures lying where they fell. items: what is still on the body (anything pickpocketed is already gone). */
+  bodies?: { id: string; name: string; at: { x: number; y: number }; looted: boolean; items: string[] }[];
+  /** Items lying loose on the floor. */
+  piles?: { at: { x: number; y: number }; items: string[] }[];
   fight: null | { round: number; whoseTurn: string; heroMovementFt: number; heroActionReady: boolean };
   /** Short words: which feature ids and monster ids the hero can see now. */
   visibleToHero: string;
@@ -98,8 +125,14 @@ export type DmAsk = { kind: "freehand"; text: string } | { kind: "examine"; at: 
 export type DmCost = "free" | "object" | "action";
 
 export type DmEffect =
-  /** desc: what the item is, shown to the player on hover (1 to 200 chars). */
-  | { type: "give"; item: string; desc?: string }
+  /**
+   * desc: what the item is, shown to the player on hover (1 to 200 chars).
+   * quest: true marks a quest item (it cannot be dropped or destroyed).
+   * usable: true gives the item a Use button; useSay (1 to 160 chars, first
+   * person) is what that button sends to the DM, and needs usable. The flags are
+   * present only when true; an absent flag means false.
+   */
+  | { type: "give"; item: string; desc?: string; quest?: boolean; usable?: boolean; useSay?: string }
   | { type: "take"; item: string }
   | { type: "potion"; count: number }
   | { type: "loot" }
@@ -110,7 +143,25 @@ export type DmEffect =
   | { type: "alter"; id: string; asset?: string; label?: string; secret?: string | null }
   | { type: "tile"; x: number; y: number; tile: string }
   | { type: "door"; state: "open" | "closed" | "locked" | "unlocked" }
-  | { type: "monster"; id?: string; act: "wake" | "calm" | "flee" | "spawn"; asset?: string; x?: number; y?: number };
+  | { type: "monster"; id?: string; act: "wake" | "calm" | "flee" | "spawn"; asset?: string; x?: number; y?: number }
+  /**
+   * Move a creature 1 or 2 squares straight away from the hero. The bench uses
+   * the engine's own pushDestination, which stops at walls, props, other tokens
+   * and the edge, so the creature may move fewer squares than asked.
+   */
+  | { type: "push"; id: string; squares: 1 | 2 }
+  /**
+   * Hurt a creature. Only valid inside the SUCCESS branch of an "attack" or
+   * "contest" check, on the creature that check is against. In an attack
+   * branch dice is absent and the engine applies its own weapon or unarmed
+   * damage (the validator adds this effect to every attack's success branch
+   * that lacks one); when dice is present the engine rolls those instead. In a
+   * contest branch dice is always present. damageType is one of the SRD's
+   * thirteen, lower case.
+   */
+  | { type: "hurt"; id: string; dice?: string; damageType?: string }
+  /** Knock a creature prone (the bench applies the engine's own prone rules and its condition immunities). */
+  | { type: "prone"; id: string };
 
 /** The game's own buttons a suggested move can stand for (the game runs its own rule instead of asking the DM). */
 export type DmOptionAct = "attack" | "use" | "potion" | "rest" | "end";
@@ -134,10 +185,26 @@ export interface DmBranch {
   options?: DmOption[];
 }
 
+export type DmCheckKind = "check" | "attack" | "contest";
+
+/**
+ * One check. kind absent means "check", the plain skill or ability check against
+ * a DC (skill or ability, and dc, are present). The two engine kinds carry no dc:
+ *   attack   the engine rolls the hero's attack (a kick when weapon is
+ *            "unarmed", else the wielded weapon, or unarmed with none) against the
+ *            creature's AC. Its success branch always holds one hurt effect.
+ *   contest  the hero's skill (contest.skill) against the creature's (contest.versus,
+ *            a skill name or an ability key; absent means the better of its
+ *            Athletics and Acrobatics), both rolled by the engine.
+ * For those two kinds skill, ability and dc are never set.
+ */
 export interface DmCheck {
+  kind?: DmCheckKind;
   skill?: string;
   ability?: DmAbility;
-  dc: number;
+  dc?: number;
+  attack?: { against: string; weapon?: "unarmed" | "weapon" };
+  contest?: { against: string; skill: string; versus?: string };
   advantage?: "advantage" | "disadvantage";
   why: string;
   success: DmBranch;
@@ -168,7 +235,10 @@ export interface DmValidationContext {
 
 // ── limits (SRD-flavoured, one place) ────────────────────────────────────
 
-export const DM_EFFECT_TYPES = ["give", "take", "potion", "loot", "heal", "harm", "place", "remove", "alter", "tile", "door", "monster"] as const;
+export const DM_EFFECT_TYPES = ["give", "take", "potion", "loot", "heal", "harm", "place", "remove", "alter", "tile", "door", "monster", "push", "hurt", "prone"] as const;
+export const DM_CHECK_KINDS: readonly DmCheckKind[] = ["check", "attack", "contest"];
+/** The SRD's damage types, the only ones a hurt may name. */
+export const DM_DAMAGE_TYPES: readonly string[] = ["acid", "bludgeoning", "cold", "fire", "force", "lightning", "necrotic", "piercing", "poison", "psychic", "radiant", "slashing", "thunder"];
 export const DM_COSTS: readonly DmCost[] = ["free", "object", "action"];
 export const DM_OPTION_ACTS: readonly DmOptionAct[] = ["attack", "use", "potion", "rest", "end"];
 export const DM_ABILITIES: readonly DmAbility[] = ["str", "dex", "con", "int", "wis", "cha"];
@@ -203,6 +273,10 @@ export const DM_LIMITS = Object.freeze({
   maxOptions: 4,
   maxOptionLabel: 32,
   maxOptionSay: 160,
+  /** A usable item's Use button sends this text (it is the same size as an option's say). */
+  maxUseSayChars: 160,
+  /** A push moves a creature one or two squares. */
+  maxPushSquares: 2,
 });
 
 const ABILITY_WORDS: Record<string, DmAbility> = {
@@ -458,7 +532,19 @@ function checkDice(v: unknown, sides: readonly number[], maxMod: number, where: 
   return { dice: `${parsed.count}d${parsed.sides}${parsed.modifier ? `+${parsed.modifier}` : ""}` };
 }
 
-function validateEffect(raw: unknown, ctx: DmValidationContext, where: string, allowHarm: boolean, errors: string[]): DmEffect | null {
+/**
+ * What an effects list may hold, by where it sits. harm: a check's failure
+ * branch only. hurt: set only on the success branch of an attack or contest
+ * check, naming the one creature the check is against.
+ */
+interface EffectScope {
+  allowHarm: boolean;
+  hurt?: { kind: "attack" | "contest"; against: string };
+}
+
+const TOP_SCOPE: EffectScope = { allowHarm: false };
+
+function validateEffect(raw: unknown, ctx: DmValidationContext, where: string, scope: EffectScope, errors: string[]): DmEffect | null {
   if (!isRec(raw)) {
     errors.push(`${where} must be an object with a "type"`);
     return null;
@@ -513,7 +599,41 @@ function validateEffect(raw: unknown, ctx: DmValidationContext, where: string, a
     case "give": {
       const it = item(raw.item);
       const d = desc(raw.desc);
-      if (it !== null && d !== null) effect = d === undefined ? { type, item: it } : { type, item: it, desc: d };
+      const flag = (v: unknown, name: string): boolean | undefined | null => {
+        if (v === undefined || v === null) return undefined;
+        if (typeof v !== "boolean") {
+          errors.push(`${where}.${name} must be true or false`);
+          return null;
+        }
+        return v;
+      };
+      const quest = flag(raw.quest, "quest");
+      const usable = flag(raw.usable, "usable");
+      let useSay: string | undefined | null;
+      if (raw.useSay === undefined || raw.useSay === null) useSay = undefined;
+      else {
+        const t = optionText(raw.useSay, DM_LIMITS.maxUseSayChars);
+        const magic = t ? magicGearIn(t, true) : null;
+        if (t === null) {
+          errors.push(`${where}.useSay must be 1 to ${DM_LIMITS.maxUseSayChars} characters`);
+          useSay = null;
+        } else if (magic) {
+          errors.push(`${where}.useSay names magic gear ("${magic}"); describe the use without the name`);
+          useSay = null;
+        } else useSay = t;
+        if (useSay !== null && usable !== true) {
+          errors.push(`${where}.useSay only goes with "usable": true (the Use button sends it)`);
+          useSay = null;
+        }
+      }
+      if (it !== null && d !== null && quest !== null && usable !== null && useSay !== null) {
+        const out: Extract<DmEffect, { type: "give" }> = { type, item: it };
+        if (d !== undefined) out.desc = d;
+        if (quest === true) out.quest = true;
+        if (usable === true) out.usable = true;
+        if (useSay !== undefined) out.useSay = useSay;
+        effect = out;
+      }
       break;
     }
     case "take": {
@@ -537,7 +657,7 @@ function validateEffect(raw: unknown, ctx: DmValidationContext, where: string, a
       break;
     }
     case "harm": {
-      if (!allowHarm) {
+      if (!scope.allowHarm) {
         errors.push(`${where} harm is only allowed inside a check's failure branch (a trap, a fall); never as a plain effect or in a success branch`);
         break;
       }
@@ -650,11 +770,55 @@ function validateEffect(raw: unknown, ctx: DmValidationContext, where: string, a
       }
       break;
     }
+    case "push": {
+      const id = typeof raw.id === "string" ? raw.id.trim() : "";
+      if (!ctx.monsterIds.includes(id)) errors.push(`${where}.id "${id}" is not a creature id; known: ${ctx.monsterIds.join(", ") || "none"}`);
+      const squares = intIn(raw.squares, 1, DM_LIMITS.maxPushSquares);
+      if (squares === null) errors.push(`${where}.squares must be 1 or ${DM_LIMITS.maxPushSquares}`);
+      if (errors.length === n0 && squares !== null) effect = { type, id, squares: squares as 1 | 2 };
+      break;
+    }
+    case "prone": {
+      const id = typeof raw.id === "string" ? raw.id.trim() : "";
+      if (!ctx.monsterIds.includes(id)) errors.push(`${where}.id "${id}" is not a creature id; known: ${ctx.monsterIds.join(", ") || "none"}`);
+      else effect = { type, id };
+      break;
+    }
+    case "hurt": {
+      if (!scope.hurt) {
+        errors.push(`${where} hurt is only allowed inside the success branch of an "attack" or "contest" check, on the creature the check is against (a kick that lands, a shove into a wall); never as a plain effect, in a failure branch or in a plain skill check. A hurt creature is the engine's to damage: ask for an attack check`);
+        break;
+      }
+      const id = typeof raw.id === "string" ? raw.id.trim() : "";
+      if (!ctx.monsterIds.includes(id)) errors.push(`${where}.id "${id}" is not a creature id; known: ${ctx.monsterIds.join(", ") || "none"}`);
+      else if (id !== scope.hurt.against) errors.push(`${where}.id "${id}" must be the creature this check is against ("${scope.hurt.against}")`);
+      let dice: string | undefined;
+      if (raw.dice === undefined || raw.dice === null || raw.dice === "") {
+        if (scope.hurt.kind === "contest") errors.push(`${where}.dice is required in a contest check (an attack may leave it out: the engine then uses its own damage)`);
+      } else {
+        const d = checkDice(raw.dice, DM_LIMITS.healSides, DM_LIMITS.maxHealModifier, where);
+        if ("error" in d) errors.push(d.error);
+        else dice = d.dice;
+      }
+      let damageType: string | undefined;
+      if (raw.damageType !== undefined && raw.damageType !== null && raw.damageType !== "") {
+        const t = typeof raw.damageType === "string" ? raw.damageType.trim().toLowerCase() : "";
+        if (!DM_DAMAGE_TYPES.includes(t)) errors.push(`${where}.damageType "${String(raw.damageType)}" is not a damage type; use one of ${DM_DAMAGE_TYPES.join(", ")}`);
+        else damageType = t;
+      }
+      if (errors.length === n0) {
+        const out: Extract<DmEffect, { type: "hurt" }> = { type, id };
+        if (dice !== undefined) out.dice = dice;
+        if (damageType !== undefined) out.damageType = damageType;
+        effect = out;
+      }
+      break;
+    }
   }
   return effect;
 }
 
-function validateEffects(raw: unknown, ctx: DmValidationContext, where: string, allowHarm: boolean, errors: string[]): DmEffect[] {
+function validateEffects(raw: unknown, ctx: DmValidationContext, where: string, scope: EffectScope, errors: string[]): DmEffect[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
     errors.push(`${where} must be an array`);
@@ -663,7 +827,7 @@ function validateEffects(raw: unknown, ctx: DmValidationContext, where: string, 
   if (raw.length > DM_LIMITS.maxEffects) errors.push(`${where} has ${raw.length} effects; at most ${DM_LIMITS.maxEffects}`);
   const out: DmEffect[] = [];
   raw.slice(0, DM_LIMITS.maxEffects).forEach((e, i) => {
-    const eff = validateEffect(e, ctx, `${where}[${i}]`, allowHarm, errors);
+    const eff = validateEffect(e, ctx, `${where}[${i}]`, scope, errors);
     if (eff) out.push(eff);
   });
   return out;
@@ -719,7 +883,7 @@ function validateOptions(raw: unknown, where: string, errors: string[]): DmOptio
   return out.length ? out : undefined;
 }
 
-function validateBranch(raw: unknown, ctx: DmValidationContext, where: string, allowHarm: boolean, errors: string[]): DmBranch | null {
+function validateBranch(raw: unknown, ctx: DmValidationContext, where: string, scope: EffectScope, errors: string[]): DmBranch | null {
   if (!isRec(raw)) {
     errors.push(`${where} must be an object {"narration","effects"}`);
     return null;
@@ -727,7 +891,8 @@ function validateBranch(raw: unknown, ctx: DmValidationContext, where: string, a
   const n0 = errors.length;
   const narration = str(raw.narration, 1, 100000);
   if (narration === null) errors.push(`${where}.narration must be a non-empty string`);
-  const effects = validateEffects(raw.effects, ctx, `${where}.effects`, allowHarm, errors);
+  const effects = validateEffects(raw.effects, ctx, `${where}.effects`, scope, errors);
+  if (effects.filter((e) => e.type === "hurt").length > 1) errors.push(`${where}.effects has more than one hurt; at most one per branch`);
   const options = validateOptions(raw.options, `${where}.options`, errors);
   if (narration === null || errors.length > n0) return null;
   const branch: DmBranch = { narration: clip(narration, DM_LIMITS.maxNarrationChars), effects };
@@ -740,6 +905,129 @@ function clip(s: string, max: number): string {
   const cut = s.slice(0, max);
   const stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
   return stop > max * 0.5 ? cut.slice(0, stop + 1) : `${cut.trimEnd()}...`;
+}
+
+/** A creature id the check may name; pushes its own error when it is not one. */
+function creatureId(v: unknown, ctx: DmValidationContext, where: string, errors: string[]): string | null {
+  const id = typeof v === "string" ? v.trim() : "";
+  if (!ctx.monsterIds.includes(id)) {
+    errors.push(`${where} "${id}" is not a creature id; known: ${ctx.monsterIds.join(", ") || "none"}`);
+    return null;
+  }
+  return id;
+}
+
+/** The hero's skill, spelled any way and held to the skills this table offers; null (with an error) otherwise. */
+function heroSkill(v: unknown, ctx: DmValidationContext, where: string, errors: string[]): string | null {
+  const s = typeof v === "string" ? normaliseSkill(v) : null;
+  if (s === null) {
+    errors.push(`${where} "${String(v)}" is not a known skill; skills: ${ctx.skills.join(", ")}`);
+    return null;
+  }
+  if (ctx.skills.length > 0 && !ctx.skills.some((k) => foldWords(k) === foldWords(s))) {
+    errors.push(`${where} "${s}" is not available here; skills: ${ctx.skills.join(", ")}`);
+    return null;
+  }
+  return ctx.skills.find((k) => foldWords(k) === foldWords(s)) ?? s;
+}
+
+/**
+ * Validate one check of any kind. A plain check is exactly what it always was
+ * (skill or ability, dc 5 to 30). An "attack" names the creature it is against
+ * (and optionally unarmed or weapon) and needs no dc; a "contest" names the
+ * creature, the hero's skill and optionally the creature's skill or ability, and
+ * needs no dc. For those two the success branch may hold a hurt on that creature,
+ * and an attack's success branch always ends up holding exactly one (the hit
+ * deals the engine's damage; it is added in front when the model left it out).
+ */
+function validateCheck(c: unknown, ctx: DmValidationContext, errors: string[]): DmCheck | undefined {
+  if (!isRec(c)) {
+    errors.push("check must be an object");
+    return undefined;
+  }
+  const n0 = errors.length;
+  let kind: DmCheckKind = "check";
+  if (c.kind !== undefined && c.kind !== null && c.kind !== "") {
+    if (typeof c.kind !== "string" || !(DM_CHECK_KINDS as readonly string[]).includes(c.kind)) errors.push(`check.kind must be one of ${DM_CHECK_KINDS.join(", ")} or left out`);
+    else kind = c.kind as DmCheckKind;
+  }
+  const n1 = errors.length;
+
+  let skill: string | undefined;
+  let ability: DmAbility | undefined;
+  let dc: number | null = null;
+  let attack: DmCheck["attack"];
+  let contest: DmCheck["contest"];
+  let against: string | null = null;
+
+  if (kind === "check") {
+    if (c.skill !== undefined && c.skill !== null && c.skill !== "") skill = heroSkill(c.skill, ctx, "check.skill", errors) ?? undefined;
+    if (c.ability !== undefined && c.ability !== null && c.ability !== "") {
+      const a = typeof c.ability === "string" ? normaliseAbility(c.ability) : null;
+      if (a === null) errors.push(`check.ability must be one of ${DM_ABILITIES.join(", ")}`);
+      else ability = a;
+    }
+    if (skill === undefined && ability === undefined && errors.length === n1) errors.push("check needs a skill (like Perception) or an ability (like str)");
+    dc = intIn(c.dc, DM_LIMITS.minDc, DM_LIMITS.maxDc);
+    if (dc === null) errors.push(`check.dc must be a whole number from ${DM_LIMITS.minDc} to ${DM_LIMITS.maxDc}`);
+  } else if (kind === "attack") {
+    if (!isRec(c.attack)) errors.push('check.attack must be an object {"against": creatureId, "weapon": "unarmed" | "weapon"} when kind is "attack"');
+    else {
+      against = creatureId(c.attack.against, ctx, "check.attack.against", errors);
+      let weapon: "unarmed" | "weapon" | undefined;
+      const w = c.attack.weapon;
+      if (w !== undefined && w !== null && w !== "") {
+        if (w !== "unarmed" && w !== "weapon") errors.push('check.attack.weapon must be "unarmed" or "weapon" or left out');
+        else weapon = w;
+      }
+      if (against !== null) attack = weapon ? { against, weapon } : { against };
+    }
+  } else {
+    if (!isRec(c.contest)) errors.push('check.contest must be an object {"against": creatureId, "skill": the hero\'s skill, "versus": the creature\'s skill or ability} when kind is "contest"');
+    else {
+      against = creatureId(c.contest.against, ctx, "check.contest.against", errors);
+      const mine = heroSkill(c.contest.skill, ctx, "check.contest.skill", errors);
+      let versus: string | undefined;
+      const v = c.contest.versus;
+      if (v !== undefined && v !== null && v !== "") {
+        const theirSkill = typeof v === "string" ? normaliseSkill(v) : null;
+        const theirAbility = theirSkill === null && typeof v === "string" ? normaliseAbility(v) : null;
+        if (theirSkill !== null) versus = theirSkill;
+        else if (theirAbility !== null) versus = theirAbility;
+        else errors.push(`check.contest.versus "${String(v)}" is not a skill or an ability; use a skill name like Athletics or an ability key like str, or leave it out`);
+      }
+      if (against !== null && mine !== null) contest = versus !== undefined ? { against, skill: mine, versus } : { against, skill: mine };
+    }
+  }
+
+  let advantage: "advantage" | "disadvantage" | undefined;
+  if (c.advantage !== undefined && c.advantage !== null && c.advantage !== "") {
+    if (c.advantage !== "advantage" && c.advantage !== "disadvantage") errors.push('check.advantage must be "advantage" or "disadvantage" or left out');
+    else advantage = c.advantage;
+  }
+  const why = str(c.why, 1, DM_LIMITS.maxWhyChars);
+  if (why === null) errors.push(`check.why must be 1 to ${DM_LIMITS.maxWhyChars} characters`);
+
+  const hurtScope: EffectScope = kind !== "check" && against !== null ? { allowHarm: false, hurt: { kind, against } } : { allowHarm: false };
+  const success = validateBranch(c.success, ctx, "check.success", hurtScope, errors);
+  const failure = validateBranch(c.failure, ctx, "check.failure", { allowHarm: true }, errors);
+
+  // An attack that hits hurts: put the engine's own damage in front when the branch left it out.
+  if (success && kind === "attack" && against !== null && !success.effects.some((e) => e.type === "hurt")) {
+    if (success.effects.length >= DM_LIMITS.maxEffects) errors.push(`check.success.effects is full; an attack's success branch also deals the engine's damage, so leave room for it (at most ${DM_LIMITS.maxEffects} effects)`);
+    else success.effects = [{ type: "hurt", id: against }, ...success.effects];
+  }
+
+  if (errors.length > n0 || why === null || !success || !failure) return undefined;
+  const check: DmCheck = { why, success, failure };
+  if (kind !== "check") check.kind = kind;
+  if (dc !== null) check.dc = dc;
+  if (skill !== undefined) check.skill = skill;
+  if (ability !== undefined) check.ability = ability;
+  if (attack) check.attack = attack;
+  if (contest) check.contest = contest;
+  if (advantage !== undefined) check.advantage = advantage;
+  return check;
 }
 
 /**
@@ -772,48 +1060,9 @@ export function validateDmReply(raw: unknown, ctx: DmValidationContext): { ok: t
     errors.push(`cost "action" is not available: the hero has already used their action this turn. Use cost "free" or "object" instead, or make the hero wait for their next turn`);
   }
 
-  const effects = validateEffects(raw.effects, ctx, "effects", false, errors);
+  const effects = validateEffects(raw.effects, ctx, "effects", TOP_SCOPE, errors);
 
-  let check: DmCheck | undefined;
-  if (hasCheck) {
-    const c = raw.check;
-    if (!isRec(c)) errors.push("check must be an object");
-    else {
-      const n0 = errors.length;
-      let skill: string | undefined;
-      let ability: DmAbility | undefined;
-      if (c.skill !== undefined && c.skill !== null && c.skill !== "") {
-        const s = typeof c.skill === "string" ? normaliseSkill(c.skill) : null;
-        if (s === null) errors.push(`check.skill "${String(c.skill)}" is not a known skill; skills: ${ctx.skills.join(", ")}`);
-        else if (ctx.skills.length > 0 && !ctx.skills.some((k) => foldWords(k) === foldWords(s))) {
-          errors.push(`check.skill "${s}" is not available here; skills: ${ctx.skills.join(", ")}`);
-        } else skill = ctx.skills.find((k) => foldWords(k) === foldWords(s)) ?? s;
-      }
-      if (c.ability !== undefined && c.ability !== null && c.ability !== "") {
-        const a = typeof c.ability === "string" ? normaliseAbility(c.ability) : null;
-        if (a === null) errors.push(`check.ability must be one of ${DM_ABILITIES.join(", ")}`);
-        else ability = a;
-      }
-      if (skill === undefined && ability === undefined && errors.length === n0) errors.push("check needs a skill (like Perception) or an ability (like str)");
-      const dc = intIn(c.dc, DM_LIMITS.minDc, DM_LIMITS.maxDc);
-      if (dc === null) errors.push(`check.dc must be a whole number from ${DM_LIMITS.minDc} to ${DM_LIMITS.maxDc}`);
-      let advantage: "advantage" | "disadvantage" | undefined;
-      if (c.advantage !== undefined && c.advantage !== null && c.advantage !== "") {
-        if (c.advantage !== "advantage" && c.advantage !== "disadvantage") errors.push('check.advantage must be "advantage" or "disadvantage" or left out');
-        else advantage = c.advantage;
-      }
-      const why = str(c.why, 1, DM_LIMITS.maxWhyChars);
-      if (why === null) errors.push(`check.why must be 1 to ${DM_LIMITS.maxWhyChars} characters`);
-      const success = validateBranch(c.success, ctx, "check.success", false, errors);
-      const failure = validateBranch(c.failure, ctx, "check.failure", true, errors);
-      if (errors.length === n0 && dc !== null && why !== null && success && failure) {
-        check = { dc, why, success, failure };
-        if (skill !== undefined) check.skill = skill;
-        if (ability !== undefined) check.ability = ability;
-        if (advantage !== undefined) check.advantage = advantage;
-      }
-    }
-  }
+  const check = hasCheck ? validateCheck(raw.check, ctx, errors) : undefined;
 
   let remember: string[] | undefined;
   if (raw.remember !== undefined && raw.remember !== null) {
@@ -864,9 +1113,11 @@ HOW YOU RUN THE TABLE
 - Freehand: the player may try anything a person could try. You decide what happens. If an action is trivial or certain (walking over, looking around, opening an unlocked door, picking up a plain item, saying something), it just happens: no check. If it is impossible or against the world's logic, say so in the fiction and let it fail without a check. If the outcome is truly uncertain and the stakes matter, ask for exactly ONE check with a fair DC (5 very easy, 10 easy, 15 medium, 20 hard, 25 very hard) and write BOTH outcomes now: the engine rolls the dice and plays the branch the dice pick. Never narrate or hint at the dice result outside the branches. The top-level narration for a check describes the attempt at its tense moment, before the result.
 - Context aware: use the room, the features, the pack and the history. Looking into a drain grate, under a bed, behind a loose stone or inside a barrel may turn up something interesting at your discretion, often behind a Perception or Investigation check (try a give, a potion, a loot, or a place for a small find). Not every look pays out; most plain things hold nothing, and saying so is fine. Do not invent an out-of-place windfall.
 - Chests and loot: the ENGINE rolls the contents of chests when opened. Never invent what is inside a chest (you may describe the chest and its lock). When a hidden stash or a fallen foe should hold real gear, use {"type":"loot"} and let the engine roll it, rarely. You may give plain flavour items (a brass key, a letter, a coin purse, a rope) freely, never magic gear by name. A found healing potion is {"type":"potion","count":1}.
-- Inventory: you see everything the hero wears, packs and carries. Use it. When the player uses a carried item, honour it. When the story takes something (a bribe, a rope left tied to a ledge, a key that snaps), use take with the item's name. When the story gives something, use give, and ALWAYS include a "desc" saying what the item is, roughly what it is worth and that it is mundane (real magic comes only from the engine's loot): the player hovers items to read exactly what they are, so they must never be left guessing.
+- Inventory: you see everything the hero wears, packs and carries. Use it. When the player uses a carried item, honour it. When the story takes something (a bribe, a rope left tied to a ledge, a key that snaps), use take with the item's name. When the story gives something, use give, and ALWAYS include a "desc" saying what the item is, roughly what it is worth and that it is mundane (real magic comes only from the engine's loot): the player hovers items to read exactly what they are, so they must never be left guessing. Give flags: "quest" for a story item (it cannot be dropped); "usable" with a "useSay" for an item the hero can try to use (its Use button sends useSay to you).
 - The hero is a person: see THE HERO for ancestry, background, alignment, personality and backstory. They are hooks you can use (an old debt, a flaw that tempts, a bond that is tested), lightly and only when it fits; never let them override the world. Traits marked "the DM rules on this" are NOT applied by the engine: honour them yourself when you rule (a dwarf's darkvision in a dark room, a halfling's Lucky on a natural 1, an elf's trance). Traits marked "the engine applies this" are already in the numbers, so do not apply them twice.
 - Monsters: you control how they act around the hero (wake, calm, flee, spawn a reinforcement sparingly). The engine rolls their attacks. Do not narrate the hero's death or a hit the engine has not rolled. Do not move the hero and do not set their hit points; heal and harm are dice the engine rolls.
+- THE BOARD CHANGES ONLY THROUGH EFFECTS. If you narrate a creature moving, being hurt, knocked down or killed, the matching effect MUST be in the reply (push, hurt, prone): narration alone moves nothing, and the player sees it standing there unharmed. A kick or shove is the engine's: ask for an attack check (a kick: kind "attack", weapon "unarmed") or a contest check (a shove: kind "contest") and put push, prone and hurt in the success branch; the top-level narration describes only the attempt.
+- Bodies: a slain creature's body stays where it fell and the player loots it through the engine (see BODIES), so never invent or give what a body or pile holds.
 - Fairness: a clever idea deserves a better DC or advantage. A foolish one deserves disadvantage or a plain no. Be generous with fun, strict with physics.
 - Narration: second person, present tense, 1 to 3 sentences, vivid, no game numbers (no DCs, HP, dice or modifiers), no meta talk. A speaking character gets a "speaker" name.
 - Next moves: end EVERY answer (and every check branch) with 2 to 4 "options": buttons for things the hero could plausibly try next, given what was just revealed and where they stand (for example after a loose stone turns up: "Pull the stone loose", "Tap it with your sword", "Leave it"). Include a cautious or leave-it option whenever there is a choice to walk away. Never offer what the hero cannot do right now: no attack with no enemy in sight, no potion with none left, no rest while a foe is awake or in a fight. Set "act" ONLY when the move is exactly one of the game's own buttons ("attack": strike the foe in reach; "use": use the door or chest beside them; "potion": drink a healing potion; "rest": take a long rest; "end": end the turn in a fight), so the game runs its own rule instead of asking you; leave "act" out for every other move. The player may ignore every option and type something else.
@@ -885,9 +1136,12 @@ const FORMAT = `OUTPUT FORMAT. Reply with ONE JSON object and nothing else: no m
   "cost": "free" | "object" | "action",
   "effects": [Effect],              // happen at once, at most 6; [] for none
   "check": {                        // optional: only when the outcome is uncertain
-    "skill": string,                // one of the 18 skills, e.g. "Perception" (or use "ability")
-    "ability": "str"|"dex"|"con"|"int"|"wis"|"cha",   // optional: a raw ability check
-    "dc": number,                   // 5 to 30
+    "kind": "check"|"attack"|"contest",   // optional, default "check"
+    "skill": string,                // kind check: one of the 18 skills, e.g. "Perception" (or use "ability")
+    "ability": "str"|"dex"|"con"|"int"|"wis"|"cha",   // kind check, optional: a raw ability check
+    "dc": number,                   // kind check only, 5 to 30
+    "attack": {"against": monsterId, "weapon": "unarmed"|"weapon"},   // kind attack: the engine rolls the hero's attack against the creature's AC; a kick is "unarmed"
+    "contest": {"against": monsterId, "skill": string, "versus": string},   // kind contest: the hero's skill against the creature's (a shove: "Athletics"); versus is optional (skill or ability; default its better of Athletics, Acrobatics)
     "advantage": "advantage"|"disadvantage",           // optional
     "why": string,                  // short: what is being tested
     "success": { "narration": string, "effects": [Effect], "options": [Option] },
@@ -898,7 +1152,7 @@ const FORMAT = `OUTPUT FORMAT. Reply with ONE JSON object and nothing else: no m
 }
 Option is {"label":string,"say":string,"act":"attack"|"use"|"potion"|"rest"|"end"}: label is the button text (1 to 32 chars, an imperative like "Pull the stone loose"); say is what the hero does if it is picked, first person, 1 to 160 chars ("I pull the loose stone out of the wall"); act is optional and only for the game's own buttons.
 Effect is one of (at most 6 per effects list, unknown fields ignored, unknown types rejected):
-  {"type":"give","item":string,"desc":string}    a plain flavour item into the pack (item 1 to 60 chars, never magic gear; desc 1 to 200 chars: what it is, roughly what it is worth, that it is mundane; always give a desc)
+  {"type":"give","item":string,"desc":string,"quest":true,"usable":true,"useSay":string}    a plain flavour item into the pack (item 1 to 60 chars, never magic gear; desc 1 to 200 chars: what it is, roughly what it is worth, that it is mundane; always give a desc); quest and usable are optional, true only when they apply; useSay (1 to 160 chars) needs usable
   {"type":"take","item":string}                  remove a carried item by name
   {"type":"potion","count":1|2}                  healing potions
   {"type":"loot"}                                the engine rolls real loot
@@ -910,10 +1164,15 @@ Effect is one of (at most 6 per effects list, unknown fields ignored, unknown ty
   {"type":"tile","x":n,"y":n,"tile":id}          change terrain (collapse a wall, reveal a passage); never the outer border
   {"type":"door","state":"open"|"closed"|"locked"|"unlocked"}
   {"type":"monster","id":monsterId,"act":"wake"|"calm"|"flee"}   or {"type":"monster","act":"spawn","asset":id,"x":n,"y":n}
+  {"type":"push","id":monsterId,"squares":1|2}   move a creature straight away from the hero (the engine stops it at walls, props and creatures); normally in a success branch
+  {"type":"hurt","id":monsterId,"dice":"1d4"}     ONLY in the success branch of an attack or contest check, on its creature, once. In an attack leave dice out (a hit always deals the engine's own damage); in a contest give dice (at most 4 dice d4 to d12, modifier 0 to 6)
+  {"type":"prone","id":monsterId}                 knock a creature down (the engine applies the prone rules)
 Coordinates are whole squares inside the room. Example of a freehand reply with a check:
 {"narration":"You kneel and work your fingers into the rusted grate, feeling for a catch.","cost":"action","effects":[],"check":{"skill":"Investigation","dc":13,"why":"search the drain grate","success":{"narration":"A hinge squeals and the grate lifts, a cloth bundle wedged beneath.","effects":[{"type":"give","item":"a waxed cloth bundle of dried figs","desc":"A bundle of dried figs wrapped in waxed cloth. Plain food, worth a few copper pieces; it keeps for weeks."}],"options":[{"label":"Peer into the drain","say":"I lower my face to the open drain and look down it"},{"label":"Drop the grate back","say":"I lower the grate back into place and leave it be"}]},"failure":{"narration":"The grate will not budge, and you only skin your knuckles on the rust.","effects":[],"options":[{"label":"Try again, harder","say":"I brace my boot on the wall and heave at the grate again"},{"label":"Tap it with your sword","say":"I rap the grate with my sword hilt and listen"},{"label":"Leave it","say":"I give up on the grate and look elsewhere"}]}},"remember":["the drain grate is loose"]}
 Example of a reply with no check (the options sit at the top level, and "use" is the game's own button for the door beside the hero):
-{"narration":"Behind the rusted lantern a loose stone shifts in the wall, a dark gap showing behind it.","cost":"free","effects":[],"options":[{"label":"Pull the stone loose","say":"I take hold of the loose stone and pull it out of the wall"},{"label":"Open the door","say":"I open the door","act":"use"},{"label":"Leave it","say":"I leave the stone alone and look around the room"}]}`;
+{"narration":"Behind the rusted lantern a loose stone shifts in the wall, a dark gap showing behind it.","cost":"free","effects":[],"options":[{"label":"Pull the stone loose","say":"I take hold of the loose stone and pull it out of the wall"},{"label":"Open the door","say":"I open the door","act":"use"},{"label":"Leave it","say":"I leave the stone alone and look around the room"}]}
+Example of a kick:
+{"narration":"You plant a boot against the goblin's chest and drive it back.","cost":"action","effects":[],"check":{"kind":"attack","attack":{"against":"gob1","weapon":"unarmed"},"why":"kick the goblin back","success":{"narration":"Your boot lands and the goblin staggers back.","effects":[{"type":"hurt","id":"gob1"},{"type":"push","id":"gob1","squares":1}],"options":[{"label":"Strike while it reels","say":"I swing my sword at the staggering goblin","act":"attack"},{"label":"Back away","say":"I step back and raise my guard"}]},"failure":{"narration":"The goblin twists aside.","effects":[],"options":[{"label":"Strike it","say":"I swing my sword at the goblin","act":"attack"},{"label":"Shove it instead","say":"I lower my shoulder and shove the goblin"}]}}}`;
 
 function sq(p: { x: number; y: number }): string {
   return `(${p.x},${p.y})`;
@@ -1010,7 +1269,23 @@ function renderWorld(view: DmSceneView): string {
   out.push("MONSTERS (you know their numbers; narrate only what the hero perceives)");
   if (view.monsters.length === 0) out.push("(none)");
   for (const m of view.monsters) {
-    out.push(`- id=${m.id} ${quote(m.name)} ${sq(m.at)} hp ${m.hp}/${m.maxHp} ac ${m.ac} ${m.awake ? "awake" : "asleep or unaware"}, ${m.seenByHero ? "seen by the hero" : "not seen by the hero"}`);
+    const state = [m.prone === true ? "prone" : "", typeof m.awareOfHero === "boolean" ? (m.awareOfHero ? "aware of the hero" : "has not noticed the hero") : ""].filter(Boolean);
+    out.push(`- id=${m.id} ${quote(m.name)} ${sq(m.at)} hp ${m.hp}/${m.maxHp} ac ${m.ac} ${m.awake ? "awake" : "asleep or unaware"}, ${m.seenByHero ? "seen by the hero" : "not seen by the hero"}${state.length ? `, ${state.join(", ")}` : ""}`);
+  }
+  const bodies = (view.bodies ?? []).slice(0, 12);
+  if (bodies.length) {
+    out.push("");
+    out.push("BODIES (slain creatures lie where they fell; the engine lets the hero loot them, so never invent or give what they carry)");
+    for (const b of bodies) {
+      const items = (b.items ?? []).slice(0, 12).map((i) => playerLine(i, DM_LIMITS.maxItemChars)).filter(Boolean);
+      out.push(`- id=${b.id} ${quote(playerLine(b.name, DM_LIMITS.maxItemChars))} ${sq(b.at)} ${b.looted ? "already looted" : "not looted yet"}, carries: ${list(items)}`);
+    }
+  }
+  const piles = (view.piles ?? []).filter((q) => q && Array.isArray(q.items) && q.items.length > 0).slice(0, 12);
+  if (piles.length) {
+    out.push("");
+    out.push("PILES (items lying loose on the floor; the hero takes them with the loot window)");
+    for (const q of piles) out.push(`- ${sq(q.at)}: ${list(q.items.slice(0, 12).map((i) => playerLine(i, DM_LIMITS.maxItemChars)).filter(Boolean))}`);
   }
   out.push("");
   out.push("THE HERO");
@@ -1020,6 +1295,7 @@ function renderWorld(view: DmSceneView): string {
   const skills = Object.entries(h.skills).map(([k, v]) => `${k} ${v >= 0 ? "+" : ""}${v}`);
   out.push(`Skills (bonus): ${list(skills, "no trained skills")}. Any other skill uses the plain ability modifier.`);
   out.push(`Conditions: ${list(h.conditions, "none")}.`);
+  if (h.hidden === true) out.push("The hero is HIDDEN right now (sneaking or hiding): creatures that have not noticed them do not know where they are.");
   out.push(`Wearing: ${list(h.worn)}.`);
   out.push(`In the bag: ${list(h.bag)}.`);
   out.push(`Carrying: ${list(h.carried)}.`);
@@ -1103,21 +1379,70 @@ function repairMessage(problems: string[], truncated: boolean): string {
 }
 
 /**
+ * Everything one askDm did, for the adventure export: the DmExchange shape
+ * without the two fields only the engine knows (applied, refused). The caller
+ * adds those and keeps the rest as is.
+ */
+export type DmExchangeReport = Omit<DmExchange, "applied" | "refused"> & { ms: number };
+
+/** The most of a provider error's text kept in an exchange's errors (debug export only; never shown to the player). */
+const MAX_ERROR_TEXT = 300;
+
+function errorText(e: unknown): string {
+  const msg = e instanceof Error ? e.message : isRec(e) && typeof e.message === "string" ? e.message : "";
+  return msg.replace(/\s+/g, " ").trim().slice(0, MAX_ERROR_TEXT);
+}
+
+/**
  * One DM call, plus ONE repair round when the answer will not parse or
  * validate (the errors go back as a user turn after the assistant's answer).
  * Tier "default", no cache (a repeat must be a fresh ruling). `onNarration`
- * receives the narration so far as it streams.
+ * receives the narration so far as it streams. `onExchange` is called exactly
+ * once per askDm, whichever way it ends, with the whole exchange: the full
+ * input, every raw answer (both, after a repair), every parse or validation
+ * error in order (a repaired answer keeps its first round's errors, with code
+ * "repaired"), the outcome and the time taken. A throwing listener is ignored.
  */
 export async function askDm(
   sample: SampleFn,
   view: DmSceneView,
   ask: DmAsk,
   ctx: DmValidationContext,
-  opts: { signal?: AbortSignal; onNarration?: (text: string) => void } = {},
+  opts: { signal?: AbortSignal; onNarration?: (text: string) => void; onExchange?: (x: DmExchangeReport) => void } = {},
 ): Promise<DmOutcome> {
-  const { signal, onNarration } = opts;
-  if (signal?.aborted) return failFor({ code: "cancelled" });
+  const { signal, onNarration, onExchange } = opts;
+  const startedAt = Date.now();
   const input = buildDmInput(view, ask);
+  const rawAnswers: string[] = [];
+  const errors: string[] = [];
+  let reported = false;
+  const finish = <T extends DmOutcome>(result: T, outcome: DmExchange["outcome"], code?: string): T => {
+    if (onExchange && !reported) {
+      reported = true;
+      try {
+        onExchange({
+          at: new Date(startedAt).toISOString(),
+          ask,
+          input,
+          rawAnswers: [...rawAnswers],
+          errors: [...errors],
+          outcome,
+          ...(code ? { code } : {}),
+          ms: Math.max(0, Date.now() - startedAt),
+        });
+      } catch {
+        // the journal is a nicety; a throwing listener must never break the call
+      }
+    }
+    return result;
+  };
+  const failed = (e: unknown): DmOutcome => {
+    const f = failFor(e);
+    const text = errorText(e);
+    errors.push(`sample failed (${f.code})${text ? `: ${text}` : ""}`);
+    return finish(f, f.code === "cancelled" ? "cancelled" : "error", f.code);
+  };
+  if (signal?.aborted) return finish(failFor({ code: "cancelled" }), "cancelled", "cancelled");
 
   const call = async (payload: string | { role: "user" | "assistant"; content: string }[]): Promise<{ text: string; truncated: boolean }> => {
     const res = await sample(payload, {
@@ -1134,6 +1459,7 @@ export async function askDm(
         }
       },
     });
+    rawAnswers.push(typeof res.text === "string" ? res.text : "");
     return { text: res.text, truncated: res.truncated === true };
   };
 
@@ -1151,11 +1477,12 @@ export async function askDm(
   try {
     first = await call(input);
   } catch (e) {
-    return failFor(e);
+    return failed(e);
   }
-  if (signal?.aborted) return failFor({ code: "cancelled" });
+  if (signal?.aborted) return finish(failFor({ code: "cancelled" }), "cancelled", "cancelled");
   const v1 = judge(first.text);
-  if (v1.ok) return { ok: true, reply: v1.reply, raw: first.text };
+  if (v1.ok) return finish({ ok: true, reply: v1.reply, raw: first.text }, "ok");
+  errors.push(...v1.errors);
 
   let second: { text: string; truncated: boolean };
   try {
@@ -1165,10 +1492,11 @@ export async function askDm(
       { role: "user", content: repairMessage(v1.errors, first.truncated) },
     ]);
   } catch (e) {
-    return failFor(e);
+    return failed(e);
   }
-  if (signal?.aborted) return failFor({ code: "cancelled" });
+  if (signal?.aborted) return finish(failFor({ code: "cancelled" }), "cancelled", "cancelled");
   const v2 = judge(second.text);
-  if (v2.ok) return { ok: true, reply: v2.reply, raw: second.text };
-  return { ok: false, code: "invalid_reply", message: GENERIC_FAIL };
+  if (v2.ok) return finish({ ok: true, reply: v2.reply, raw: second.text }, "ok", "repaired");
+  errors.push(...v2.errors);
+  return finish({ ok: false, code: "invalid_reply", message: GENERIC_FAIL }, "invalid", "invalid_reply");
 }

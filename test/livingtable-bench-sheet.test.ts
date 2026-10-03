@@ -61,6 +61,7 @@ import {
   swapScore,
   toHitTip,
   scoresFromAssign,
+  sheetItemKey,
   validDiceGroups,
   type StepId,
 } from "../scripts/asset-bench/sheet";
@@ -500,4 +501,13 @@ test("the half-elf's free skill picks are filled around the background, not over
   const bg = draft.background!.skills;
   for (const s of draft.ancestrySkills ?? []) assert.ok(!bg.includes(s), `${s} is held twice`);
   assert.deepEqual([...bg].sort(), ["Perception", "Survival"]);
+});
+
+test("sheetItemKey: the section is part of an equipment chip's key, so one name under two sections stays two things", () => {
+  assert.equal(sheetItemKey("Worn", "Chain shirt"), "Worn:Chain shirt");
+  assert.notEqual(sheetItemKey("Worn", "Longsword"), sheetItemKey("Bag", "Longsword"));
+  // Every chip of a real kit gets a distinct key within its section.
+  const keys = packInfo(build(), {}).flatMap((s) => s.items.map((i) => sheetItemKey(s.label, i.name)));
+  assert.equal(new Set(keys).size, keys.length);
+  assert.ok(keys.length > 0);
 });

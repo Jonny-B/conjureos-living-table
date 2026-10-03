@@ -38,8 +38,10 @@ import {
   EQUIPMENT_TIERS,
   GEAR_ROLES,
   LOOT_CAP_LINE,
+  MAGIC_TIERS,
   SLOTS_BY_ARCHETYPE,
   TEMPLATE_OF_ARCHETYPE,
+  TIER_WORD,
   bodySpriteId,
   emptySlotIconSource,
   gearIconSource,
@@ -58,14 +60,41 @@ import {
 } from "../../src/games/livingtable/characters/equipmentTypes";
 import { PLAYABLE_ARCHETYPE_IDS, type TemplateGenre } from "../../src/games/livingtable/characters/templates";
 import { createCharacter, type CharacterSheet } from "../../src/games/livingtable/characters/creation";
-import { packInfo } from "../../src/games/livingtable/inventory/itemInfo";
+import { describeBagItem, describeCarried, packInfo } from "../../src/games/livingtable/inventory/itemInfo";
+import { destroyItem, dropItem, equipItem, itemActionsFor, itemStatusLine, itemUseSay, pickUp, unequipItem, type ItemActionContext, type ItemFlags, type ItemRef } from "../../src/games/livingtable/inventory/itemActions";
+import { bodyFor, carriedBy, itemNotes as carriedNotes, pocketPick, takeFromBody, type BodyState, type CarriedItem } from "../../src/games/livingtable/rules/corpses";
+import { BESTIARY, abilityMod, type Beast } from "../../src/games/livingtable/rules/bestiary";
+import {
+  canonicalAbility,
+  canonicalSkill,
+  forceDoor,
+  monsterPassivePerception,
+  monsterShoveProfile,
+  monsterSkill,
+  pickLock,
+  proneAttackMode,
+  proneEffects,
+  pushDestination,
+  shoveContest,
+  skillCheck,
+  sleightOfHand,
+  standUpCostFt,
+  stealthCheck,
+  unarmedStrike,
+  type RollMode,
+} from "../../src/games/livingtable/session/maneuvers";
+import { contextActionsFor, type ContextAction, type ContextSituation, type ContextTarget } from "../../src/games/livingtable/session/contextActions";
+import { ADVENTURE_FORMAT, ADVENTURE_VERSION, adventureFiles, adventureZip, type AdventureBundle, type DmExchange, type RollRecord } from "../../src/games/livingtable/session/adventureExport";
+import { APP_VERSION } from "../../src/version";
+import { itemNameFor } from "../../src/games/livingtable/characters/equipment";
 import { applyDamage, applyHealing, longRest, newAdventuringDay } from "../../src/games/livingtable/characters/health";
 import { addSave, latestSave, makeSavePoint, parseSaves, restBlockedReason, saveLabel, serializeSaves, type SaveKind, type SavePoint } from "../../src/games/livingtable/session/savePoints";
 import { parseDiceNotation, rollDice, rollDie } from "../../src/games/livingtable/rules/dice";
 import { packItems, renderPlanFor, slotLabelFor } from "../../src/games/livingtable/menu/equipment";
-import { ABILITY_NAME, attackLine, bonusSources, lootLine, sentenceCase, type TokenNamer } from "../../src/games/livingtable/menu/labels";
+import { ABILITY_NAME, attackLine, bonusSources, hitPoints, lootLine, sentenceCase, type TokenNamer } from "../../src/games/livingtable/menu/labels";
 import {
   FEET_PER_TILE,
+  MONSTER_INITIATIVE_MODIFIER,
   activeCombatant,
   attackBlockedReason,
   endTurn,
@@ -76,7 +105,7 @@ import {
   withActiveEconomy,
   type CombatRound,
 } from "../../src/games/livingtable/menu/combatRound";
-import { resolveAttack, resolveDamage } from "../../src/games/livingtable/rules/combat";
+import { resolveAttack, resolveDamage, type AttackResult } from "../../src/games/livingtable/rules/combat";
 import { commitLoadout, draftFromSheet, stageEquip, stageUnequip } from "../../src/games/livingtable/rules/inventory";
 import { lootFor } from "../../src/games/livingtable/rules/loot";
 import {
@@ -91,6 +120,7 @@ import {
   statblockFor,
   weaponDamageNotationFor,
   weaponFor,
+  type MonsterStatblock,
 } from "../../src/games/livingtable/session/combat";
 import { renderDoll } from "../../src/games/livingtable/render/doll";
 import { renderGearIcon } from "../../src/games/livingtable/render/gearIcon";
@@ -99,10 +129,11 @@ import { headAnchor } from "../../src/games/livingtable/render/anchors";
 import { attackResultToReadout } from "../../src/games/livingtable/render/rollReadoutAdapter";
 import { resolveMonsterTurn } from "../../src/games/livingtable/session/hostileTurns";
 import { attackEvents, type CombatEvent } from "../../src/games/livingtable/session/combatEvents";
-import { createHud, createOverlay, verdictWords, type DialogueLine, type Hud, type HudAction, type HudBar, type HudOption, type HudSave, type InitiativeSide, type NarrationHandle, type Overlay, type OverlayPoint, type PackSection, type TextStyle } from "./overlay";
-import { askDm, normaliseSkill, validationContextFor, type DmAsk, type DmEffect, type DmOption, type DmReply, type DmSceneView, type SampleFn } from "./dm";
-import { createDiceTray, createSkinPicker, DICE_SKINS, type DiceTray, type DieKind } from "./dice";
-import { dropLowest, featureList, itemCount, itemTip, openCreation, openSheet, type CreationView, type SheetExtras, type SheetView } from "./sheet";
+import { createHud, createOverlay, verdictWords, type ContextMenuEntry, type DialogueLine, type Hud, type HudAction, type HudBar, type HudOption, type HudSave, type InitiativeSide, type ItemCardContent, type LootWindow, type LootWindowItem, type NarrationHandle, type Overlay, type OverlayPoint, type PackSection, type TextStyle } from "./overlay";
+import { foeDiceForToken } from "./foeDice";
+import { askDm, normaliseSkill, validationContextFor, type DmAsk, type DmCheck, type DmEffect, type DmOption, type DmReply, type DmSceneView, type SampleFn } from "./dm";
+import { createDiceTray, createSkinPicker, DICE_SKINS, type DiceTray, type DieKind, type RollRequest } from "./dice";
+import { dropLowest, featureList, itemCount, itemTip, openCreation, openSheet, sheetItemKey, type CreationView, type SheetExtras, type SheetView } from "./sheet";
 import { mountBestiaryPanel, mountRulesPanel } from "./books";
 import { decodeLibrary, kaykitLibrary, partFile } from "./kaykit";
 import {
@@ -676,6 +707,13 @@ const DM_RECENT_SHOWN = 8;
 const DM_POTION_CAP = 2;
 const DM_PROPS_MAX = 8;
 const DM_INVENTORY_MAX = 24;
+/** The debug journals' limits (the export carries them; the saves do not). */
+const DM_JOURNAL_KEEP = 100;
+const ROLL_JOURNAL_KEEP = 500;
+/** The lock DC of a door the DM locked without naming one. */
+const DEFAULT_LOCK_DC = 15;
+/** Lines of log that scrolled off the Log tab or belong to an earlier scene, kept for the debug export only. */
+const SESSION_LOG_KEEP = 4000;
 // Indoor floors for a walled room; the Floor control still offers the rest.
 const ROOM_FLOOR: Record<TemplateGenre, TileId> = { fantasy: "floor_stone", scifi: "floor_deckplate" };
 const DOWN_NOTE = "You are down. Load the last save, or press Reset scene.";
@@ -704,7 +742,7 @@ interface PlayState {
   /** What the DM said each thing it gave is (its `desc`), keyed by the item's name; the pack's hover tip reads it. Taking the item removes it. */
   itemNotes: Record<string, string>;
   heroAt: XY;
-  monster: { at: XY; hp: number; awake: boolean } | null;
+  monster: { at: XY; hp: number; awake: boolean; /** Knocked down: the hero's attacks next to it have advantage, and it spends half its movement to stand at the start of its turn. */ prone?: boolean } | null;
   doorOpen: boolean;
   searched: boolean;
   log: LogLine[];
@@ -745,6 +783,24 @@ interface PlayState {
   worldRev: number;
   /** The next DM prop number. */
   propSeq: number;
+  /** What the hero has slain, where each lies (rules/corpses.ts). A body keeps what its creature carried until the hero takes it; the picture draws each one lying down. */
+  bodies: BodyState[];
+  /** Things the hero dropped, one pile per square, in the order they were put down. Picking one up takes it from here. */
+  piles: { at: XY; items: string[] }[];
+  /** What the DM said about each thing it handed over, keyed by the item's name: a quest item cannot be dropped or destroyed, a usable one has a Use button that sends its words to the DM. */
+  itemFlags: Record<string, ItemFlags>;
+  /** What the monster is still carrying while it lives (a pickpocket takes from here). When it falls, this is what its body holds. */
+  monsterCarried: CarriedItem[];
+  /** The hero is hidden (a successful Hide, or a Sneak step it did not notice): the monster does not wake by sight, and the hero's next attack has advantage and ends it. */
+  heroHidden: boolean;
+  /** Sneaking mode: every step that would let the monster notice the hero rolls Stealth against its passive Perception instead. */
+  sneaking: boolean;
+  /** The DC of the door's lock when it is locked (the DM sets none, so it is 15). */
+  doorLockDc: number;
+  /** Every exchange with the DM, oldest first, at most DM_JOURNAL_KEEP: the full input, raw answers, errors, what was applied and refused. Kept out of saves; it goes in the debug export. */
+  dmJournal: DmExchange[];
+  /** Every roll thrown in the tray, oldest first, at most ROLL_JOURNAL_KEEP. Kept out of saves; it goes in the debug export. */
+  rollJournal: RollRecord[];
 }
 
 interface DmProp {
@@ -801,6 +857,15 @@ function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: Til
     potionsGranted: 0,
     worldRev: 0,
     propSeq: 1,
+    bodies: [],
+    piles: [],
+    itemFlags: {},
+    monsterCarried: carriedBy(SCENE_KIT[template].monster),
+    heroHidden: false,
+    sneaking: false,
+    doorLockDc: DEFAULT_LOCK_DC,
+    dmJournal: [],
+    rollJournal: [],
   };
   // The hero opens its eyes: the room it starts in is already seen.
   noteSight(p);
@@ -809,6 +874,24 @@ function newPlay(template: TemplateGenre, archetypeId: ArchetypeId, floorId: Til
 
 // Module level, so leaving the tab and coming back finds the fight where it was.
 let play: PlayState | null = null;
+
+/** Lines that scrolled off the Log tab, or belong to a scene that has since been replaced: the debug export keeps them, the game does not. */
+const sessionLog: LogLine[] = [];
+function archiveLog(lines: readonly LogLine[]): void {
+  sessionLog.push(...lines.map((l) => ({ text: l.text, tone: l.tone })));
+  if (sessionLog.length > SESSION_LOG_KEEP) sessionLog.splice(0, sessionLog.length - SESSION_LOG_KEEP);
+}
+
+/**
+ * A new PlayState takes the place of `from` (Reset scene, a new hero, a loaded save): the debug journals ride over to it, so the
+ * export holds the whole adventure and not only the scene since the last reset, and the old scene's log is kept with a marker.
+ */
+function carryJournals(from: PlayState | null, to: PlayState, why: string): void {
+  if (!from || from === to) return;
+  to.dmJournal = from.dmJournal;
+  to.rollJournal = from.rollJournal;
+  archiveLog([...from.log, { text: `--- ${why} ---`, tone: "plain" }]);
+}
 
 // ---------------------------------------------------------------------------
 // Save points (session/savePoints.ts decides what to keep and how it reads back;
@@ -823,7 +906,7 @@ let play: PlayState | null = null;
 const SNAPSHOT_VERSION = 1;
 const SAVES_STORAGE_KEY = "livingtable-bench-saves-v1";
 
-type PlaySnapshot = Omit<PlayState, "heroActor" | "monsterActor" | "explored" | "exploredRev" | "round" | "note" | "options"> & {
+type PlaySnapshot = Omit<PlayState, "heroActor" | "monsterActor" | "explored" | "exploredRev" | "round" | "note" | "options" | "dmJournal" | "rollJournal"> & {
   v: number;
   /** One "1" (seen) or "0" per square, row-major: PlayState.explored as text. */
   explored: string;
@@ -834,7 +917,7 @@ const decodeExplored = (s: string): Uint8Array => Uint8Array.from(s, (c) => (c =
 
 /** A copy that later play cannot reach into. */
 function toSnapshot(p: PlayState): PlaySnapshot {
-  const { heroActor: _hero, monsterActor: _monster, explored, exploredRev: _rev, round: _round, note: _note, options: _options, ...rest } = p;
+  const { heroActor: _hero, monsterActor: _monster, explored, exploredRev: _rev, round: _round, note: _note, options: _options, dmJournal: _dm, rollJournal: _rolls, ...rest } = p;
   return JSON.parse(JSON.stringify({ ...rest, v: SNAPSHOT_VERSION, explored: encodeExplored(explored) })) as PlaySnapshot;
 }
 
@@ -854,7 +937,7 @@ function isSnapshot(d: unknown): d is PlaySnapshot {
   if (!isSheetLike(d.hero) || !isSheetLike(d.start) || !isRec(d.itemNotes) || !Object.values(d.itemNotes).every(isStr)) return false;
   if (!inRoom(d.heroAt)) return false;
   const m = d.monster;
-  if (m !== null && !(isRec(m) && inRoom(m.at) && isNum(m.hp) && typeof m.awake === "boolean")) return false;
+  if (m !== null && !(isRec(m) && inRoom(m.at) && isNum(m.hp) && typeof m.awake === "boolean" && (m.prone === undefined || typeof m.prone === "boolean"))) return false;
   if (d.fallenAt !== null && !inRoom(d.fallenAt)) return false;
   if (typeof d.doorOpen !== "boolean" || typeof d.searched !== "boolean" || typeof d.doorLocked !== "boolean" || typeof d.monsterSeen !== "boolean") return false;
   if (!isNum(d.potions) || !isNum(d.potionsGranted) || !isNum(d.worldRev) || !isNum(d.propSeq)) return false;
@@ -865,16 +948,39 @@ function isSnapshot(d: unknown): d is PlaySnapshot {
   if (!Array.isArray(d.tileOverrides) || !d.tileOverrides.every((o) => isRec(o) && inRoom(o) && isStr(o.tile) && known.has(o.tile))) return false;
   if (!Array.isArray(d.dmMemory) || !d.dmMemory.every(isStr)) return false;
   if (!Array.isArray(d.dmRecent) || !d.dmRecent.every((r) => isRec(r) && (r.who === "player" || r.who === "dm") && isStr(r.text))) return false;
+  // Saves from before bodies, piles and item flags have none of these: they are optional here and filled in on load.
+  if (d.bodies !== undefined && !(Array.isArray(d.bodies) && d.bodies.every(isBodyLike))) return false;
+  if (d.piles !== undefined && !(Array.isArray(d.piles) && d.piles.every((q) => isRec(q) && inRoom(q.at) && Array.isArray(q.items) && q.items.every(isStr)))) return false;
+  if (d.itemFlags !== undefined && !(isRec(d.itemFlags) && Object.values(d.itemFlags).every(isRec))) return false;
+  if (d.monsterCarried !== undefined && !(Array.isArray(d.monsterCarried) && d.monsterCarried.every(isCarriedLike))) return false;
+  // Hiding, sneaking and the lock's DC came later: an older save has none of them.
+  if ((d.heroHidden !== undefined && typeof d.heroHidden !== "boolean") || (d.sneaking !== undefined && typeof d.sneaking !== "boolean") || (d.doorLockDc !== undefined && !isNum(d.doorLockDc))) return false;
   return true;
 }
+
+const isCarriedLike = (c: unknown): boolean => isRec(c) && isStr(c.name) && isStr(c.note) && isStr(c.kind) && typeof c.pocketable === "boolean";
+const isBodyLike = (b: unknown): boolean =>
+  isRec(b) && isStr(b.id) && isStr(b.name) && inRoom(b.at) && Array.isArray(b.items) && b.items.every(isCarriedLike) && typeof b.looted === "boolean" && typeof b.harvested === "boolean" && typeof b.beast === "boolean" && typeof b.engineLootRolled === "boolean";
 
 /** The scene a snapshot holds, as a fresh PlayState: new animated figures, no fight, no suggested moves. Null when it is not a snapshot. */
 function fromSnapshot(data: unknown): PlayState | null {
   if (!isSnapshot(data)) return null;
   const s = JSON.parse(JSON.stringify(data)) as PlaySnapshot;
   const { v: _v, explored, ...rest } = s;
+  const old = rest as Partial<Pick<PlaySnapshot, "bodies" | "piles" | "itemFlags" | "monsterCarried" | "heroHidden" | "sneaking" | "doorLockDc">>;
+  const monsterToken = SCENE_KIT[rest.template].monster;
   const p: PlayState = {
     ...rest,
+    // A save from before bodies: a slain monster's loot went straight to the pack then, so its body is already searched.
+    bodies: old.bodies ?? (rest.fallenAt ? [{ ...bodyFor("body-1", monsterToken, rest.fallenAt, []), looted: true, engineLootRolled: true }] : []),
+    piles: old.piles ?? [],
+    itemFlags: old.itemFlags ?? {},
+    monsterCarried: old.monsterCarried ?? (rest.monster ? carriedBy(monsterToken) : []),
+    heroHidden: old.heroHidden ?? false,
+    sneaking: old.sneaking ?? false,
+    doorLockDc: old.doorLockDc ?? DEFAULT_LOCK_DC,
+    dmJournal: [],
+    rollJournal: [],
     note: null,
     round: null,
     options: [],
@@ -884,6 +990,8 @@ function fromSnapshot(data: unknown): PlayState | null {
     exploredRev: 1,
   };
   noteSight(p);
+  // A knocked-down monster is drawn lying there, as it was.
+  if (p.monster?.prone) playClips(p.monsterActor, ["death"], performance.now());
   return p;
 }
 
@@ -1030,6 +1138,19 @@ function pathToward(p: PlayState, tiles: TileId[][], from: XY, to: XY): { steps:
     }
   }
   return null;
+}
+
+/**
+ * A slain monster leaves its body where it fell: everything it still carried (what a pickpocket left it with), nothing else.
+ * The engine's own loot roll is made when the body is first searched (ensureBodyLoot), so a body nobody opens costs no roll.
+ * Any kill (the Attack button, or a DM effect) goes through here.
+ */
+function leaveBody(p: PlayState, at: XY): BodyState {
+  const body = bodyFor(`body-${p.bodies.length + 1}`, SCENE_KIT[p.template].monster, at, p.monsterCarried);
+  p.bodies.push(body);
+  p.monsterCarried = [];
+  p.log.push({ text: `${sentenceCase(monsterLabel(p))} lies where it fell. Click the body, or stand next to it and press E, to search it.`, tone: "plain" });
+  return body;
 }
 
 /** Rolls the game's own loot; false when the cell's loot ledger is spent (the log says so). */
@@ -1222,10 +1343,67 @@ function monsterNotices(p: PlayState): boolean {
   return path !== null && path.steps <= MONSTER_HEARS_STEPS;
 }
 
+// ---------------------------------------------------------------------------
+// Hiding, and what the monster notices. The engine's maneuvers (session/maneuvers.ts) roll the
+// checks; these are the board's side of them.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every die the engine rolls on the table (a kick, a shove, a Stealth check, a swing) draws from here. A test installs
+ * globalThis.__ltBenchRng (a function returning a number from 0 up to, not including, 1) to make a roll land where it needs to.
+ */
+const benchRng = (): number => {
+  const hook = (globalThis as { __ltBenchRng?: unknown }).__ltBenchRng;
+  if (typeof hook === "function") {
+    const v = (hook as () => unknown)();
+    if (typeof v === "number" && v >= 0 && v < 1) return v;
+  }
+  return Math.random();
+};
+
+/** Sneaking, or hidden: a step that would let the monster notice the hero rolls Stealth against its passive Perception instead. */
+const stealthy = (p: PlayState): boolean => p.sneaking || p.heroHidden;
+
+/** Whether the monster could see the hero right now: the two see each other (a wall or a shut door stops it). */
+function monsterCouldSee(p: PlayState): boolean {
+  const m = p.monster;
+  return !!m && canSeeEachOther(sightKit(p).opaque, m.at, p.heroAt);
+}
+
+/** The monster's passive Perception, the DC for Hide, Sneak and Pickpocket. */
+const monsterPassive = (p: PlayState): number => monsterPassivePerception(SCENE_KIT[p.template].monster);
+
+/** The monster's bestiary entry when it has one (the goblin, the skeleton), else its statblock: what a contest reads its skills from. */
+function monsterCreature(p: PlayState): Beast | MonsterStatblock {
+  const id = SCENE_KIT[p.template].monster;
+  return BESTIARY.find((b) => b.tokenAssetId === id) ?? statblockFor(id);
+}
+
+/** What a context menu needs to know about the monster: its SRD type and size, and whether it is a person (pockets, speech). */
+function monsterKind(p: PlayState): { type: string; size: string; humanoid: boolean } {
+  const id = SCENE_KIT[p.template].monster;
+  const beast = BESTIARY.find((b) => b.tokenAssetId === id);
+  const type = beast?.type ?? (id === "token_drone" ? "construct" : "humanoid");
+  return { type, size: monsterShoveProfile(id).size, humanoid: (type.split("(")[0] ?? "").trim().toLowerCase() === "humanoid" };
+}
+
+/** The monster's modifier on an ability (a contest against "dex" reads its Dexterity), from its bestiary entry or statblock. */
+function monsterAbility(p: PlayState, key: "str" | "dex" | "con" | "int" | "wis" | "cha"): number {
+  const c = monsterCreature(p);
+  return "scores" in c ? abilityMod(c.scores[key]) : c.abilityModifiers[key];
+}
+
 /** Roll initiative with the game's own startCombat: d20 plus Dexterity for the hero, the engine's fixed bonus for the monster. */
-function startFight(p: PlayState): void {
+function startFight(p: PlayState, fromHiding = false): void {
   if (!p.monster) return;
   p.monster.awake = true;
+  // A fight starts in the open: whatever hiding the hero had is over. The exception is the hero starting it with a strike from hiding
+  // (an attack, a kick, a shove): that strike has advantage and is what ends the hiding (landSwing), unless the goblin's turn comes first.
+  if (!fromHiding) {
+    if (p.heroHidden) p.log.push({ text: "You are no longer hidden.", tone: "plain" });
+    p.heroHidden = false;
+    p.sneaking = false;
+  }
   p.round = startCombat({
     player: { id: HERO_ID, label: p.hero.name, dexModifier: p.hero.modifiers.dex, speedFt: effectiveSpeedFt(p.hero) },
     hostiles: [{ id: MONSTER_ID, label: monsterLabel(p), speedFt: MONSTER_SPEED_FT }],
@@ -1251,18 +1429,182 @@ function heroStepTo(p: PlayState, to: XY): TurnResult {
   return { events: [{ kind: "move", tokenId: HERO_ID, from, path: [{ ...to }] }], refused: null };
 }
 
-/** The dice behind a swing, for the dice tray: the d20 and, on a hit, every damage die. */
+/** The dice behind a swing, for the dice tray: every d20 thrown and, on a hit, every damage die. */
 interface SwingDice {
+  /** The d20 that counted. */
   roll: number;
+  /** Every d20 thrown, in order: two when advantage or disadvantage applied. */
+  d20s: number[];
+  /** "advantage" or "disadvantage" when the roll had one. */
+  mode: RollMode | null;
+  /** Why it had one, in words for the log. */
+  modeWhy: string[];
   modifier: number;
   total: number;
   target: number;
   hit: boolean;
   critical: boolean;
   fumble: boolean;
+  /** Damage dice. A kick has none (1 plus Strength, a flat number): `rolls` is empty and `total` is the number. */
   damage?: { rolls: number[]; sides: number; modifier: number; total: number };
 }
 
+/** A swing at the monster, rolled but not yet landed, so the tray can show it before the scene changes. */
+interface Swing {
+  dice: SwingDice;
+  result: AttackResult;
+  bonus: number;
+  targetAC: number;
+  sources: ReturnType<typeof bonusSources>;
+  /** A kick (an unarmed strike) rather than the weapon in the hero's hand. */
+  kick: boolean;
+  /** The maneuver's own log line, for a kick. A weapon swing builds its line when it lands. */
+  kickLine?: string;
+}
+
+/**
+ * The roll mode a swing at the monster has, and why, from the SRD's own rules: advantage when the hero is hidden (an unseen
+ * attacker) and when the target is prone and within 5 feet; disadvantage when it is prone and farther off. `asked` is the mode
+ * a DM check carries. Advantage and disadvantage cancel.
+ */
+function swingMode(p: PlayState, asked?: "advantage" | "disadvantage"): { advantage: boolean; disadvantage: boolean; mode: RollMode | null; why: string[] } {
+  const why: string[] = [];
+  let adv = asked === "advantage";
+  let dis = asked === "disadvantage";
+  if (asked) why.push(asked === "advantage" ? "the DM gave you advantage" : "the DM gave you disadvantage");
+  if (p.heroHidden) {
+    adv = true;
+    why.push("you were hidden");
+  }
+  const m = p.monster;
+  if (m?.prone) {
+    const feet = tileDistance(p.heroAt, m.at) * FEET_PER_TILE;
+    if (proneAttackMode(feet) === "advantage") {
+      adv = true;
+      why.push("it is prone and you are next to it");
+    } else {
+      dis = true;
+      why.push("it is prone and you are not next to it");
+    }
+  }
+  if (adv && dis) return { advantage: false, disadvantage: false, mode: null, why: ["advantage and disadvantage cancel out"] };
+  return { advantage: adv, disadvantage: dis, mode: adv ? "advantage" : dis ? "disadvantage" : null, why };
+}
+
+/** The hero's swing at the monster, rolled with the game's own dice but NOT applied: the weapon in hand, or a kick (an unarmed strike, with its own damage and no weapon bonuses). */
+function rollSwing(p: PlayState, kind: "weapon" | "kick", asked?: "advantage" | "disadvantage"): Swing {
+  const targetAC = monsterArmorClassFor(SCENE_KIT[p.template].monster);
+  const mode = swingMode(p, asked);
+  if (kind === "kick") {
+    const k = unarmedStrike({ attacker: p.hero, targetAC, ...(mode.mode ? { advantage: mode.mode } : {}), rng: benchRng, label: "Kick" });
+    const bonus = p.hero.modifiers.str + p.hero.proficiencyBonus;
+    const fumble = k.roll === 1;
+    const dice: SwingDice = {
+      roll: k.roll,
+      d20s: k.dice.map((d) => d.result),
+      mode: mode.mode,
+      modeWhy: mode.why,
+      modifier: bonus,
+      total: k.total,
+      target: targetAC,
+      hit: k.hit,
+      critical: k.critical,
+      fumble,
+      ...(k.hit ? { damage: { rolls: [], sides: 0, modifier: k.damage, total: k.damage } } : {}),
+    };
+    return { dice, result: { roll: k.roll, total: k.total, hit: k.hit, critical: k.critical, fumble }, bonus, targetAC, sources: undefined, kick: true, kickLine: k.line };
+  }
+  const bonus = attackerBonusFor(p.hero);
+  const sources = bonusSources(attackBonusSourcesFor(p.hero), bonus);
+  // The engine rolls the d20 once or twice; watching its draws puts every die in the tray.
+  const draws: number[] = [];
+  const watching = (): number => {
+    const v = benchRng();
+    draws.push(v);
+    return v;
+  };
+  const result = resolveAttack({ attackerBonus: bonus, targetAC, advantage: mode.advantage, disadvantage: mode.disadvantage, rng: watching });
+  const notation = weaponDamageNotationFor(p.hero);
+  const rolled = result.hit ? resolveDamage(notation, benchRng, result.critical) : null;
+  const parsed = parseDiceNotation(notation);
+  const dice: SwingDice = {
+    roll: result.roll,
+    d20s: draws.map((v) => Math.floor(v * 20) + 1),
+    mode: mode.mode,
+    modeWhy: mode.why,
+    modifier: bonus,
+    total: result.total,
+    target: targetAC,
+    hit: result.hit,
+    critical: result.critical,
+    fumble: result.fumble,
+    ...(rolled ? { damage: { rolls: rolled.rolls, sides: parsed.sides, modifier: parsed.modifier, total: rolled.total } } : {}),
+  };
+  return { dice, result, bonus, targetAC, sources, kick: false };
+}
+
+/** A slain monster: it leaves the board and the fight, the body lies where it fell, and the day turns over so the hero can make camp (health.ts newAdventuringDay). */
+function slayMonster(p: PlayState): void {
+  const m = p.monster;
+  if (!m) return;
+  p.fallenAt = { ...m.at };
+  p.monster = null;
+  p.round = null;
+  // The kill drops nothing in the pack: the body lies where it fell, and the loot is found by searching it (leaveBody).
+  leaveBody(p, p.fallenAt);
+  p.hero = newAdventuringDay(p.hero);
+}
+
+/** Attacking from hiding gives the hero away. */
+function revealHero(p: PlayState): void {
+  if (p.heroHidden) p.log.push({ text: "Attacking gives you away: you are no longer hidden.", tone: "plain" });
+  p.heroHidden = false;
+  p.sneaking = false;
+}
+
+/**
+ * Land a rolled swing: the damage (the swing's own, or `opts.damage` when something else decided it), the log line, a kill and the
+ * events the board floats. `spend` takes the hero's action in a fight (a DM check has already paid for it).
+ */
+function landSwing(p: PlayState, sw: Swing, opts: { spend: boolean; damage?: number }): CombatEvent[] {
+  const m = p.monster!;
+  const kit = SCENE_KIT[p.template];
+  const label = monsterLabel(p);
+  const d = sw.dice;
+  const damage = opts.damage ?? (d.hit ? d.damage?.total : undefined);
+  let down = false;
+  const hpBefore = m.hp;
+  if (damage !== undefined) {
+    const hurt = damageMonster({ assetId: kit.monster, currentHp: m.hp }, damage);
+    m.hp = hurt.currentHp;
+    down = hurt.down;
+  }
+  if (opts.spend && p.round) p.round = spendActiveAction(p.round) ?? p.round;
+  const base = sw.kick
+    ? `${sw.kickLine ?? "Kick."}${down ? ` ${sentenceCase(label)} goes down.` : ""}`
+    : attackLine({
+        attacker: p.hero.name,
+        target: label,
+        roll: d.roll,
+        modifier: d.modifier,
+        total: d.total,
+        targetAC: sw.targetAC,
+        hit: d.hit,
+        critical: d.critical,
+        fumble: d.fumble,
+        damage,
+        targetDown: down,
+        targetHpLeft: d.hit && !down ? m.hp : undefined,
+        sources: sw.sources,
+      });
+  const modeNote = d.mode ? ` Rolled with ${d.mode} (${d.modeWhy.join(", ")}): ${d.d20s.join(" and ")}, kept ${d.roll}.` : "";
+  p.log.push({ text: `${base}${modeNote}`, tone: d.hit ? "good" : "bad" });
+  const readout = { ...attackResultToReadout(sw.result, sw.bonus, sw.targetAC, sw.sources), caption: `${p.hero.name} ${sw.kick ? "kicks" : "attacks"} ${label}`, critical: d.critical, fumble: d.fumble };
+  const events = attackEvents({ by: HERO_ID, against: MONSTER_ID, result: sw.result, readout, damage, hpLost: hpBefore - m.hp, down });
+  if (down) slayMonster(p);
+  revealHero(p);
+  return events;
+}
 /** Why the hero cannot swing at the monster right now (the game's reach, sight and turn rules), or null. */
 function heroAttackRefusal(p: PlayState): string | null {
   if (heroDown(p)) return DOWN_NOTE;
@@ -1283,74 +1625,14 @@ function heroAttackRefusal(p: PlayState): string | null {
 /**
  * The hero's swing, rolled with the game's own dice but NOT yet applied, so
  * the dice tray can show the roll before the scene changes: `apply` lands the
- * blow (hit points, the log, a kill, the loot) and returns its events.
+ * blow (hit points, the log, a kill) and returns its events.
  */
-function heroAttackRules(p: PlayState): { refused: string } | { refused: null; dice: SwingDice; apply: () => CombatEvent[] } {
+function heroAttackRules(p: PlayState): { refused: string } | { refused: null; dice: SwingDice; swing: Swing; apply: () => CombatEvent[] } {
   const refused = heroAttackRefusal(p);
   if (refused) return { refused };
-  const m = p.monster!;
-  const kit = SCENE_KIT[p.template];
-  const label = monsterLabel(p);
-  const bonus = attackerBonusFor(p.hero);
-  const targetAC = monsterArmorClassFor(kit.monster);
-  const sources = bonusSources(attackBonusSourcesFor(p.hero), bonus);
-  const result = resolveAttack({ attackerBonus: bonus, targetAC });
-  const notation = weaponDamageNotationFor(p.hero);
-  const rolled = result.hit ? resolveDamage(notation, Math.random, result.critical) : null;
-  const parsed = parseDiceNotation(notation);
-  const dice: SwingDice = {
-    roll: result.roll,
-    modifier: bonus,
-    total: result.total,
-    target: targetAC,
-    hit: result.hit,
-    critical: result.critical,
-    fumble: result.fumble,
-    damage: rolled ? { rolls: rolled.rolls, sides: parsed.sides, modifier: parsed.modifier, total: rolled.total } : undefined,
-  };
-  const apply = (): CombatEvent[] => {
-    const damage = rolled?.total;
-    let down = false;
-    const hpBefore = m.hp;
-    if (damage !== undefined) {
-      const hurt = damageMonster({ assetId: kit.monster, currentHp: m.hp }, damage);
-      m.hp = hurt.currentHp;
-      down = hurt.down;
-    }
-    if (p.round) p.round = spendActiveAction(p.round) ?? p.round;
-    p.log.push({
-      text: attackLine({
-        attacker: p.hero.name,
-        target: label,
-        roll: result.roll,
-        modifier: bonus,
-        total: result.total,
-        targetAC,
-        hit: result.hit,
-        critical: result.critical,
-        fumble: result.fumble,
-        damage,
-        targetDown: down,
-        targetHpLeft: result.hit && !down ? m.hp : undefined,
-        sources,
-      }),
-      tone: result.hit ? "good" : "bad",
-    });
-    const readout = { ...attackResultToReadout(result, bonus, targetAC, sources), caption: `${p.hero.name} attacks ${label}`, critical: result.critical, fumble: result.fumble };
-    const events = attackEvents({ by: HERO_ID, against: MONSTER_ID, result, readout, damage, hpLost: hpBefore - m.hp, down });
-    if (down) {
-      p.fallenAt = { ...m.at };
-      p.monster = null;
-      p.round = null;
-      rollLoot(p, "fight");
-      // Something happened: the in-fiction day turns over, so the hero can make camp again (health.ts newAdventuringDay).
-      p.hero = newAdventuringDay(p.hero);
-    }
-    return events;
-  };
-  return { refused: null, dice, apply };
+  const swing = rollSwing(p, "weapon");
+  return { refused: null, dice: swing.dice, swing, apply: () => landSwing(p, swing, { spend: true }) };
 }
-
 /** The door or the chest next to the hero. Free in a fight, like any small object interaction. */
 function heroInteractRules(p: PlayState): TurnResult {
   if (heroDown(p)) return refusedWith(DOWN_NOTE);
@@ -1383,6 +1665,12 @@ function heroInteractRules(p: PlayState): TurnResult {
   return { events: [], refused: null };
 }
 
+/** Whether the door or the chest is next to the hero and can be used now (the Use button's own test for them). */
+function doorOrChestUsable(p: PlayState): boolean {
+  const doorUsable = tileDistance(p.heroAt, DOOR_AT) <= 1 && !p.doorLocked && !same(p.heroAt, DOOR_AT) && !(p.monster && same(p.monster.at, DOOR_AT));
+  return doorUsable || (tileDistance(p.heroAt, CONTAINER_AT) <= 1 && !p.searched);
+}
+
 /** Why the hero cannot make camp right now, in words: the sheet's own day rule, then the table's (no fight, nothing hostile awake or in sight). Null when it can. */
 function restRefusal(p: PlayState): string | null {
   if (heroDown(p)) return DOWN_NOTE;
@@ -1393,10 +1681,16 @@ const POTION_NOTATION = "2d4+2";
 /** The d4s the last potion rolled, for the dice tray. */
 let lastPotionDice: number[] = [];
 
-/** A healing potion, with the game's own Potion of Healing dice and applyHealing. It takes the action in a fight. */
-function drinkPotionRules(p: PlayState): TurnResult {
+/**
+ * A healing potion, with the game's own Potion of Healing dice and applyHealing. It takes the action in a fight.
+ * `kit` names one of the sheet's other healing consumables (a Healer's kit, a Medfoam injector): the same 2d4+2 every
+ * consumable heals (inventory/itemInfo.ts), and it spends one of that item's own uses instead of a potion.
+ */
+function drinkPotionRules(p: PlayState, kit?: string): TurnResult {
   if (p.hero.dead) return refusedWith(DOWN_NOTE);
-  if (p.potions <= 0) return refusedWith("No potions left.");
+  const kitAt = kit ? (p.hero.consumables ?? []).findIndex((c) => c.name === kit) : -1;
+  if (kit && (kitAt < 0 || p.hero.consumables[kitAt]!.uses <= 0)) return refusedWith("None left.");
+  if (!kit && p.potions <= 0) return refusedWith("No potions left.");
   if (p.round && !heroActionReady(p)) return refusedWith(p.round && !isPlayersTurn(p.round) ? "Wait for your turn." : "You have already taken your action this turn.");
   if (!heroDown(p) && p.hero.currentHp >= p.hero.maxHp) return refusedWith("You are already at full health.");
   const before = p.hero.currentHp;
@@ -1405,9 +1699,10 @@ function drinkPotionRules(p: PlayState): TurnResult {
   lastPotionDice = heal.rolls;
   const outcome = applyHealing(p.hero, heal.total);
   p.hero = outcome.sheet;
-  p.potions--;
+  if (kit) p.hero = { ...p.hero, consumables: p.hero.consumables.map((c, i) => (i === kitAt ? { ...c, uses: c.uses - 1 } : c)) };
+  else p.potions--;
   if (p.round) p.round = spendActiveAction(p.round) ?? p.round;
-  p.log.push({ text: `${p.hero.name} drinks a potion of healing. ${outcome.note}`, tone: "good" });
+  p.log.push({ text: `${p.hero.name} ${kit ? `uses the ${kit}` : "drinks a potion of healing"}. ${outcome.note}`, tone: "good" });
   return { events: [{ kind: "heal", tokenId: HERO_ID, amount: p.hero.currentHp - before }], refused: null };
 }
 
@@ -1421,6 +1716,17 @@ function drinkPotionRules(p: PlayState): TurnResult {
 function monsterTurnRules(p: PlayState): { events: CombatEvent[]; endAt: XY | null; sheet: CharacterSheet; lines: LogLine[] } {
   const m = p.monster;
   if (!m || !p.round) return { events: [], endAt: null, sheet: p.hero, lines: [] };
+  // A creature that was knocked prone spends half its movement standing up before anything else (SRD 5.1): the engine's own
+  // resolveMonsterTurn is simply given less movement, so it walks less far (or not at all) and still swings if it can reach.
+  let economy = activeCombatant(p.round)?.economy;
+  let standLine: LogLine | null = null;
+  if (m.prone && economy) {
+    const cost = Math.min(economy.movementRemaining, standUpCostFt(MONSTER_SPEED_FT));
+    economy = { ...economy, movementRemaining: economy.movementRemaining - cost };
+    m.prone = false;
+    playClips(p.monsterActor, ["idle"], performance.now());
+    standLine = { text: `${sentenceCase(monsterLabel(p))} spends ${cost} feet of its movement to stand up.`, tone: "plain" };
+  }
   const world = setCell(emptyWorld(), SCENE_CELL, engineLayout(p));
   const out = resolveMonsterTurn({
     world,
@@ -1430,11 +1736,11 @@ function monsterTurnRules(p: PlayState): { events: CombatEvent[]; endAt: XY | nu
     playerTokenId: HERO_ID,
     sheet: p.hero,
     namer: namerFor(p),
-    economy: activeCombatant(p.round)?.economy,
+    economy,
   });
   p.round = withActiveEconomy(p.round, out.economy);
   const after = getCell(out.world, SCENE_CELL)?.tokens.find((t) => t.id === MONSTER_ID);
-  const lines: LogLine[] = [];
+  const lines: LogLine[] = standLine ? [standLine] : [];
   const seen = new Set<string>();
   for (const l of out.lines) {
     seen.add(l.text);
@@ -1519,6 +1825,9 @@ function whatIsAt(p: PlayState, at: XY): string {
   if (p.monster && same(at, p.monster.at) && monsterInSight(p)) return monsterLabel(p);
   if (same(at, DOOR_AT)) return kit.doorLabel;
   if (same(at, CONTAINER_AT)) return kit.containerLabel;
+  const body = p.bodies.find((b) => same(b.at, at));
+  if (body) return `the ${body.name.toLowerCase()}'s body`;
+  if (pileAt(p, at)) return "the things lying on the ground";
   const prop = p.extraProps.find((e) => same(e, at));
   if (prop) return prop.label;
   if (isGrate(p, at)) return "the drain grate";
@@ -1690,6 +1999,7 @@ function dmViewFor(p: PlayState): DmSceneView {
       potions,
       consumables: (h.consumables ?? []).filter((x) => !/potion/i.test(x.name)).map((x) => `${x.name} x${x.uses}`),
       ...heroIdentityFor(p),
+      ...(p.heroHidden ? { hidden: true } : {}),
     },
     monsters: p.monster
       ? [
@@ -1702,6 +2012,9 @@ function dmViewFor(p: PlayState): DmSceneView {
             at: { ...p.monster.at },
             awake: p.monster.awake,
             seenByHero: monsterInSight(p),
+            // The goblin that is up has noticed the hero; one asleep has not.
+            awareOfHero: p.monster.awake,
+            ...(p.monster.prone ? { prone: true } : {}),
           },
         ]
       : [],
@@ -1713,7 +2026,49 @@ function dmViewFor(p: PlayState): DmSceneView {
     recent: p.dmRecent.slice(-DM_RECENT_SHOWN),
     log: p.log.slice(-6).map((l) => l.text),
     assets: DM_ASSETS[p.template],
+    // Only when there are any, so a scene without them reads exactly as it did.
+    ...(p.bodies.length > 0 ? { bodies: p.bodies.map((b) => ({ id: b.id, name: b.name, at: { ...b.at }, looted: b.looted, items: b.items.map((i) => i.name) })) } : {}),
+    ...(p.piles.some((q) => q.items.length > 0) ? { piles: p.piles.filter((q) => q.items.length > 0).map((q) => ({ at: { ...q.at }, items: [...q.items] })) } : {}),
   };
+}
+
+/** The DC of a Perception check to listen at a door (SRD 5.1 gives hearing a DC of 10 for ordinary sounds). */
+const LISTEN_DC = 10;
+
+/** The effect in plain words, for the debug journal's applied and refused lists. */
+function describeEffect(e: DmEffect): string {
+  switch (e.type) {
+    case "give": return `give ${e.item}${e.quest ? " (quest item)" : ""}${e.usable ? " (usable)" : ""}`;
+    case "take": return `take ${e.item}`;
+    case "potion": return `potion x${e.count}`;
+    case "loot": return "loot roll";
+    case "heal": return `heal ${e.dice}`;
+    case "harm": return `harm ${e.dice} (${e.why})`;
+    case "place": return `place ${e.asset} "${e.label}" at (${e.x},${e.y})`;
+    case "remove": return `remove ${e.id}`;
+    case "alter": return `alter ${e.id}`;
+    case "tile": return `tile ${e.tile} at (${e.x},${e.y})`;
+    case "door": return `door ${e.state}`;
+    case "monster": return `monster ${e.act}`;
+    case "push": return `push ${e.id} ${e.squares} square${e.squares === 1 ? "" : "s"}`;
+    case "hurt": return `hurt ${e.id}${e.dice ? ` ${e.dice}` : " (the attack's own damage)"}${e.damageType ? ` ${e.damageType}` : ""}`;
+    case "prone": return `prone ${e.id}`;
+  }
+}
+
+/** Damage the monster takes from something that is not a swing (a DM hurt with its own dice): hit points, the log, a kill. Returns the events the board floats. */
+function hurtMonsterBy(p: PlayState, amount: number, type?: string): CombatEvent[] {
+  const m = p.monster!;
+  const hurt = damageMonster({ assetId: SCENE_KIT[p.template].monster, currentHp: m.hp }, amount);
+  const lost = m.hp - hurt.currentHp;
+  m.hp = hurt.currentHp;
+  p.log.push({ text: `${sentenceCase(monsterLabel(p))} takes ${amount} ${type ? `${type} ` : ""}damage${hurt.down ? " and goes down" : `, ${hitPoints(m.hp)} left`}.`, tone: "good" });
+  const events: CombatEvent[] = lost > 0 ? [{ kind: "damage", tokenId: MONSTER_ID, amount, hpLost: lost, critical: false }] : [];
+  if (hurt.down) {
+    events.push({ kind: "down", tokenId: MONSTER_ID });
+    slayMonster(p);
+  }
+  return events;
 }
 
 type EffectOutcome = { ok: true; line?: LogLine; wake?: boolean } | { ok: false; why: string; logged?: boolean };
@@ -1754,6 +2109,10 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       p.hero = { ...p.hero, inventory: [...p.hero.inventory, e.item] };
       // What the DM says it is: the pack's hover tip shows it (and says the game does not use it by itself).
       if (typeof e.desc === "string" && e.desc.trim()) p.itemNotes[e.item] = e.desc.trim();
+      // Its flags (quest, usable, what Use says) ride with its name; the item card and the engine's item rules read them.
+      if (e.quest === true || e.usable === true || e.useSay !== undefined) {
+        p.itemFlags[e.item] = { ...(p.itemFlags[e.item] ?? {}), ...(e.quest === true ? { quest: true } : {}), ...(e.usable === true ? { usable: true } : {}), ...(e.useSay !== undefined ? { useSay: e.useSay } : {}) };
+      }
       return { ok: true, line: { text: `You now carry ${e.item}.`, tone: "good", notice: `+ ${e.item}` } };
     }
     case "take": {
@@ -1763,7 +2122,7 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       if (!want || at < 0) return fail(`the hero is not carrying "${e.item}" (only carried items can be taken)`);
       const gone = p.hero.inventory[at]!;
       p.hero = { ...p.hero, inventory: p.hero.inventory.filter((_, i) => i !== at) };
-      if (!p.hero.inventory.includes(gone)) delete p.itemNotes[gone];
+      if (!p.hero.inventory.includes(gone)) forgetItem(p, gone);
       return { ok: true, line: { text: `You no longer have ${gone}.`, tone: "plain" } };
     }
     case "potion": {
@@ -1852,6 +2211,7 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
         const blocked = squareBlockedWords(p, at);
         if (blocked) return fail(`a monster cannot appear at (${at.x},${at.y}): ${blocked}`);
         p.monster = { at, hp: statblockFor(kit.monster).maxHp, awake: false };
+        p.monsterCarried = carriedBy(kit.monster);
         p.fallenAt = null;
         p.monsterSeen = false;
         p.monsterActor = newActor("left");
@@ -1869,6 +2229,7 @@ function applyWorldEffect(p: PlayState, e: DmEffect): EffectOutcome {
       // flee
       const wasSeen = monsterInSight(p);
       p.monster = null;
+      p.monsterCarried = [];
       p.round = null;
       p.fallenAt = null;
       return { ok: true, line: { text: wasSeen ? `${sentenceCase(monsterLabel(p))} flees.` : "Something moves away out of sight.", tone: "good" } };
@@ -1941,6 +2302,241 @@ function equipFromArmoury(p: PlayState, role: GearRole, tier: EquipmentTier): Ge
   const done = equipFromPack(p, bag.length);
   if (!done.ok) p.hero = before;
   return done;
+}
+
+// ---------------------------------------------------------------------------
+// Item cards, piles and bodies. The rules are the engine's (inventory/itemActions.ts
+// decides what each item offers and applies it, rules/corpses.ts says what a body
+// holds); this is the scene around them: where a dropped thing lies, what a search
+// of a body turns up, and the words the card shows.
+// ---------------------------------------------------------------------------
+
+/** Something hostile is awake or in sight: the game's own gate on changing gear, with the same test the rest rule uses (a sleeping goblin behind a shut door does not stop you). */
+function hostileNear(p: PlayState): boolean {
+  return p.round !== null || (!!p.monster && (p.monster.awake || monsterInSight(p)));
+}
+
+/** What the engine needs to know about the hero's moment to say what an item can do. */
+function itemCtx(p: PlayState): ItemActionContext {
+  return {
+    inFight: hostileNear(p),
+    // Outside a round nobody is waiting for a turn.
+    heroTurn: !p.round || heroesTurn(p),
+    actionReady: heroActionReady(p),
+    heroDown: heroDown(p),
+    flags: p.itemFlags,
+    // The bench keeps its own potion stock and has no death saves, so a downed hero can still drink.
+    potions: p.potions,
+    potionWhileDown: true,
+  };
+}
+
+/** The item a pack or sheet key stands for (sheetItemKey: the section, a colon, the name), or null when it is not there any more. */
+function itemRefFor(p: PlayState, key: string): ItemRef | null {
+  const at = key.indexOf(":");
+  if (at < 0) return null;
+  const section = key.slice(0, at);
+  const name = key.slice(at + 1);
+  if (section === "Worn") {
+    const role = GEAR_ROLES.find((r) => itemNameFor(p.hero, r) === name);
+    return role ? { where: "worn", slot: role } : null;
+  }
+  if (section === "Bag") {
+    const index = (p.hero.bag ?? []).findIndex((b) => gearItemName(p.archetypeId, b.slot, b.tier) === name);
+    return index >= 0 ? { where: "bag", index } : null;
+  }
+  if (section === "Carried") return { where: "carried", name };
+  if (section === "Consumables") return { where: "consumable", name };
+  return null;
+}
+
+/** The card an item shows: the hover facts, the engine's one-line status on top, and a button for everything it offers (greyed, with its reason, when it cannot be done now). */
+function itemCardFor(p: PlayState, key: string): ItemCardContent | null {
+  const ref = itemRefFor(p, key);
+  if (!ref) return null;
+  const at = key.indexOf(":");
+  const label = key.slice(0, at);
+  const name = key.slice(at + 1);
+  const info = packInfo(p.hero, { potions: p.potions, notes: p.itemNotes })
+    .find((s) => s.label === label)
+    ?.items.find((i) => i.name === name);
+  if (!info) return null;
+  const ctx = itemCtx(p);
+  return {
+    tip: itemTip(info),
+    status: itemStatusLine(p.hero, ref, ctx),
+    actions: itemActionsFor(p.hero, ref, ctx).map((a) => ({ id: a.id, label: a.label, enabled: a.enabled, ...(a.reason ? { reason: a.reason } : {}), ...(a.confirm ? { confirm: a.confirm } : {}) })),
+  };
+}
+
+const withoutCount = (s: string): string => s.replace(/\s+x\d+$/i, "");
+
+/** Whether a pack still holds, or a pile still lies with, a thing of this name (case and a leading article forgiven). */
+function itemStillAround(p: PlayState, name: string): boolean {
+  const want = foldItem(withoutCount(name));
+  return p.hero.inventory.some((s) => foldItem(withoutCount(s)) === want) || p.piles.some((q) => q.items.some((s) => foldItem(withoutCount(s)) === want));
+}
+
+/** An item that has left the hero's hands for good: the DM's note and flags on it go too, unless another copy is still around. */
+function forgetItem(p: PlayState, name: string): void {
+  if (itemStillAround(p, name)) return;
+  const want = foldItem(name);
+  for (const k of Object.keys(p.itemNotes)) if (foldItem(k) === want) delete p.itemNotes[k];
+  for (const k of Object.keys(p.itemFlags)) if (foldItem(k) === want) delete p.itemFlags[k];
+}
+
+/** Put a thing on the ground at `at`. */
+function addToPile(p: PlayState, at: XY, name: string): void {
+  const pile = p.piles.find((q) => same(q.at, at));
+  if (pile) pile.items.push(name);
+  else p.piles.push({ at: { ...at }, items: [name] });
+}
+
+/** The pile on a square, when anything lies there. */
+const pileAt = (p: PlayState, at: XY): { at: XY; items: string[] } | undefined => p.piles.find((q) => same(q.at, at) && q.items.length > 0);
+
+/** The body on a square that still has something to search or take. */
+const bodyAt = (p: PlayState, at: XY): BodyState | undefined => p.bodies.find((b) => same(b.at, at) && !b.looted);
+
+/** The nearest searchable body or pile within one square of the hero (the hero's own square counts), a body first. */
+function lootNear(p: PlayState): { kind: "body"; body: BodyState } | { kind: "pile"; at: XY } | null {
+  const reach = (at: XY): boolean => tileDistance(p.heroAt, at) <= 1;
+  const body = p.bodies.find((b) => !b.looted && reach(b.at));
+  if (body) return { kind: "body", body };
+  const pile = p.piles.find((q) => q.items.length > 0 && reach(q.at));
+  return pile ? { kind: "pile", at: { ...pile.at } } : null;
+}
+
+/** The magic piece of gear a name stands for on this hero's gear table, or null (the engine's one namer is gearItemName). */
+function magicBagItemNamed(p: PlayState, name: string): { slot: GearRole; tier: MagicTier } | null {
+  for (const slot of GEAR_ROLES) {
+    for (const tier of MAGIC_TIERS) {
+      if (gearItemExists(p.archetypeId, slot, tier) && gearItemName(p.archetypeId, slot, tier) === name) return { slot, tier };
+    }
+  }
+  return null;
+}
+
+/**
+ * The first search of a body rolls the engine's own loot (the fight source, one roll of the cell's ledger), and a find waits
+ * on the body to be taken, not in the pack. When the ledger is spent the log says so, as it does for the chest.
+ */
+function ensureBodyLoot(p: PlayState, body: BodyState): void {
+  if (body.engineLootRolled) return;
+  body.engineLootRolled = true;
+  const out = lootFor(p.hero, { source: "fight", cx: 0, cy: 0 });
+  if (!out.roll) {
+    p.log.push({ text: LOOT_CAP_LINE, tone: "plain" });
+    return;
+  }
+  const roll = out.roll;
+  // lootFor puts a find straight into the bag; here it has to wait on the body, so only the ledger comes back to the hero.
+  p.hero = { ...p.hero, lootLedger: out.sheet.lootLedger };
+  const name = roll.item ? gearItemName(p.archetypeId, roll.item.slot, roll.item.tier) : null;
+  if (roll.item && name && roll.tier) {
+    body.items.push({ name, note: "A magic piece from the engine's loot roll.", kind: "trinket", pocketable: false });
+    const slotDie = roll.slotDie >= 2 && roll.slotRoll !== null ? ` d${roll.slotDie} = ${roll.slotRoll}:` : "";
+    p.log.push({ text: `Loot: d100 = ${roll.tierRoll}, ${TIER_WORD[roll.tier].toLowerCase()}.${slotDie} ${name}, on the body.`, tone: "good" });
+  } else {
+    p.log.push({ text: lootLine(roll, null), tone: "plain" });
+  }
+  // Nothing at all on it (a creature that carries nothing, and no find): it counts as searched.
+  if (body.items.length === 0) body.looted = true;
+}
+
+/** What a loot window lists for a body: each thing with its real facts on hover (a magic piece reads the engine's own numbers). */
+function bodyLootItems(p: PlayState, body: BodyState): LootWindowItem[] {
+  const notes = carriedNotes(body.items);
+  return body.items.map((it, i) => {
+    const bag = magicBagItemNamed(p, it.name);
+    return { key: String(i), name: it.name, tip: itemTip(bag ? describeBagItem(p.hero, bag) : describeCarried(p.hero, it.name, notes)) };
+  });
+}
+
+/** What a loot window lists for a pile. */
+function pileLootItems(p: PlayState, at: XY): LootWindowItem[] {
+  const pile = p.piles.find((q) => same(q.at, at));
+  return (pile?.items ?? []).map((name, i) => {
+    const bag = magicBagItemNamed(p, name);
+    return { key: String(i), name, tip: itemTip(bag ? describeBagItem(p.hero, bag) : describeCarried(p.hero, name, p.itemNotes)) };
+  });
+}
+
+/** Why a taken thing did not come, or null when it did. A flavour item goes to the carried list, magic gear to the bag (pickUp keeps the bag's rules), and the line goes in the log. */
+function takeIntoPack(p: PlayState, name: string, note: string | null): string | null {
+  const magic = magicBagItemNamed(p, name) !== null;
+  if (!magic && p.hero.inventory.length >= DM_INVENTORY_MAX) return "Your pack is full.";
+  const r = pickUp(p.hero, name, { potions: p.potions });
+  if (r.refused) return r.refused;
+  p.hero = r.sheet;
+  if (r.potions !== undefined) p.potions = r.potions;
+  if (note && !magic && !p.itemNotes[name]) p.itemNotes[name] = note;
+  p.log.push({ text: r.line, tone: "good", notice: `+ ${name}` });
+  return null;
+}
+
+/** Take one thing, or "all", from a body. Returns the refusals (what stayed behind and why). */
+function takeFromBodyInto(p: PlayState, bodyId: string, key: string | "all"): string[] {
+  const at = p.bodies.findIndex((b) => b.id === bodyId);
+  if (at < 0) return ["That body is gone."];
+  const refusals: string[] = [];
+  const wanted = key === "all" ? p.bodies[at]!.items.map((i) => i.name) : [p.bodies[at]!.items[Number(key)]?.name].filter((n): n is string => !!n);
+  for (const name of wanted) {
+    const item = p.bodies[at]!.items.find((i) => i.name === name);
+    if (!item) continue;
+    const why = takeIntoPack(p, item.name, item.note);
+    if (why) {
+      refusals.push(`${item.name}: ${why}`);
+      continue;
+    }
+    p.bodies[at] = takeFromBody(p.bodies[at]!, item.name).body;
+  }
+  return refusals;
+}
+
+/** Take one thing, or "all", off a pile. Returns the refusals. */
+function takeFromPileInto(p: PlayState, at: XY, key: string | "all"): string[] {
+  const pile = p.piles.find((q) => same(q.at, at));
+  if (!pile) return ["There is nothing there."];
+  const refusals: string[] = [];
+  const names = key === "all" ? [...pile.items] : [pile.items[Number(key)]].filter((n): n is string => !!n);
+  for (const name of names) {
+    const act = itemActionsFor(p.hero, { where: "pile", name }, itemCtx(p)).find((a) => a.id === "pickup");
+    if (act && !act.enabled) {
+      refusals.push(`${name}: ${act.reason ?? "You cannot pick that up."}`);
+      continue;
+    }
+    const why = takeIntoPack(p, name, null);
+    if (why) {
+      refusals.push(`${name}: ${why}`);
+      continue;
+    }
+    pile.items.splice(pile.items.indexOf(name), 1);
+  }
+  p.piles = p.piles.filter((q) => q.items.length > 0);
+  return refusals;
+}
+
+/** Drop one of an item onto the hero's square. Returns the refusal, or null. */
+function dropFromPack(p: PlayState, ref: ItemRef): string | null {
+  const r = dropItem(p.hero, ref, itemCtx(p));
+  if (r.refused) return r.refused;
+  p.hero = r.sheet;
+  if (r.potions !== undefined) p.potions = r.potions;
+  if (r.dropped) addToPile(p, p.heroAt, r.dropped);
+  p.log.push({ text: r.line, tone: "plain" });
+  return null;
+}
+
+/** Destroy one of an item for good. Returns the refusal, or null. */
+function destroyFromPack(p: PlayState, ref: ItemRef, name: string): string | null {
+  const r = destroyItem(p.hero, ref, itemCtx(p));
+  if (r.refused) return r.refused;
+  p.hero = r.sheet;
+  if (r.potions !== undefined) p.potions = r.potions;
+  forgetItem(p, name);
+  p.log.push({ text: r.line, tone: "plain" });
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2471,7 +3067,8 @@ function createPlayStage(host: PlayStageHost): PlayStage {
     }
     const monster = (at: XY, down: boolean): Fig => ({ id: "monster", set: monsterSet, sprite: !monCast, timing: monsterTimingFor(p, style), actor: p.monsterActor, at, down });
     const figs: Fig[] = [];
-    if (p.monster) figs.push(monster(p.monster.at, false));
+    // A knocked-down monster lies in its down pose until it stands up on its turn.
+    if (p.monster) figs.push(monster(p.monster.at, p.monster.prone === true));
     const heroFig: Fig | null = heroSet ? { id: "hero", set: heroSet, sprite: false, timing: heroSet.entry, actor: p.heroActor, at: p.heroAt, down: heroDown(p) } : null;
     if (heroFig) figs.push(heroFig);
     // Positions first, for all of them: actorAt lands a finished step, which actorClip then relies on.
@@ -2487,8 +3084,8 @@ function createPlayStage(host: PlayStageHost): PlayStage {
       if (at) monsterTile = at;
       else placed.splice(i, 1);
     }
-    // The fallen monster lies under everything.
-    if (!p.monster && p.fallenAt) placed.unshift({ f: monster(p.fallenAt, true), pos: p.fallenAt });
+    // Every body lies under everything, where it fell, until it is searched and long after (the picture does not forget).
+    for (const b of p.bodies) placed.unshift({ f: monster(b.at, true), pos: b.at });
     const out: StageItem[] = [];
     let hero: XY = p.heroAt;
     for (const { f, pos } of placed) {
@@ -2676,6 +3273,56 @@ function clearHeadroom(px: Uint8ClampedArray, states: Uint8Array, tile: XY, size
   }
 }
 
+/** A sack, 8 by 8 source pixels, set in the bottom right of its square so a hero standing on it is not hidden: what a pile of dropped things looks like on the ground. */
+const SACK_ROWS = ["...oo...", "..obbo..", "..otto..", ".obbbbo.", "obhbbbso", "obhbbsso", "obbbssso", ".oooooo."] as const;
+const SACK_COLOURS: Readonly<Record<string, string>> = { o: "#3a2414", b: "#b98d52", h: "#dcb877", s: "#8a6232", t: "#b0382f" };
+
+/**
+ * What lies on the ground, drawn over the board on the marks canvas: a sack on every square with a pile, and a small gold
+ * glint on a body that has not been searched yet. Only squares the hero has seen (the fog is under this canvas, not over it).
+ */
+function drawLootMarks(ctx: CanvasRenderingContext2D, p: PlayState, ts: number): void {
+  const u = ts / 16;
+  const px = (x: number, y: number, w: number, h: number, colour: string, at: XY): void => {
+    ctx.fillStyle = colour;
+    ctx.fillRect(Math.round(at.x * ts + x * u), Math.round(at.y * ts + y * u), Math.max(1, Math.round(w * u)), Math.max(1, Math.round(h * u)));
+  };
+  for (const q of p.piles) {
+    if (q.items.length === 0 || sightLevel(p, q.at) === 0) continue;
+    SACK_ROWS.forEach((row, ry) => {
+      for (let rx = 0; rx < row.length; rx++) {
+        const colour = SACK_COLOURS[row[rx]!];
+        if (colour) px(7 + rx, 8 + ry, 1, 1, colour, q.at);
+      }
+    });
+  }
+  for (const b of p.bodies) {
+    if (b.looted || sightLevel(p, b.at) === 0) continue;
+    // A four-point glint in the top right corner of the square.
+    px(12, 1, 1, 3, "#ffd34c", b.at);
+    px(11, 2, 3, 1, "#ffd34c", b.at);
+    px(12, 2, 1, 1, "#fff6dc", b.at);
+  }
+}
+
+/** A small tag at the foot of a square: the creature standing there has been knocked down. (Drawn in both art modes; the animated figure also lies down.) */
+function drawProneMark(ctx: CanvasRenderingContext2D, at: XY, ts: number): void {
+  const w = Math.round(ts * 0.86);
+  const h = Math.max(11, Math.round(ts * 0.22));
+  const x = Math.round(at.x * ts + (ts - w) / 2);
+  const y = Math.round((at.y + 1) * ts - h - 1);
+  ctx.fillStyle = "rgba(20, 16, 24, 0.85)";
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = "#ffb86c";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.fillStyle = "#ffb86c";
+  ctx.font = `700 ${Math.max(8, Math.round(h * 0.72))}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("PRONE", x + w / 2, y + h / 2 + 1);
+}
+
 /**
  * A small picture of a class for the sheet's header and the creator's class cards:
  * the archetype's own token sprite from the art the bench is showing, scaled by a
@@ -2749,7 +3396,9 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     controls.appendChild(f);
   };
   const heroSelect = buildHeroSelect(st().archetypeId, (id) => {
+    const old = play;
     play = newPlay("fantasy", id, ROOM_FLOOR.fantasy);
+    carryJournals(old, play, "a different hero was picked");
     newScene();
   });
   field("Hero", heroSelect);
@@ -2797,7 +3446,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     el_(
       "p",
       "lt-note lt-howto",
-      "Click a square to walk there, the goblin to attack it, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press anything to look closer; type what you do in the box. Hover or tap anything in the pack, or any number on the sheet, to read exactly what it is. Sheet (C) opens your character sheet and makes your own hero; the Hero setting here quick-picks a ready-made one. The DM's answers come with two to four suggested next moves (keys 1 to 4, or press them); Attack, Use, Potion and End turn show only when they would do something. Rest (R) makes camp once a day and saves; the Saves tab goes back to any save, and a checkpoint is made when a scene starts. The Log tab (L) keeps every roll, find and line of narration; the board shows only the story, and it fades. Keys: arrows or WASD step, F attack, E use, Q potion, R rest, 1 to 4 suggested moves, I pack, L log, C sheet, T end turn, Space skips the goblin's turn, Esc stops the DM.",
+      "Click a square to walk there, the goblin to attack it, the door or the chest to use it. Walls and shut doors hide what is behind them: you see only what is in line of sight, remember what you have seen, and cannot click what you have not. On a phone, tap once to see the path and again to go. Right-click or long-press any square for what you can do there (Look closer is the first line; a kick, a shove, hiding, a pickpocket and more show up for the characters that can); type what you do in the box. Hover anything in the pack, or any number on the sheet, to read exactly what it is; click an item for what you can do with it (equip, use, drop, destroy), or why you cannot. A fallen creature stays where it fell: click it, or stand next to it and press E, to search it. Things you drop lie in a sack on your square. Sheet (C) opens your character sheet and makes your own hero; the Hero setting here quick-picks a ready-made one. The DM's answers come with two to four suggested next moves (keys 1 to 4, or press them); Attack, Use, Potion and End turn show only when they would do something. Rest (R) makes camp once a day and saves; the Saves tab goes back to any save, and a checkpoint is made when a scene starts. The Log tab (L) keeps every roll, find and line of narration; the board shows only the story, and it fades. Keys: arrows or WASD step, F attack, E use, Q potion, R rest, 1 to 4 suggested moves, I pack, L log, C sheet, T end turn, Space skips the goblin's turn, Esc stops the DM.",
     ),
   );
 
@@ -2828,13 +3477,50 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   el.appendChild(shop);
   const overlay: Overlay = createOverlay(stageWrap, textStyle);
   const tray: DiceTray = createDiceTray(trayHost, diceSkin);
-  const hud: Hud = createHud(trayCol, textStyle, (id) => void onHudAction(id), { slot: trayHost, onAsk: (text) => void runDm({ kind: "freehand", text }) });
+  const hud: Hud = createHud(trayCol, textStyle, (id) => void onHudAction(id), {
+    slot: trayHost,
+    onAsk: (text) => void runDm({ kind: "freehand", text }),
+    onItemAction: (key, id) => void runItemAction(key, id),
+  });
   const picker = createSkinPicker(shopHost, tray, { owned: OWNED_SKINS, onTry: (id) => (diceSkin = id) });
 
+  /** The numbers a roll's journal entry carries beside its dice (the export lists every roll: who, the dice, the numbers, the verdict). */
+  interface RollMeta {
+    modifier?: number;
+    total?: number;
+    target?: number;
+  }
+
+  /** Throw dice in the tray, and write the throw in the roll journal. Every throw on the table goes through here. */
+  function throwDice(req: RollRequest, who: string, meta: RollMeta = {}): Promise<void> {
+    const rec: RollRecord = {
+      at: new Date().toISOString(),
+      who,
+      label: req.label ?? "",
+      dice: req.dice.map((d) => ({ kind: d.kind, result: d.result })),
+      ...(meta.modifier !== undefined ? { modifier: meta.modifier } : {}),
+      ...(meta.total !== undefined ? { total: meta.total } : {}),
+      ...(meta.target !== undefined ? { target: meta.target } : {}),
+      ...(req.detail ? { verdict: req.detail } : {}),
+    };
+    const journal = st().rollJournal;
+    journal.push(rec);
+    if (journal.length > ROLL_JOURNAL_KEEP) journal.splice(0, journal.length - ROLL_JOURNAL_KEEP);
+    return tray.roll(req);
+  }
+
   /** Wait for the player's tap on the tray (unless the tray rolls for them), then throw. */
-  async function rollStep(prompt: string, dice: readonly { kind: DieKind; result: number }[], label: string, detail: string, tone: "good" | "bad" | "plain"): Promise<void> {
+  async function rollStep(prompt: string, dice: readonly { kind: DieKind; result: number }[], label: string, detail: string, tone: "good" | "bad" | "plain", meta?: RollMeta): Promise<void> {
     if (rollMyself) await tray.awaitRoll(prompt, dice.map((d) => d.kind));
-    await tray.roll({ dice, label, detail, tone });
+    await throwDice({ dice, label, detail, tone }, st().hero.name, meta);
+  }
+
+  /** A creature's throw: in ITS tray, with its own dice and its name on the rim (foeDice.ts: the better the enemy, the fancier the die and the tray). It rolls itself; nobody taps. */
+  function foeThrow(p: PlayState, dice: readonly { kind: DieKind; result: number }[], label: string, detail: string, tone: "good" | "bad" | "plain", meta?: RollMeta): Promise<void> {
+    const token = SCENE_KIT[p.template].monster;
+    const foe = foeDiceForToken(token);
+    const name = statblockFor(token).name.toLowerCase();
+    return throwDice({ dice, label, detail, tone, skin: foe.skinId, tray: foe.trayId, who: p.monsterSeen ? `The ${name} rolls` : "Something rolls" }, p.monsterSeen ? `The ${name}` : "Something", meta);
   }
 
   // ---- the character sheet and character creation (sheet.ts) --------------------
@@ -2847,6 +3533,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
 
   let sheetView: SheetView | null = null;
   let creationView: CreationView | null = null;
+  /** The debug export's outcome, in plain words, under its button in the Saves tab; and whether the clipboard fallback button shows. */
+  let exportStatus: string | undefined;
+  let exportCopyShown = false;
+  /** The loot window on the board (a body being searched, or a pile), and what it is for. */
+  let lootWin: LootWindow | null = null;
+  let lootTarget: { kind: "body"; id: string } | { kind: "pile"; at: XY } | null = null;
   let sheetSig = "";
   const overlayOpen = (): boolean => sheetView !== null || creationView !== null;
   const sheetExtras = (p: PlayState): SheetExtras => ({ potions: p.potions, notes: p.itemNotes, portrait: portraitCanvas(p.archetypeId) });
@@ -2858,6 +3550,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   }
 
   function viewsChanged(): void {
+    closeLoot();
     hover = null;
     previewed = null;
     marksKey = "";
@@ -2884,9 +3577,13 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   function openSheetView(): void {
     if (overlayOpen()) return;
     const p = st();
+    closeLoot();
     sheetView = openSheet(stageWrap, p.hero, {
       style: textStyle,
       extras: sheetExtras(p),
+      // The same item cards as the pack: what each thing can do, and why not when it cannot.
+      itemCard: (key) => itemCardFor(st(), key),
+      onItemAction: (key, id) => void runItemAction(key, id),
       onNewCharacter: () => {
         closeSheet();
         openCreationView();
@@ -2925,13 +3622,16 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         const faces = Array.from({ length: count }, () => rollDie(sides));
         if (g === 0 && rollMyself) await tray.awaitRoll(`Tap to roll your ${groups} scores`, faces.map(() => kind));
         const kept = dropLowest(faces);
-        await tray.roll({
-          dice: faces.map((result) => ({ kind, result })),
-          label: `Score ${g + 1} of ${groups}: ${faces.join(" ")}`,
-          // dropped is the lowest die's index; the player reads its face.
-          detail: `KEEP ${kept.total}, DROP THE ${faces[kept.dropped]}`,
-          tone: "plain",
-        });
+        await throwDice(
+          {
+            dice: faces.map((result) => ({ kind, result })),
+            label: `Score ${g + 1} of ${groups}: ${faces.join(" ")}`,
+            // dropped is the lowest die's index; the player reads its face.
+            detail: `KEEP ${kept.total}, DROP THE ${faces[kept.dropped]}`,
+            tone: "plain",
+          },
+          `${st().hero.name} (character creation)`,
+        );
         // Cancelled, or the scene went away, while it rolled: stop throwing.
         if (!alive || !creationView) throw new Error(label);
         out.push(faces);
@@ -2961,6 +3661,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const id = made.archetypeId as ArchetypeId;
     const sheet = made.appearanceAssetId === bodySpriteId(id) ? made : { ...made, appearanceAssetId: bodySpriteId(id) };
     play = newPlay(p.template, id, ROOM_FLOOR[p.template], undefined, sheet);
+    carryJournals(p, play, "a new character began");
     newScene();
     story({ text: `${sheet.name} steps into the room.`, tone: "plain" });
   }
@@ -3039,6 +3740,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   type Plan =
     | { kind: "walk"; path: XY[]; costFt: number; tile: XY }
     | { kind: "attack"; path: XY[]; costFt: number; tile: XY }
+    | { kind: "loot"; path: XY[]; costFt: number; tile: XY }
     | { kind: "use"; path: XY[]; costFt: number; tile: XY }
     | { kind: "look"; path: XY[]; costFt: number; tile: XY }
     | { kind: "none"; tile: XY; reason: string };
@@ -3057,6 +3759,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       const path = spot ? pathTo(field, spot) : null;
       if (!path) return { kind: "none", tile, reason: p.round ? "You cannot reach it this turn." : "You cannot reach it from here." };
       return { kind: "attack", path, costFt: cost(path), tile };
+    }
+    // A body that has not been searched, or things lying on the ground: a click walks up and opens what is there.
+    if (bodyAt(p, tile) || pileAt(p, tile)) {
+      if (tileDistance(p.heroAt, tile) <= 1) return { kind: "loot", path: [], costFt: 0, tile };
+      const spot = approachTile(field, tile, 1);
+      const path = spot ? pathTo(field, spot) : null;
+      if (!path) return { kind: "none", tile, reason: p.round ? "Too far to reach this turn." : "You cannot get next to it from here." };
+      return { kind: "loot", path, costFt: cost(path), tile };
     }
     // A prop the DM placed: a click walks up to it and looks closer (the DM answers). A grate is
     // floor, so a click walks onto it; looking at one is a right-click or a long press, because
@@ -3094,7 +3804,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const p = st();
     const ts = tileScale();
     const plan = !busy && hover ? planFor(hover) : null;
-    const key = [canvas.width, canvas.height, ts, busy, walkQueue.length, p.heroAt.x, p.heroAt.y, p.monster ? `${p.monster.at.x},${p.monster.at.y},${monsterInSight(p) ? 1 : 0}` : "-", p.exploredRev, p.worldRev, p.doorOpen, p.doorLocked, p.searched, p.round ? `${p.round.activeIndex},${p.round.roundNumber},${activeCombatant(p.round)?.economy.movementRemaining},${activeCombatant(p.round)?.economy.action}` : "x", hover ? `${hover.x},${hover.y}` : "-", heroDown(p)].join("|");
+    const lootSig = `${p.piles.map((q) => `${q.at.x},${q.at.y},${q.items.length}`).join(";")}|${p.bodies.map((b) => `${b.at.x},${b.at.y},${b.looted ? 1 : 0}`).join(";")}`;
+    const key = [canvas.width, canvas.height, ts, busy, walkQueue.length, p.heroAt.x, p.heroAt.y, p.monster ? `${p.monster.at.x},${p.monster.at.y},${monsterInSight(p) ? 1 : 0},${p.monster.prone ? 1 : 0}` : "-", p.exploredRev, p.worldRev, p.doorOpen, p.doorLocked, p.searched, p.round ? `${p.round.activeIndex},${p.round.roundNumber},${activeCombatant(p.round)?.economy.movementRemaining},${activeCombatant(p.round)?.economy.action}` : "x", hover ? `${hover.x},${hover.y}` : "-", heroDown(p), lootSig].join("|");
     if (key === marksKey) return;
     marksKey = key;
     if (marks.width !== canvas.width || marks.height !== canvas.height) {
@@ -3103,6 +3814,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
     const ctx = marks.getContext("2d")!;
     ctx.clearRect(0, 0, marks.width, marks.height);
+    drawLootMarks(ctx, p, ts);
+    if (p.monster?.prone && monsterInSight(p)) drawProneMark(ctx, p.monster.at, ts);
     if (busy || walkQueue.length > 0 || heroDown(p)) return;
     // The squares this turn's movement reaches, in a fight.
     if (heroesTurn(p)) {
@@ -3131,7 +3844,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       return;
     }
     // The path as dots, its end as a ring, and its length in feet.
-    const colour = plan.kind === "attack" ? "rgba(255, 120, 90, 0.95)" : plan.kind === "use" ? "rgba(255, 205, 90, 0.95)" : plan.kind === "look" ? "rgba(170, 215, 255, 0.95)" : "rgba(255, 245, 210, 0.95)";
+    const colour = plan.kind === "attack" ? "rgba(255, 120, 90, 0.95)" : plan.kind === "use" || plan.kind === "loot" ? "rgba(255, 205, 90, 0.95)" : plan.kind === "look" ? "rgba(170, 215, 255, 0.95)" : "rgba(255, 245, 210, 0.95)";
     ctx.fillStyle = colour;
     for (const t of plan.path) {
       ctx.beginPath();
@@ -3141,7 +3854,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     ctx.strokeStyle = colour;
     ctx.lineWidth = Math.max(2, ts / 14);
     ctx.strokeRect(plan.tile.x * ts + 3, plan.tile.y * ts + 3, ts - 6, ts - 6);
-    const words = plan.kind === "attack" ? (plan.costFt ? `${plan.costFt} ft, attack` : "Attack") : plan.kind === "use" ? (plan.costFt ? `${plan.costFt} ft, use` : "Use") : plan.kind === "look" ? (plan.costFt ? `${plan.costFt} ft, look` : "Look closer") : `${plan.costFt} ft`;
+    const words = plan.kind === "attack" ? (plan.costFt ? `${plan.costFt} ft, attack` : "Attack") : plan.kind === "loot" ? (plan.costFt ? `${plan.costFt} ft, search` : "Search") : plan.kind === "use" ? (plan.costFt ? `${plan.costFt} ft, use` : "Use") : plan.kind === "look" ? (plan.costFt ? `${plan.costFt} ft, look` : "Look closer") : `${plan.costFt} ft`;
     const end = plan.path[plan.path.length - 1] ?? plan.tile;
     const fontPx = Math.max(11, Math.round(ts / 4));
     ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
@@ -3185,6 +3898,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     for (const line of p.log.slice(said)) if (line.notice) hud.notice(line.notice, "good");
     said = p.log.length;
     if (p.log.length > LOG_KEEP) {
+      archiveLog(p.log.slice(0, p.log.length - LOG_KEEP));
       p.log.splice(0, p.log.length - LOG_KEEP);
       said = p.log.length;
     }
@@ -3226,14 +3940,14 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
   }
 
-  async function beginFight(): Promise<void> {
+  async function beginFight(fromHiding = false): Promise<void> {
     const p = st();
     if (p.round || !p.monster) return;
     busy = true;
     walkQueue.length = 0;
     onArrive = null;
     clearOptions();
-    startFight(p);
+    startFight(p, fromHiding);
     p.monsterActor.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
     story({ speaker: p.monsterSeen ? "Goblin" : "Something", text: bark(GOBLIN_BARKS.wake), tone: "bad" });
     flushLog();
@@ -3244,7 +3958,13 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const mine = st().round?.order.find((c) => c.id === HERO_ID);
     if (mine) {
       const d20 = mine.initiative - p.hero.modifiers.dex;
-      await rollStep("Tap to roll initiative", [{ kind: "d20", result: d20 }], `${d20} ${signedNum(p.hero.modifiers.dex)} = ${mine.initiative}`, "INITIATIVE", "plain");
+      await rollStep("Tap to roll initiative", [{ kind: "d20", result: d20 }], `${d20} ${signedNum(p.hero.modifiers.dex)} = ${mine.initiative}`, "INITIATIVE", "plain", { modifier: p.hero.modifiers.dex, total: mine.initiative });
+    }
+    // The goblin's own initiative die, in its own tray: the total startCombat rolled, less the fixed bonus it adds.
+    const theirs = st().round?.order.find((c) => c.id === MONSTER_ID);
+    if (theirs) {
+      const d20 = theirs.initiative - MONSTER_INITIATIVE_MODIFIER;
+      await foeThrow(st(), [{ kind: "d20", result: d20 }], `${d20} ${signedNum(MONSTER_INITIATIVE_MODIFIER)} = ${theirs.initiative}`, "INITIATIVE", "plain", { modifier: MONSTER_INITIATIVE_MODIFIER, total: theirs.initiative });
     }
     busy = false;
     await runHostiles();
@@ -3268,6 +3988,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (anySeen) await overlay.banner(`${statblockFor(SCENE_KIT[p.template].monster).name.toUpperCase()}'S TURN`, "enemy");
       else void overlay.banner("SOMETHING MOVES", "enemy");
       const start = { ...p.monster.at };
+      // Its turn: it knows where the hero is, hidden or not.
+      if (p.heroHidden || p.sneaking) {
+        if (p.heroHidden) p.log.push({ text: "It is on its feet and knows where you are. You are no longer hidden.", tone: "plain" });
+        p.heroHidden = false;
+        p.sneaking = false;
+      }
       const turn = monsterTurnRules(p);
       // Walk it square by square along the engine's own path.
       const move = turn.events.find((e): e is Extract<CombatEvent, { kind: "move" }> => e.kind === "move");
@@ -3294,12 +4020,16 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         const dmg = swing.find((e): e is Extract<CombatEvent, { kind: "damage" }> => e.kind === "damage");
         if (atk) {
           const r0 = atk.readout;
-          await tray.roll({
-            dice: [{ kind: "d20", result: r0.roll }],
-            label: `Goblin: ${r0.roll} ${signedNum(r0.modifier)} = ${r0.total} vs ${r0.target}`,
-            detail: dmg ? `${verdictWords({ hit: true, critical: dmg.critical, fumble: false })}, ${dmg.amount} DAMAGE` : verdictWords({ hit: false, critical: false, fumble: !!r0.fumble }),
-            tone: r0.hit ? "bad" : "good",
-          });
+          // The better the enemy, the fancier its dice and the tray they land in (foeDice.ts): the goblin rolls in its own, with its name on the rim.
+          await foeThrow(
+            p,
+            [{ kind: "d20", result: r0.roll }],
+            `Goblin: ${r0.roll} ${signedNum(r0.modifier)} = ${r0.total} vs ${r0.target}`,
+            // A critical's full verdict is too long for the tray's line and would cut the damage off: say CRITICAL and the number.
+            dmg ? `${dmg.critical ? "CRITICAL" : verdictWords({ hit: true, critical: false, fumble: false })}, ${dmg.amount} DAMAGE` : verdictWords({ hit: false, critical: false, fumble: !!r0.fumble }),
+            r0.hit ? "bad" : "good",
+            { modifier: r0.modifier, total: r0.total, target: r0.target },
+          );
         }
         p.monsterActor.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
         if (!REDUCED_MOTION) playClips(p.monsterActor, ["attack"], performance.now());
@@ -3343,9 +4073,43 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       fightWasOn = false;
       await overlay.banner("VICTORY", "victory");
     }
-    if (!p.round && monsterNotices(p)) await beginFight();
+    // A hero who is sneaking or hidden is not noticed by sight: each step that would be is a Stealth check (stealthStep), not a wake.
+    if (!p.round && monsterNotices(p) && !stealthy(p)) await beginFight();
   }
   let fightWasOn = false;
+
+  /**
+   * One step the monster could have noticed, taken sneaking or hidden: a Stealth check against its passive Perception, thrown in
+   * the tray. Success keeps the hero unseen (hidden) and the walk goes on; failure is the monster noticing, and the fight starts.
+   * Every such step is its own check. The table is busy until the check is thrown.
+   */
+  async function stealthStep(): Promise<void> {
+    busy = true;
+    const p = st();
+    const pp = monsterPassive(p);
+    const out = stealthCheck({ sheet: p.hero, observers: [{ id: MONSTER_ID, passivePerception: pp, name: monsterLabel(p) }], rng: benchRng });
+    const mod = skillModifierFor(p.hero, "Stealth");
+    const unseen = out.spottedBy.length === 0;
+    await rollStep("Tap to roll Stealth", out.dice, `Stealth ${out.total - mod} ${signedNum(mod)} = ${out.total} vs ${pp}`, unseen ? "UNSEEN" : "SPOTTED", unseen ? "good" : "bad", { modifier: mod, total: out.total, target: pp });
+    if (!alive || st() !== p) return;
+    p.log.push({ text: out.line, tone: unseen ? "good" : "bad" });
+    if (unseen) {
+      // Unseen: hidden from here on, and the walk (still queued) carries on.
+      p.heroHidden = true;
+      busy = false;
+      flushLog();
+      refreshAll();
+      return;
+    }
+    p.heroHidden = false;
+    p.sneaking = false;
+    walkQueue.length = 0;
+    onArrive = null;
+    busy = false;
+    flushLog();
+    refreshAll();
+    await afterHeroAction();
+  }
 
   /** One square of a walk (a click's path, or a key). False when it was refused, which ends the walk. */
   function takeStep(to: XY): boolean {
@@ -3368,6 +4132,12 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     drawMarks();
     // The HUD follows every change of turn state (it redraws only when what it shows changed).
     renderHud();
+    // A loot window belongs to a body or pile within reach on a quiet board: a step away, a fight or a DM turn closes it.
+    if (lootWin && lootTarget) {
+      const p = st();
+      const at = lootTarget.kind === "body" ? p.bodies.find((b) => b.id === (lootTarget as { id: string }).id)?.at : lootTarget.at;
+      if (busy || p.round !== null || heroDown(p) || !at || tileDistance(p.heroAt, at) > 1) closeLoot();
+    }
     if (busy) return;
     const h = st().heroActor;
     if (stepBusy(h, now)) return;
@@ -3377,9 +4147,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         walkQueue.length = 0;
         onArrive = null;
       }
-      // A step that brings the goblin's notice ends the walk where it stands.
+      // A step that brings the goblin's notice ends the walk where it stands. A hero who is sneaking or hidden rolls Stealth for the step instead.
       const p = st();
-      if (!p.round && monsterNotices(p)) {
+      if (!p.round && monsterNotices(p) && stealthy(p)) {
+        void stealthStep();
+      } else if (!p.round && monsterNotices(p)) {
         walkQueue.length = 0;
         onArrive = null;
         void afterHeroAction();
@@ -3395,13 +4167,58 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
   }
 
+  /** The attack roll of a swing in the tray (every d20 of it: two with advantage or disadvantage), then the hero turns and swings. */
+  async function throwSwingAttack(sw: Swing, target: XY): Promise<void> {
+    const p = st();
+    const d = sw.dice;
+    // A kick has no damage dice, so its number rides on this line; a critical's full verdict is too long beside it for the tray.
+    const flat = sw.kick && d.hit && d.damage ? `, ${d.damage.total} DAMAGE` : "";
+    await rollStep(
+      `Tap to roll your ${sw.kick ? "kick" : "attack"}${d.mode ? ` with ${d.mode}` : ""}`,
+      d.d20s.map((result) => ({ kind: "d20" as DieKind, result })),
+      `${d.roll} ${signedNum(d.modifier)} = ${d.total} vs ${d.target}`,
+      flat && d.critical ? `CRITICAL${flat}` : `${verdictWords(d)}${flat}`,
+      d.hit ? "good" : "bad",
+      { modifier: d.modifier, total: d.total, target: d.target },
+    );
+    p.heroActor.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
+    if (!REDUCED_MOTION) playClips(p.heroActor, ["attack"], performance.now());
+    await wait(300);
+  }
+
+  /** The damage dice of a hit (a kick has none: its damage is a flat number the log line states). */
+  async function throwSwingDamage(sw: Swing): Promise<void> {
+    const dmg = sw.dice.damage;
+    if (!dmg || dmg.rolls.length === 0) return;
+    await rollStep(
+      sw.dice.critical ? "Critical! Tap to roll double damage" : "Tap to roll damage",
+      dmg.rolls.map((v) => ({ kind: dieOf(dmg.sides), result: v })),
+      `${dmg.rolls.join(" + ")} ${signedNum(dmg.modifier)} = ${dmg.total}`,
+      sw.dice.critical ? "CRITICAL DAMAGE" : "DAMAGE",
+      "good",
+    );
+  }
+
+  /** What a swing leaves on the board: the monster flinches or falls, it barks, the hero cheers over a kill. */
+  function swingAftermath(p: PlayState, events: readonly CombatEvent[]): void {
+    const hit = events.some((e) => e.kind === "damage");
+    const now = performance.now();
+    if (!REDUCED_MOTION) {
+      if (!p.monster) playClips(p.monsterActor, ["death"], now);
+      else if (hit) playClips(p.monsterActor, p.monster.prone ? ["hit", "death"] : ["hit"], now);
+    }
+    if (p.monster && hit && Math.random() < 0.6) story({ speaker: "Goblin", text: bark(GOBLIN_BARKS.hurt), tone: "good" });
+    if (p.monster && !hit && Math.random() < 0.6) story({ speaker: "Goblin", text: bark(GOBLIN_BARKS.dodge), tone: "bad" });
+    if (!p.monster && !REDUCED_MOTION) playClips(p.heroActor, ["cheer"], now + 400);
+  }
+
   async function heroAttackFlow(): Promise<void> {
     const p = st();
     if (!p.monster) return refuse("Nothing left to fight.");
     if (!monsterInSight(p)) return refuse("You do not see anything to attack.");
     if (!p.round) {
-      // Attacking a goblin that has not noticed you still starts the fight; you swing on your turn.
-      await beginFight();
+      // Attacking a goblin that has not noticed you still starts the fight; you swing on your turn (from hiding, if you were hidden).
+      await beginFight(true);
       if (!heroesTurn(st())) return;
     }
     const target = { ...p.monster.at };
@@ -3410,37 +4227,15 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     clearOptions();
     fightWasOn = true;
     busy = true;
-    const d = r.dice;
-    // The attack roll: the engine has rolled it; the player throws the die and sees it land.
-    await rollStep("Tap to roll your attack", [{ kind: "d20", result: d.roll }], `${d.roll} ${signedNum(d.modifier)} = ${d.total} vs ${d.target}`, verdictWords(d), d.hit ? "good" : "bad");
-    p.heroActor.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
-    if (!REDUCED_MOTION) playClips(p.heroActor, ["attack"], performance.now());
-    await wait(300);
-    if (d.damage) {
-      const dmg = d.damage;
-      await rollStep(
-        d.critical ? "Critical! Tap to roll double damage" : "Tap to roll damage",
-        dmg.rolls.map((v) => ({ kind: dieOf(dmg.sides), result: v })),
-        `${dmg.rolls.join(" + ")} ${signedNum(dmg.modifier)} = ${dmg.total}`,
-        d.critical ? "CRITICAL DAMAGE" : "DAMAGE",
-        "good",
-      );
-    }
+    // The attack roll: the engine has rolled it; the player throws the die and sees it land (both d20, with advantage or disadvantage).
+    await throwSwingAttack(r.swing, target);
+    await throwSwingDamage(r.swing);
     const events = r.apply();
     showAttack(events, "monster", target);
-    const hit = events.some((e) => e.kind === "damage");
-    const now = performance.now();
-    if (!REDUCED_MOTION) {
-      if (!p.monster) playClips(p.monsterActor, ["death"], now);
-      else if (hit) playClips(p.monsterActor, ["hit"], now);
-    }
-    if (p.monster && hit && Math.random() < 0.6) story({ speaker: "Goblin", text: bark(GOBLIN_BARKS.hurt), tone: "good" });
-    if (p.monster && !hit && Math.random() < 0.6) story({ speaker: "Goblin", text: bark(GOBLIN_BARKS.dodge), tone: "bad" });
-    if (!p.monster && !REDUCED_MOTION) playClips(p.heroActor, ["cheer"], now + 400);
+    swingAftermath(p, events);
     busy = false;
     await afterHeroAction();
   }
-
   /** Walk a plan's path, then do what it was for. */
   function runPlan(plan: Plan): void {
     if (plan.kind === "none") return refuse(plan.reason);
@@ -3449,6 +4244,10 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     onArrive =
       plan.kind === "attack"
         ? heroAttackFlow
+        : plan.kind === "loot"
+          ? async () => {
+              openLootAt(plan.tile);
+            }
         : plan.kind === "look"
           ? async () => {
               examineAt(plan.tile);
@@ -3475,21 +4274,153 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     runPlan(planFor(p.monster.at));
   }
 
+  // ---- bodies, piles and item cards ----------------------------------------------
+
+  function closeLoot(): void {
+    lootWin?.close();
+    lootWin = null;
+    lootTarget = null;
+  }
+
+  /** What the open window lists now. */
+  function lootItemsNow(): LootWindowItem[] {
+    const p = st();
+    const t = lootTarget;
+    if (!t) return [];
+    if (t.kind === "body") {
+      const b = p.bodies.find((x) => x.id === t.id);
+      return b ? bodyLootItems(p, b) : [];
+    }
+    return pileLootItems(p, t.at);
+  }
+
+  function showLoot(target: NonNullable<typeof lootTarget>, title: string): void {
+    closeLoot();
+    lootTarget = target;
+    lootWin = overlay.lootWindow({
+      title,
+      items: lootItemsNow(),
+      onTake: (key) => takeLoot(key),
+      onClose: () => {
+        lootWin = null;
+        lootTarget = null;
+        refreshAll();
+      },
+    });
+    refreshAll();
+  }
+
+  /** Search what lies on a square next to the hero: an unsearched body first (its first search rolls the engine's loot), then a pile. */
+  function openLootAt(tile: XY): void {
+    if (busy || overlayOpen()) return;
+    const p = st();
+    if (heroDown(p)) return refuse(DOWN_NOTE);
+    if (p.round && !isPlayersTurn(p.round)) return refuse("Wait for your turn.");
+    if (tileDistance(p.heroAt, tile) > 1) return refuse("Too far away. Step next to it.");
+    const body = p.bodies.find((b) => same(b.at, tile) && !b.looted);
+    if (body) {
+      clearOptions();
+      ensureBodyLoot(p, body);
+      flushLog();
+      if (body.looted) {
+        refreshAll();
+        return refuse(`There is nothing on the ${body.name.toLowerCase()}'s body.`);
+      }
+      return showLoot({ kind: "body", id: body.id }, `The ${body.name.toLowerCase()}'s body`);
+    }
+    if (pileAt(p, tile)) return showLoot({ kind: "pile", at: { ...tile } }, "On the ground");
+    refuse(p.bodies.some((b) => same(b.at, tile)) ? "You have already searched that body." : "There is nothing to take here.");
+  }
+
+  /** A Take button of the open window (an item's key), or Take all. Whatever stays behind, and why, is said in a notice. */
+  function takeLoot(key: string | "all"): void {
+    const p = st();
+    const t = lootTarget;
+    if (!t || !lootWin) return;
+    if (busy) return refuse("Wait until the table is free.");
+    if (heroDown(p)) {
+      closeLoot();
+      return refuse(DOWN_NOTE);
+    }
+    const at = t.kind === "body" ? p.bodies.find((b) => b.id === t.id)?.at : t.at;
+    if (!at || tileDistance(p.heroAt, at) > 1) {
+      closeLoot();
+      return refuse("Too far away. Step next to it.");
+    }
+    const refusals = t.kind === "body" ? takeFromBodyInto(p, t.id, key) : takeFromPileInto(p, t.at, key);
+    clearOptions();
+    flushLog();
+    lootWin.update(lootItemsNow());
+    if (refusals.length > 0) refuse(refusals.length === 1 ? refusals[0]! : `${refusals[0]!} (${refusals.length - 1} more stayed behind.)`);
+    refreshAll();
+  }
+
+  /** A button on an item card, in the pack or on the sheet: the engine's own equip, unequip, drop and destroy, or Use. */
+  async function runItemAction(key: string, id: string): Promise<void> {
+    if (busy) return refuse("Wait until the table is free.");
+    const p = st();
+    const ref = itemRefFor(p, key);
+    if (!ref) return refuse("You do not have that any more.");
+    const name = key.slice(key.indexOf(":") + 1);
+    const act = itemActionsFor(p.hero, ref, itemCtx(p)).find((a) => a.id === id);
+    if (!act) return;
+    if (!act.enabled) return refuse(act.reason ?? "You cannot do that now.");
+    clearOptions();
+    if (id === "equip") {
+      const r = equipItem(p.hero, ref, { hostilesPresent: hostileNear(p) });
+      if (r.refused) return refuse(r.refused);
+      p.hero = r.sheet;
+      p.log.push({ text: r.line, tone: "plain" });
+    } else if (id === "unequip" && ref.where === "worn") {
+      const r = unequipItem(p.hero, ref.slot, { hostilesPresent: hostileNear(p) });
+      if (r.refused) return refuse(r.refused);
+      p.hero = r.sheet;
+      p.log.push({ text: r.line, tone: "plain" });
+    } else if (id === "drop") {
+      const why = dropFromPack(p, ref);
+      if (why) return refuse(why);
+    } else if (id === "destroy") {
+      const why = destroyFromPack(p, ref, name);
+      if (why) return refuse(why);
+    } else if (id === "use") {
+      // The board and the dice tray are where a use plays out: the sheet gets out of the way.
+      closeSheet();
+      const kit = (p.hero.consumables ?? []).some((c) => c.name === name);
+      if (ref.where === "consumable" || kit) {
+        await (/^potion of healing$/i.test(name) ? drinkPotion() : drinkPotion(name));
+        return;
+      }
+      const say = itemUseSay(p.hero, ref, itemCtx(p));
+      if (say) await runDm({ kind: "freehand", text: say });
+      return;
+    }
+    flushLog();
+    refreshAll();
+  }
+
   async function useNearby(): Promise<void> {
     if (busy) return;
     const p = st();
+    // Something to search beside you, and no door or chest to use: E searches it.
+    const loot = lootNear(p);
+    if (loot && !doorOrChestUsable(p)) return openLootAt(loot.kind === "body" ? loot.body.at : loot.at);
     const r = heroInteractRules(p);
-    if (r.refused) return refuse(r.refused);
+    if (r.refused) {
+      // Nothing to use, but a body you have already been through is right there: say so.
+      const searched = p.bodies.find((b) => b.looted && tileDistance(p.heroAt, b.at) <= 1);
+      return refuse(searched && /^Nothing to use here/.test(r.refused) ? `You have already searched the ${searched.name.toLowerCase()}'s body.` : r.refused);
+    }
     clearOptions();
     if (!REDUCED_MOTION) playClips(p.heroActor, ["interact"], performance.now());
     stage.invalidate();
     await afterHeroAction();
   }
 
-  async function drinkPotion(): Promise<void> {
+  /** The potion, or (with a name) one of the sheet's other healing consumables. */
+  async function drinkPotion(kit?: string): Promise<void> {
     if (busy) return;
     const p = st();
-    const r = drinkPotionRules(p);
+    const r = drinkPotionRules(p, kit);
     if (r.refused) return refuse(r.refused);
     clearOptions();
     busy = true;
@@ -3545,10 +4476,11 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (!restored) return refuse("That save could not be read.");
     // A number the sight and tile caches have never seen under this scene's name (they key on it).
     restored.worldRev = Math.max(st().worldRev, restored.worldRev) + 1;
+    const words = saveLabel(save);
+    carryJournals(st(), restored, `loaded: ${words}`);
     play = restored;
     newScene(false);
     hud.closeDrawer();
-    const words = saveLabel(save);
     restored.log.push({ text: `Loaded: ${words}`, tone: "plain" });
     said = restored.log.length;
     hud.notice(`Loaded: ${words}`, "plain");
@@ -3559,6 +4491,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   function resetScene(): void {
     const p = st();
     play = newPlay(p.template, p.archetypeId, p.floorId, p.hero, p.start);
+    carryJournals(p, play, "the scene was reset");
     newScene();
   }
 
@@ -3652,7 +4585,9 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       label: section.label,
       items: section.items.map((info) => {
         const count = itemCount(info);
-        return { text: count ? `${info.name} ${count}` : info.name, tip: itemTip(info) };
+        const key = sheetItemKey(section.label, info.name);
+        // A card, not just a tip: click or tap pins it with the buttons the engine says this item has (read fresh each time it opens).
+        return { text: count ? `${info.name} ${count}` : info.name, tip: itemTip(info), key, card: () => itemCardFor(st(), key) ?? { tip: itemTip(info), status: "You do not have that any more.", actions: [] } };
       }),
     }));
   }
@@ -3686,7 +4621,18 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     const handle = overlay.narrate({ text: "" });
     renderHud();
     const view = dmViewFor(p);
-    const outcome = await askDm(sample, view, ask, validationContextFor(view), { signal: ctl.signal, onNarration: (t) => handle.update(t) });
+    // Every ask goes in the debug journal, whichever way it ends; what the engine applied and refused is added when the reply has played.
+    const exchange: { current: DmExchange | null } = { current: null };
+    const outcome = await askDm(sample, view, ask, validationContextFor(view), {
+      signal: ctl.signal,
+      onNarration: (t) => handle.update(t),
+      onExchange: (x) => {
+        exchange.current = { ...x };
+        const journal = st().dmJournal;
+        journal.push(exchange.current);
+        if (journal.length > DM_JOURNAL_KEEP) journal.splice(0, journal.length - DM_JOURNAL_KEEP);
+      },
+    });
     // A new scene or a closed tab while it thought: nothing of this turn may touch the new one.
     if (!alive || dmCtl !== ctl) return;
     dmThinking = false;
@@ -3699,13 +4645,17 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
         sampleState = "none";
         dmStatus = outcome.message;
       }
-      if (outcome.code !== "cancelled") refuse(outcome.message);
+      if (outcome.code !== "cancelled") {
+        // The Log says it too, so a reply that was thrown away (and why the board did not change) is on the record.
+        p.log.push({ text: outcome.code === "invalid_reply" ? "The DM's answer could not be used, so nothing changed." : outcome.message, tone: "plain" });
+        refuse(outcome.message);
+      }
       refreshAll();
       return;
     }
     let wake = false;
     try {
-      wake = await playReply(p, ctl, ask, outcome.reply, handle);
+      wake = await playReply(p, ctl, ask, outcome.reply, handle, exchange.current);
     } catch (err) {
       console.error("DM turn failed", err);
     }
@@ -3724,12 +4674,25 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
    * Every refused effect is a plain log line and a note the DM reads next turn.
    * Returns whether the DM woke the monster (the fight starts after the turn).
    */
-  async function playReply(p: PlayState, ctl: AbortController, ask: DmAsk, reply: DmReply, streaming: NarrationHandle): Promise<boolean> {
+  async function playReply(p: PlayState, ctl: AbortController, ask: DmAsk, reply: DmReply, streaming: NarrationHandle, journal: DmExchange | null): Promise<boolean> {
     const stale = (): boolean => !alive || dmCtl !== ctl || st() !== p;
     const refusedNotes: string[] = [];
     const dmWords: string[] = [];
     let wake = false;
     let defeated = false;
+    /** What the engine did with each effect, in plain words: the debug journal's applied and refused lists for this exchange. */
+    const appliedLog: string[] = [];
+    const refusedLog: string[] = [];
+    const record = (): void => {
+      if (!journal) return;
+      journal.applied = [...appliedLog];
+      journal.refused = [...refusedLog];
+    };
+    /** What the success branch of an attack check hands its effects: the swing the engine rolled, and whether its damage has landed yet. */
+    interface BranchCtx {
+      swing: Swing;
+      landed: boolean;
+    }
 
     /** A line in the bench log that the dialogue box does not repeat (the narration box already shows it). */
     const logQuiet = (text: string): void => {
@@ -3746,6 +4709,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (!heroActionReady(p)) {
         streaming.close();
         refuse("You have already used your action this turn.");
+        refusedLog.push("the whole reply: the hero had already used their action this turn");
+        record();
         return false;
       }
       p.round = spendActiveAction(p.round) ?? p.round;
@@ -3794,19 +4759,93 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (heroDown(p)) defeated = true;
     };
 
-    const runEffects = async (effects: readonly DmEffect[]): Promise<void> => {
+    /**
+     * The three effects that move or hurt a creature on the board. The engine does the moving and the hurting (the push is
+     * pushDestination, which stops at walls, props and tokens; the damage is the attack's own or dice thrown in the tray; prone is the
+     * prone rules), so a DM that narrates a kick can no longer leave the goblin standing there unhurt. Returns why it was refused, or null.
+     */
+    const boardEffect = async (e: Extract<DmEffect, { type: "push" | "prone" | "hurt" }>, ctx?: BranchCtx): Promise<string | null> => {
+      const m = p.monster;
+      if (!m || e.id !== MONSTER_ID) return `there is no creature "${e.id}" here to ${e.type === "hurt" ? "hurt" : e.type === "push" ? "push" : "knock down"} (it may already be gone)`;
+      const target = { ...m.at };
+      if (e.type === "push") {
+        const label = monsterLabel(p);
+        const moved = await pushMonsterBy(p, e.squares);
+        if (stale()) return null;
+        if (moved === 0) return `${label} cannot be pushed that way: a wall, a prop or another creature is right behind it`;
+        p.log.push({ text: `${sentenceCase(label)} is pushed ${moved} square${moved === 1 ? "" : "s"} (${moved * FEET_PER_TILE} feet) away from you${moved < e.squares ? ", and no farther: something solid is in the way" : ""}.`, tone: "good" });
+        if (!p.round) wake = true;
+        return null;
+      }
+      if (e.type === "prone") {
+        const why = proneMonster(p);
+        if (why) return why;
+        if (!p.round) wake = true;
+        return null;
+      }
+      // hurt: the attack's own damage when the check was an attack and no dice are named, else the dice, thrown in the tray.
+      fightWasOn = true;
+      if (e.dice === undefined) {
+        if (!ctx) return "a hurt with no dice takes its damage from an attack check, and there is none here";
+        await throwSwingDamage(ctx.swing);
+        if (stale()) return null;
+        const events = landSwing(p, ctx.swing, { spend: false });
+        ctx.landed = true;
+        showAttack(events, "monster", target);
+        swingAftermath(p, events);
+        return null;
+      }
+      const parsed = parseDiceNotation(e.dice);
+      const rolled = rollDice(e.dice, benchRng);
+      const dice = rolled.rolls.map((v) => ({ kind: dieOf(parsed.sides), result: v }));
+      await rollStep("Tap to roll damage", dice, `${rolled.rolls.join(" + ")}${parsed.modifier ? ` ${signedNum(parsed.modifier)}` : ""} = ${rolled.total}`, `${rolled.total} DAMAGE`, "good", { total: rolled.total });
+      if (stale()) return null;
+      let events: CombatEvent[];
+      if (ctx && !ctx.landed) {
+        // The attack's own line, with the damage the DM's dice decided.
+        events = landSwing(p, ctx.swing, { spend: false, damage: rolled.total });
+        ctx.landed = true;
+      } else {
+        events = hurtMonsterBy(p, rolled.total, e.damageType);
+      }
+      showAttack(events, "monster", target);
+      swingAftermath(p, events);
+      if (!p.round && p.monster) wake = true;
+      return null;
+    };
+
+    const runEffects = async (effects: readonly DmEffect[], ctx?: BranchCtx): Promise<void> => {
       for (const e of effects) {
         if (stale()) return;
+        const words = describeEffect(e);
         if (e.type === "heal" || e.type === "harm") {
+          const before = refusedNotes.length;
           await rollVitals(e);
+          if (refusedNotes.length > before) refusedLog.push(`${words}: ${refusedNotes[refusedNotes.length - 1]}`);
+          else appliedLog.push(words);
+          continue;
+        }
+        if (e.type === "push" || e.type === "prone" || e.type === "hurt") {
+          const why = await boardEffect(e, ctx);
+          if (stale()) return;
+          if (why) {
+            refusedNotes.push(why);
+            refusedLog.push(`${words}: ${why}`);
+            p.log.push({ text: sentence(`Not applied: ${why}`), tone: "plain" });
+          } else {
+            appliedLog.push(words);
+          }
+          flushLog();
           continue;
         }
         const r = applyWorldEffect(p, e);
         if (!r.ok) {
           refusedNotes.push(r.why);
+          refusedLog.push(`${words}: ${r.why}`);
           if (!r.logged) p.log.push({ text: sentence(`Not applied: ${r.why}`), tone: "plain" });
           continue;
         }
+        appliedLog.push(words);
         if (r.line) p.log.push(r.line);
         if (r.wake) wake = true;
         // Doors, tiles and props change what the hero can see.
@@ -3817,8 +4856,87 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       }
     };
 
+    /** A check the engine cannot roll (the creature is gone, out of reach, behind something solid): logged and sent back to the DM, and it counts as failed. */
+    const unrolled = (what: string, why: string): { success: false } => {
+      refusedNotes.push(why);
+      refusedLog.push(`${what}: ${why}`);
+      p.log.push({ text: sentence(`Not rolled: ${why}`), tone: "plain" });
+      return { success: false };
+    };
+
+    /**
+     * An attack check: the engine rolls the hero's attack (a kick when the DM says unarmed, else the weapon in hand) against the
+     * creature's AC, both d20s in the tray with advantage or disadvantage from hiding, a prone target or the DM. A miss lands here;
+     * a hit's damage lands when the success branch's hurt effect runs (the validator always puts one there).
+     */
+    const rollAttackCheck = async (c: DmCheck): Promise<{ success: boolean; swing?: Swing }> => {
+      const m = p.monster;
+      const unarmed = c.attack?.weapon === "unarmed";
+      if (!m || c.attack?.against !== MONSTER_ID) return unrolled("attack check", "there is no such creature here to attack");
+      const reach = unarmed ? DEFAULT_MELEE_REACH_TILES : heroReachTiles(p);
+      const dist = tileDistance(p.heroAt, m.at);
+      if (dist > reach) return unrolled("attack check", `${monsterLabel(p)} is ${dist * FEET_PER_TILE} feet away and your reach is ${reach * FEET_PER_TILE} feet`);
+      if (!sightKit(p).los(p.heroAt, m.at)) return unrolled("attack check", `something solid is between you and ${monsterLabel(p)}`);
+      const target = { ...m.at };
+      const sw = rollSwing(p, unarmed ? "kick" : "weapon", c.advantage);
+      fightWasOn = true;
+      await throwSwingAttack(sw, target);
+      if (stale()) return { success: sw.dice.hit };
+      if (!sw.dice.hit) {
+        const events = landSwing(p, sw, { spend: false });
+        showAttack(events, "monster", target);
+        swingAftermath(p, events);
+      }
+      if (!p.round && p.monster) wake = true;
+      return { success: sw.dice.hit, swing: sw };
+    };
+
+    /**
+     * A contest check: the hero's skill against the creature's (a skill name, an ability key, or by default the better of its
+     * Athletics and Acrobatics), both rolled by the engine, the hero's d20 in the hero's tray and the creature's in its own. A tie
+     * goes to the creature.
+     */
+    const rollContestCheck = async (c: DmCheck): Promise<boolean> => {
+      const m = p.monster;
+      if (!m || c.contest?.against !== MONSTER_ID) return unrolled("contest check", "there is no such creature here to contest").success;
+      const mySkill = canonicalSkill(c.contest.skill);
+      if (!mySkill) return unrolled("contest check", `"${c.contest.skill}" is not a skill the engine knows`).success;
+      const creature = monsterCreature(p);
+      const asked = c.contest.versus;
+      const vSkill = asked ? canonicalSkill(asked) : undefined;
+      const vAbility = asked && !vSkill ? canonicalAbility(asked) : undefined;
+      if (asked && !vSkill && !vAbility) return unrolled("contest check", `"${asked}" is neither a skill nor an ability`).success;
+      let versus: string;
+      let theirMod: number;
+      if (vSkill) {
+        versus = vSkill;
+        theirMod = monsterSkill(creature, vSkill);
+      } else if (vAbility) {
+        versus = ABILITY_NAME[vAbility];
+        theirMod = monsterAbility(p, vAbility);
+      } else {
+        const ath = monsterSkill(creature, "Athletics");
+        const acr = monsterSkill(creature, "Acrobatics");
+        versus = acr > ath ? "Acrobatics" : "Athletics";
+        theirMod = Math.max(ath, acr);
+      }
+      const mine = skillCheck({ sheet: p.hero, skill: mySkill, dc: 0, ...(c.advantage ? { advantage: c.advantage } : {}), rng: benchRng });
+      const theirRoll = rollDie(20, benchRng);
+      const theirTotal = theirRoll + theirMod;
+      const success = mine.total > theirTotal;
+      const label = monsterLabel(p);
+      await rollStep(`Tap to roll ${mySkill}`, mine.dice, `${mySkill} ${mine.roll} ${signedNum(mine.modifier)} = ${mine.total}`, "CONTEST", "plain", { modifier: mine.modifier, total: mine.total });
+      if (stale()) return success;
+      await foeThrow(p, [{ kind: "d20", result: theirRoll }], `${theirRoll} ${signedNum(theirMod)} = ${theirTotal} vs ${mine.total}`, success ? "YOU WIN" : theirTotal === mine.total ? "A TIE HOLDS" : "IT WINS", success ? "good" : "bad", { modifier: theirMod, total: theirTotal, target: mine.total });
+      if (stale()) return success;
+      const adv = mine.dice.length > 1 ? ` (${c.advantage}: ${mine.dice.map((d) => d.result).join(" and ")}, kept ${mine.roll})` : "";
+      p.log.push({ text: `Contest: your ${mySkill} ${mine.roll} ${signedNum(mine.modifier)} = ${mine.total}${adv} against ${label}'s ${versus} ${theirRoll} ${signedNum(theirMod)} = ${theirTotal}. ${success ? "You win." : theirTotal === mine.total ? "A tie goes to it: you lose." : "You lose."}`, tone: success ? "good" : "bad" });
+      return success;
+    };
     /** The check, thrown in the tray: d20 (two for advantage or disadvantage) plus the sheet's real modifier against the DM's DC. */
     const rollCheck = async (c: NonNullable<DmReply["check"]>): Promise<boolean> => {
+      // Only a plain check carries a DC: an attack or a contest check is rolled by rollAttackCheck or rollContestCheck, so this fallback is never read.
+      const dc = c.dc ?? 10;
       const skill = c.skill ? normaliseSkill(c.skill) : null;
       const name = skill ?? (c.ability ? ABILITY_NAME[c.ability] : "Check");
       const mod = skill ? skillModifierFor(p.hero, skill) : c.ability ? p.hero.modifiers[c.ability] : 0;
@@ -3830,30 +4948,46 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       const b = two ? rollDie(20) : null;
       const used = b === null ? a : adv ? Math.max(a, b) : Math.min(a, b);
       const total = used + mod;
-      const success = total >= c.dc;
+      const success = total >= dc;
       const shown = b === null ? `${used}` : `${used} (${adv ? "best" : "worst"} of ${a}, ${b})`;
       const dice: { kind: DieKind; result: number }[] = [{ kind: "d20", result: a }];
       if (b !== null) dice.push({ kind: "d20", result: b });
       // The tray's text lines are narrow: the sum on the first, the verdict and the DC on the second (the log keeps the long form).
-      await rollStep(`Tap to roll ${name}`, dice, `${name} ${used} ${signedNum(mod)} = ${total}`, `${success ? "SUCCESS" : "FAILURE"} vs DC ${c.dc}`, success ? "good" : "bad");
+      await rollStep(`Tap to roll ${name}`, dice, `${name} ${used} ${signedNum(mod)} = ${total}`, `${success ? "SUCCESS" : "FAILURE"} vs DC ${dc}`, success ? "good" : "bad", { modifier: mod, total, target: dc });
       if (stale()) return success;
-      p.log.push({ text: `${name} check: ${shown} ${signedNum(mod)} = ${total} against DC ${c.dc}. ${success ? "Success." : "Failure."}`, tone: success ? "good" : "bad" });
+      p.log.push({ text: `${name} check: ${shown} ${signedNum(mod)} = ${total} against DC ${dc}. ${success ? "Success." : "Failure."}`, tone: success ? "good" : "bad" });
       return success;
     };
 
     narrate(reply.narration, reply.speaker, streaming);
     await runEffects(reply.effects);
     if (!stale() && reply.check) {
-      const success = await rollCheck(reply.check);
+      const check = reply.check;
+      let success: boolean;
+      let attack: BranchCtx | undefined;
+      if (check.kind === "attack") {
+        const r = await rollAttackCheck(check);
+        success = r.success;
+        if (r.swing) attack = { swing: r.swing, landed: false };
+      } else if (check.kind === "contest") {
+        success = await rollContestCheck(check);
+      } else {
+        success = await rollCheck(check);
+      }
       if (!stale()) {
-        const branch = success ? reply.check.success : reply.check.failure;
+        const branch = success ? check.success : check.failure;
         narrate(branch.narration, reply.speaker, null);
         nextOptions = branch.options;
-        await runEffects(branch.effects);
+        await runEffects(branch.effects, success ? attack : undefined);
+        // A hit whose damage the engine did not land (its hurt was refused) still shows as a hit, with no damage.
+        if (attack && success && !attack.landed && p.monster && !stale()) {
+          const events = landSwing(p, attack.swing, { spend: false, damage: 0 });
+          showAttack(events, "monster", { ...p.monster.at });
+        }
       }
     }
+    record();
     if (stale()) return false;
-
     for (const fact of reply.remember ?? []) {
       if (!p.dmMemory.includes(fact)) p.dmMemory.push(fact);
     }
@@ -3876,6 +5010,559 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     return wake;
   }
 
+  // ---- the context menu ------------------------------------------------------------------------
+  //
+  // Right-click, or a half-second press on a touch screen, opens it on any square the hero has seen. contextActions.ts decides what
+  // is on offer to THIS character there (class and skills put things on it or leave them off) and says why each is offered; Look
+  // closer is always the first line. An action the DM rules on is sent as a freehand ask. An action the engine rules on runs below
+  // (session/maneuvers.ts rolls it), with every die thrown in the tray (the hero's in the player's tray, the creature's in its own),
+  // and CHANGES THE BOARD: the damage lands, the push moves the figure, prone and hidden are states the rules read. A left click
+  // keeps its meaning (walk, attack, use).
+
+  /** What the DM can answer right now, or why not: a menu line that needs it says so instead of failing on the click. */
+  function dmUnavailable(): string | null {
+    if (benchHook() || sampleState === "ready") return null;
+    return sampleState === "pending" ? "The DM is still waking. Try again in a moment." : (dmStatus ?? NO_DM);
+  }
+
+  /** What is on a square, in the catalog's terms. `pile` is a heap of dropped things (the catalog has no kind for one), `wall` a square nothing can be done to but look at. */
+  function contextTargetFor(p: PlayState, at: XY): { target: ContextTarget; pile?: boolean; wall?: boolean } {
+    const kit = SCENE_KIT[p.template];
+    const distanceTiles = tileDistance(p.heroAt, at);
+    const inSight = seesTile(p, at);
+    if (same(at, p.heroAt)) return { target: { kind: "self", name: "yourself", distanceTiles: 0, inSight: true } };
+    if (p.monster && same(at, p.monster.at) && monsterInSight(p)) {
+      const k = monsterKind(p);
+      return {
+        target: {
+          kind: "creature",
+          id: MONSTER_ID,
+          name: monsterLabel(p),
+          distanceTiles,
+          inSight,
+          creature: { hostile: true, awake: p.monster.awake, awareOfHero: p.monster.awake, type: k.type, size: k.size, down: false, humanoid: k.humanoid, prone: p.monster.prone === true, passivePerception: monsterPassive(p) },
+        },
+      };
+    }
+    const body = p.bodies.find((b) => same(b.at, at));
+    if (body) return { target: { kind: "body", id: body.id, name: `the ${body.name.toLowerCase()}'s body`, distanceTiles, inSight, body: { looted: body.looted, harvested: body.harvested, beast: body.beast } } };
+    if (pileAt(p, at)) return { target: { kind: "prop", name: "the things lying here", distanceTiles, inSight }, pile: true };
+    if (same(at, DOOR_AT)) return { target: { kind: "door", id: "door", name: kit.doorLabel, distanceTiles, inSight, door: { open: p.doorOpen, locked: p.doorLocked, lockDc: p.doorLockDc } } };
+    if (same(at, CONTAINER_AT)) return { target: { kind: "chest", id: "container", name: kit.containerLabel, distanceTiles, inSight, searched: p.searched } };
+    const prop = p.extraProps.find((e) => same(e, at));
+    if (prop) return { target: { kind: "prop", id: prop.id, name: prop.label, distanceTiles, inSight } };
+    if (isGrate(p, at)) return { target: { kind: "prop", id: grateId(at), name: "the drain grate", distanceTiles, inSight } };
+    return { target: { kind: "floor", name: whatIsAt(p, at), distanceTiles, inSight }, wall: terrainBlocks(p, sceneTiles(p), at) !== null };
+  }
+
+  /** The hero's moment, as the catalog wants it. */
+  function situationFor(p: PlayState): ContextSituation {
+    const inFight = p.round !== null;
+    const c = p.round ? activeCombatant(p.round) : undefined;
+    return {
+      sheet: p.hero,
+      inFight,
+      heroTurn: !inFight || heroesTurn(p),
+      actionReady: heroActionReady(p),
+      bonusReady: !inFight || (heroesTurn(p) && c?.economy.bonusAction === true),
+      movementFt: inFight ? heroBudgetFt(p) : effectiveSpeedFt(p.hero),
+      heroHidden: p.heroHidden,
+      heroDown: heroDown(p),
+      potions: p.potions,
+    };
+  }
+
+  const withReason = (a: ContextAction, reason: string): ContextAction => (a.enabled ? { ...a, enabled: false, reason } : a);
+
+  /** Everything the menu on a square offers, in order: the catalog's list for this character, then the bench's own honest adjustments (below). */
+  function menuFor(p: PlayState, at: XY): { title: string; target: ContextTarget; actions: ContextAction[] } {
+    const { target, pile, wall } = contextTargetFor(p, at);
+    let actions = contextActionsFor(target, situationFor(p));
+    if (wall) actions = actions.slice(0, 1);
+    if (pile) {
+      const dist = tileDistance(p.heroAt, at);
+      const reason = dist > 1 ? `Too far away: ${dist * FEET_PER_TILE} feet. Move next to it first.` : p.round ? "Not in the middle of a fight. Finish it first." : undefined;
+      actions = [actions[0]!, { id: "loot-pile", label: "Pick through it", resolver: "engine", cost: "free", why: "Anyone can look through what lies on the ground", say: "I look through what is lying here.", needsAdjacent: true, enabled: reason === undefined, ...(reason ? { reason } : {}) }];
+    }
+    const noDm = dmUnavailable();
+    const out: ContextAction[] = [];
+    for (let a of actions) {
+      // The DM answers these, and cannot just now.
+      if (a.resolver === "dm" && noDm) a = withReason(a, noDm);
+      // The bench has no spell menu: the game's Cast menu is where a spell is chosen.
+      if (a.id === "cast") a = withReason(a, "Spells are chosen from the game's Cast menu; the bench has none yet.");
+      // The loot window closes when a fight starts, so looting in one would do nothing.
+      if (a.id === "loot" && p.round) a = withReason(a, "Not in the middle of a fight. Finish it first.");
+      if (a.id === "pickpocket" && !p.monsterCarried.some((c) => c.pocketable)) a = withReason(a, "It has nothing in its pockets you could lift.");
+      // Hiding and sneaking decide whether the goblin WAKES. Once it is fighting it knows where you are, and the engine's goblin turn does not look at them.
+      if (p.round && (a.id === "hide" || a.id === "sneak" || a.id === "sneak-up")) a = withReason(a, "The fight is on: it already knows where you are. Hiding and sneaking are for before it wakes.");
+      if (a.id === "sneak" && p.sneaking) a = { ...a, label: "Stop sneaking" };
+      out.push(a);
+      // A shove is SRD 5.1's two options: push it 5 feet, or knock it prone. The catalog lists one line; the menu offers both.
+      if (a.id === "shove") out.push({ ...a, id: "shove-prone", label: "Knock down", say: `I try to knock ${target.name} down.` });
+    }
+    return { title: sentenceCase(target.name), target, actions: out };
+  }
+
+  /** Open the menu on the square under a pointer. */
+  function openMenu(clientX: number, clientY: number): void {
+    const t = tileAt(clientX, clientY);
+    if (!t || busy || overlayOpen()) return;
+    const p = st();
+    if (sightLevel(p, t) === 0) return refuse(NOT_SEEN);
+    const m = menuFor(p, t);
+    const entries: ContextMenuEntry[] = m.actions.map((a) => ({ id: a.id, label: a.label, why: a.why, ...(a.good ? { good: true } : {}), enabled: a.enabled, ...(a.reason ? { reason: a.reason } : {}) }));
+    const ts = tileScale();
+    overlay.contextMenu(toHost((t.x + 0.5) * ts, (t.y + 0.5) * ts), entries, (id) => pickContext(t, id), { title: m.title });
+  }
+
+  /** A line of the menu was picked. The list is read fresh (the table may have moved on while the menu was open). */
+  function pickContext(tile: XY, id: string): void {
+    if (busy || overlayOpen()) return refuse("Wait until the table is free.");
+    const found = menuFor(st(), tile).actions.find((a) => a.id === id);
+    if (!found) return refuse("That is not on offer any more.");
+    if (!found.enabled) return refuse(found.reason ?? "You cannot do that now.");
+    clearOptions();
+    if (id === "look") return examineAt(tile);
+    if (found.resolver === "dm") {
+      void runDm({ kind: "freehand", text: found.say });
+      return;
+    }
+    void runEngineAction(found, tile);
+  }
+
+  /** What an action costs, taken in a fight (outside one nothing is spent). Movement is paid by walking, so it costs nothing here. */
+  function spendCost(p: PlayState, cost: ContextAction["cost"]): void {
+    if (!p.round) return;
+    if (cost === "action") p.round = spendActiveAction(p.round) ?? p.round;
+    else if (cost === "bonus") p.round = spendActiveAction(p.round, "bonusAction") ?? p.round;
+  }
+
+  /** The end of an engine action: the table is free, the log and picture catch up, and the goblin may notice what happened. */
+  async function afterManeuver(): Promise<void> {
+    busy = false;
+    flushLog();
+    refreshAll();
+    await afterHeroAction();
+  }
+
+  /**
+   * The start of a hostile maneuver (a kick, a shove): the creature is in sight, the fight is on (it starts one, as an attack does),
+   * it is the hero's turn with the action ready, and the creature is within reach. Null when ready, else the refusal ("" for none).
+   */
+  async function startHostileManeuver(reach: number, what: string): Promise<string | null> {
+    if (!st().monster || !monsterInSight(st())) return `You do not see anything to ${what}.`;
+    if (!st().round) {
+      await beginFight(true);
+      if (!heroesTurn(st())) return "";
+    }
+    const p = st();
+    if (!p.monster) return "";
+    if (!heroActionReady(p)) return "You have already used your action this turn.";
+    if (tileDistance(p.heroAt, p.monster.at) > reach) return `${sentenceCase(monsterLabel(p))} is out of your reach now. Step next to it first.`;
+    return null;
+  }
+
+  /** Slide the monster along the engine's pushDestination (it stops before a wall, a prop, a token or the edge), square by square. Returns how many squares it moved. */
+  async function pushMonsterBy(p: PlayState, squares: number): Promise<number> {
+    const m = p.monster;
+    if (!m) return 0;
+    const path = pushDestination(engineLayout(p), WORLD_MANIFEST[p.template], m.at, p.heroAt, squares);
+    for (const sq of path) {
+      if (st() !== p || !p.monster) return 0;
+      stepAnim(p.monsterActor, { ...p.monster.at }, sq);
+      p.monster.at = { ...sq };
+      noteSight(p);
+      refreshAll();
+      await wait(STEP_MS);
+    }
+    if (p.monster) p.monsterActor.dir = castDirToward(p.heroAt.x - p.monster.at.x, p.heroAt.y - p.monster.at.y);
+    // A prone creature that was slid across the floor is still lying down.
+    if (p.monster?.prone) playClips(p.monsterActor, ["death"], performance.now());
+    return path.length;
+  }
+
+  /** Knock the monster prone, by the engine's prone rules (SRD 5.1) and its condition immunities. Returns why not, or null. */
+  function proneMonster(p: PlayState): string | null {
+    const m = p.monster;
+    if (!m) return "there is no creature there to knock down";
+    const c = monsterCreature(p);
+    if ("conditionImmunities" in c && c.conditionImmunities?.some((x) => /prone/i.test(x))) return `${monsterLabel(p)} cannot be knocked prone`;
+    if (m.prone) return `${monsterLabel(p)} is already prone`;
+    const fx = proneEffects();
+    m.prone = true;
+    const parts = [fx.meleeAttackersHaveAdvantage ? "your attacks from next to it have advantage" : "", fx.standUpCostsHalfMovement ? `it will spend ${standUpCostFt(MONSTER_SPEED_FT)} feet of its movement to stand up` : ""].filter(Boolean);
+    p.log.push({ text: `${sentenceCase(monsterLabel(p))} is knocked prone: ${parts.join(", and ")}.`, tone: "good" });
+    overlay.float(headOf("monster"), "PRONE", "info");
+    // The animated figure falls and lies there (the death clip holds its last frame) until it stands up on its turn.
+    playClips(p.monsterActor, ["death"], performance.now());
+    return null;
+  }
+
+  async function runEngineAction(act: ContextAction, tile: XY): Promise<void> {
+    switch (act.id) {
+      case "kick":
+        return kickFlow();
+      case "shove":
+        return shoveFlow("push");
+      case "shove-prone":
+        return shoveFlow("prone");
+      case "hide":
+        return hideFlow(act);
+      case "sneak":
+        return sneakFlow(tile);
+      case "sneak-up":
+        return sneakUpFlow();
+      case "pickpocket":
+        return pickpocketFlow(act);
+      case "pick-lock":
+      case "force-door":
+        return lockFlow(act);
+      case "listen":
+        return listenFlow(act);
+      case "loot":
+      case "loot-pile":
+        return openLootAt(tile);
+      case "harvest":
+        return refuse("There is nothing to harvest here: the bench has no beast yet.");
+      default:
+        return refuse(`${act.label} is not something the bench can do yet.`);
+    }
+  }
+
+  /** Kick: an unarmed strike (d20 + Strength + proficiency against its AC; a hit deals 1 + Strength bludgeoning), both rolled in the tray, landed on the board. */
+  async function kickFlow(): Promise<void> {
+    const why = await startHostileManeuver(DEFAULT_MELEE_REACH_TILES, "kick");
+    if (why !== null) return refuse(why);
+    const p = st();
+    const target = { ...p.monster!.at };
+    clearOptions();
+    fightWasOn = true;
+    busy = true;
+    const sw = rollSwing(p, "kick");
+    await throwSwingAttack(sw, target);
+    if (!alive || st() !== p) return;
+    await throwSwingDamage(sw);
+    const events = landSwing(p, sw, { spend: true });
+    showAttack(events, "monster", target);
+    swingAftermath(p, events);
+    await afterManeuver();
+  }
+
+  /**
+   * Shove: the hero's Athletics against the better of its Athletics and Acrobatics, a tie to the creature. Win, and it moves one
+   * square straight away from the hero (the engine's pushDestination: it stops at a wall, a prop, a token) or falls prone.
+   */
+  async function shoveFlow(mode: "push" | "prone"): Promise<void> {
+    const why = await startHostileManeuver(DEFAULT_MELEE_REACH_TILES, "shove");
+    if (why !== null) return refuse(why);
+    const p = st();
+    const out = shoveContest({ attacker: p.hero, target: { ...monsterShoveProfile(SCENE_KIT[p.template].monster), name: monsterLabel(p) }, mode, rng: benchRng });
+    if (!out.allowed) return refuse(out.reason ?? "You cannot shove that.");
+    const target = { ...p.monster!.at };
+    clearOptions();
+    fightWasOn = true;
+    busy = true;
+    const mine = out.dice.filter((d) => d.label === "You")[0]!;
+    const theirs = out.dice.filter((d) => d.label !== "You")[0]!;
+    const myMod = out.attackerTotal - mine.result;
+    const theirMod = out.targetTotal - theirs.result;
+    await rollStep(`Tap to roll your ${mode === "prone" ? "knock down" : "shove"}`, [{ kind: "d20", result: mine.result }], `Athletics ${mine.result} ${signedNum(myMod)} = ${out.attackerTotal}`, mode === "prone" ? "KNOCK DOWN" : "SHOVE", "plain", { modifier: myMod, total: out.attackerTotal });
+    if (!alive || st() !== p) return;
+    p.heroActor.dir = castDirToward(target.x - p.heroAt.x, target.y - p.heroAt.y);
+    if (!REDUCED_MOTION) playClips(p.heroActor, ["attack"], performance.now());
+    await foeThrow(p, [{ kind: "d20", result: theirs.result }], `${theirs.result} ${signedNum(theirMod)} = ${out.targetTotal} vs ${out.attackerTotal}`, out.success ? "YOU WIN" : out.attackerTotal === out.targetTotal ? "A TIE HOLDS" : "IT HOLDS", out.success ? "good" : "bad", { modifier: theirMod, total: out.targetTotal, target: out.attackerTotal });
+    if (!alive || st() !== p) return;
+    spendCost(p, "action");
+    p.log.push({ text: out.line, tone: out.success ? "good" : "bad" });
+    revealHero(p);
+    if (out.success && out.effect === "prone") {
+      const refused = proneMonster(p);
+      if (refused) p.log.push({ text: sentence(`Nothing happens: ${refused}`), tone: "plain" });
+    } else if (out.success) {
+      const moved = await pushMonsterBy(p, 1);
+      if (!alive || st() !== p) return;
+      p.log.push({ text: moved > 0 ? `${sentenceCase(monsterLabel(p))} slides back ${moved * FEET_PER_TILE} feet.` : `${sentenceCase(monsterLabel(p))} is pinned: a wall or a prop is right behind it, so it does not move.`, tone: moved > 0 ? "good" : "plain" });
+    } else {
+      overlay.float(headOf("monster", target), "HOLDS", "miss");
+    }
+    await afterManeuver();
+  }
+
+  /**
+   * Hide: one Stealth check against the passive Perception of whoever could see you (nobody can see you through a wall or a shut
+   * door, so you are simply hidden). While hidden the monster does not wake by sight; each step it could notice is another check.
+   */
+  async function hideFlow(act: ContextAction): Promise<void> {
+    const p = st();
+    const pp = monsterPassive(p);
+    const watchers = p.monster && monsterCouldSee(p) ? [{ id: MONSTER_ID, passivePerception: pp, name: monsterLabel(p) }] : [];
+    const out = stealthCheck({ sheet: p.hero, observers: watchers, rng: benchRng });
+    const mod = skillModifierFor(p.hero, "Stealth");
+    const hidden = out.spottedBy.length === 0;
+    clearOptions();
+    busy = true;
+    await rollStep("Tap to roll Stealth", out.dice, `Stealth ${out.total - mod} ${signedNum(mod)} = ${out.total}${watchers.length ? ` vs ${pp}` : ""}`, hidden ? "HIDDEN" : "SPOTTED", hidden ? "good" : "bad", { modifier: mod, total: out.total, ...(watchers.length ? { target: pp } : {}) });
+    if (!alive || st() !== p) return;
+    spendCost(p, act.cost);
+    p.heroHidden = hidden;
+    p.log.push({ text: hidden ? `${out.line} You stay hidden until you attack, are noticed, or a fight starts.` : out.line, tone: hidden ? "good" : "bad" });
+    if (hidden) story({ text: "You slip out of sight.", tone: "good" }, false);
+    await afterManeuver();
+  }
+
+  /** Sneak: a mode, not a roll. Every step the monster could notice is a Stealth check against its passive Perception (stealthStep). On a square, it also walks you there. */
+  function sneakFlow(tile: XY): void {
+    const p = st();
+    if (same(tile, p.heroAt)) {
+      p.sneaking = !p.sneaking;
+      if (!p.sneaking) p.heroHidden = false;
+      p.log.push({ text: p.sneaking ? "You move quietly. Each step the goblin could notice is a Stealth check." : "You stop sneaking.", tone: "plain" });
+      flushLog();
+      refreshAll();
+      return;
+    }
+    const plan = planFor(tile);
+    if (plan.kind === "none") return refuse(plan.reason);
+    p.sneaking = true;
+    p.log.push({ text: "You move quietly. Each step the goblin could notice is a Stealth check.", tone: "plain" });
+    runPlan(plan);
+  }
+
+  /** Sneak up: sneaking mode on, and a walk to the square next to it. Each step it could notice is a Stealth check. */
+  function sneakUpFlow(): void {
+    const p = st();
+    if (!p.monster) return refuse("There is nothing to sneak up on.");
+    const spot = approachTile(heroField(p), p.monster.at, 1, sightKit(p).los);
+    const path = spot ? pathTo(heroField(p), spot) : null;
+    if (!path) return refuse(p.round ? "You cannot get next to it this turn." : "You cannot get next to it from here.");
+    p.sneaking = true;
+    p.log.push({ text: "You creep toward it. Each step it could notice is a Stealth check.", tone: "plain" });
+    clearOptions();
+    walkQueue.length = 0;
+    walkQueue.push(...path);
+    onArrive = async () => {
+      await afterHeroAction();
+    };
+  }
+
+  /** Pickpocket: Sleight of Hand against its passive Perception. A hit lifts one small thing off it (and it is gone from the body later); a miss wakes it and the fight starts. */
+  async function pickpocketFlow(act: ContextAction): Promise<void> {
+    const p = st();
+    if (!p.monster) return refuse("There is nothing to pick.");
+    const pick = pocketPick(p.monsterCarried, benchRng);
+    if (!pick.item) return refuse("It has nothing in its pockets you could lift.");
+    const pp = monsterPassive(p);
+    const out = sleightOfHand({ sheet: p.hero, targetPassivePerception: pp, rng: benchRng });
+    const mod = skillModifierFor(p.hero, "Sleight of Hand");
+    clearOptions();
+    busy = true;
+    await rollStep("Tap to roll Sleight of Hand", out.dice, `Sleight of Hand ${out.total - mod} ${signedNum(mod)} = ${out.total} vs ${pp}`, out.success ? "UNNOTICED" : "NOTICED", out.success ? "good" : "bad", { modifier: mod, total: out.total, target: pp });
+    if (!alive || st() !== p) return;
+    spendCost(p, act.cost);
+    p.log.push({ text: out.line, tone: out.success ? "good" : "bad" });
+    if (out.success) {
+      const why = takeIntoPack(p, pick.item.name, pick.item.note);
+      if (why) p.log.push({ text: `You get hold of ${pick.item.name.toLowerCase()} but cannot carry it: ${why}`, tone: "plain" });
+      else {
+        p.monsterCarried = pick.rest;
+        story({ text: `You lift ${pick.item.name.toLowerCase()} from ${monsterLabel(p)}.`, tone: "good" });
+      }
+      await afterManeuver();
+      return;
+    }
+    story({ speaker: "Goblin", text: "Hey! Thief!", tone: "bad" });
+    busy = false;
+    flushLog();
+    refreshAll();
+    await beginFight();
+  }
+
+  /** Pick the lock (thieves' tools, a rogue's training) or force the door (Athletics), against the lock's DC. A success unlocks it; forcing it also opens it. */
+  async function lockFlow(act: ContextAction): Promise<void> {
+    const p = st();
+    if (!p.doorLocked) return refuse("The door is not locked.");
+    const dc = p.doorLockDc;
+    const force = act.id === "force-door";
+    const out = force ? forceDoor({ sheet: p.hero, dc, rng: benchRng }) : pickLock({ sheet: p.hero, dc, rng: benchRng });
+    if ("allowed" in out && !out.allowed) return refuse(out.reason ?? "You cannot do that.");
+    const die = out.dice[0]!.result;
+    clearOptions();
+    busy = true;
+    await rollStep(force ? "Tap to roll Athletics" : "Tap to roll the lock", out.dice, `${force ? "Athletics" : "Thieves' tools"} ${die} ${signedNum(out.total - die)} = ${out.total} vs DC ${dc}`, out.success ? (force ? "IT GIVES WAY" : "IT CLICKS OPEN") : "IT HOLDS", out.success ? "good" : "bad", { modifier: out.total - die, total: out.total, target: dc });
+    if (!alive || st() !== p) return;
+    spendCost(p, act.cost);
+    p.log.push({ text: out.line, tone: out.success ? "good" : "bad" });
+    if (out.success) {
+      p.doorLocked = false;
+      if (force) p.doorOpen = true;
+      noteSight(p);
+      stage.invalidate();
+      story({ text: force ? "The door gives way." : "The lock clicks open.", tone: "good" }, false);
+    }
+    await afterManeuver();
+  }
+
+  /** Listen at the door: Perception against DC 10. A success says whether something is moving beyond it, and whether it is awake, never where. */
+  async function listenFlow(act: ContextAction): Promise<void> {
+    const p = st();
+    const out = skillCheck({ sheet: p.hero, skill: "Perception", dc: LISTEN_DC, rng: benchRng });
+    clearOptions();
+    busy = true;
+    await rollStep("Tap to roll Perception", out.dice, `Perception ${out.roll} ${signedNum(out.modifier)} = ${out.total} vs DC ${LISTEN_DC}`, out.success ? "YOU HEAR" : "NOTHING CLEAR", out.success ? "good" : "bad", { modifier: out.modifier, total: out.total, target: LISTEN_DC });
+    if (!alive || st() !== p) return;
+    spendCost(p, act.cost);
+    p.log.push({ text: out.line, tone: out.success ? "good" : "bad" });
+    // Beyond the door is the other room from the one the hero stands in.
+    const beyond = !!p.monster && p.monster.at.x < DIVIDER_X !== p.heroAt.x < DIVIDER_X;
+    let heard: string;
+    if (!out.success) heard = "You cannot make anything out through the door.";
+    else if (beyond) heard = p.monster!.awake ? "Something is moving about beyond the door, wide awake." : "Something is breathing slowly beyond the door, as if asleep.";
+    else heard = "Silence. Nothing is moving beyond the door.";
+    story({ text: heard, tone: "plain" });
+    await afterManeuver();
+  }
+
+  // ---- the debug export ----------------------------------------------------------------------------
+
+  /** The whole adventure so far, as the export's bundle: the state, the sheet, the scene, every save, the full log, every DM exchange and every roll. */
+  function adventureBundle(): AdventureBundle {
+    const p = st();
+    return {
+      format: ADVENTURE_FORMAT,
+      version: ADVENTURE_VERSION,
+      exportedAt: new Date().toISOString(),
+      build: { app: `Living Table ${APP_VERSION}`, bench: `${APP_VERSION} (the Play tab of the bench)`, userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent },
+      settings: { art: { ...art }, textStyle, zoom: scale, rollMyself, diceSkin: tray.skin().id, reducedMotion: REDUCED_MOTION, template: p.template },
+      character: p.hero,
+      scene: {
+        template: p.template,
+        floorId: p.floorId,
+        layout: sceneLayout(p, false),
+        heroAt: p.heroAt,
+        monster: p.monster,
+        doorOpen: p.doorOpen,
+        doorLocked: p.doorLocked,
+        doorLockDc: p.doorLockDc,
+        searched: p.searched,
+        extraProps: p.extraProps,
+        tileOverrides: p.tileOverrides,
+        bodies: p.bodies,
+        piles: p.piles,
+      },
+      state: toSnapshot(p),
+      saves,
+      log: [...sessionLog, ...p.log].map((l) => ({ text: l.text, tone: l.tone })),
+      dm: p.dmJournal,
+      rolls: p.rollJournal,
+    };
+  }
+
+  /** The viewer's downloads capability (the artifact runtime), or null off claude.ai or when this view cannot save. */
+  async function downloadsCapability(): Promise<{ save(req: { filename: string; data: Uint8Array }): Promise<{ status?: string }> } | null> {
+    try {
+      const claude = (globalThis as { claude?: { use?: (name: string) => Promise<unknown> } }).claude;
+      const found = await claude?.use?.("downloads");
+      return found && typeof (found as { save?: unknown }).save === "function" ? (found as { save(req: { filename: string; data: Uint8Array }): Promise<{ status?: string }> }) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** A plain browser download of the zip (an object URL and a download link). Whether the browser lets it through cannot be seen from here. */
+  function browserDownload(filename: string, bytes: Uint8Array): boolean {
+    try {
+      const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: "application/zip" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function setExportStatus(text: string | undefined, copy: boolean): void {
+    exportStatus = text;
+    exportCopyShown = copy;
+    renderHud();
+  }
+
+  const kb = (n: number): string => `${Math.max(1, Math.round(n / 1024))} KB`;
+  let exporting = false;
+
+  /**
+   * Save the whole adventure as one zip (the DM transcript, the log, every roll, the sheet, the saves and the state), with the
+   * artifact runtime's downloads capability. If the viewer has none, a plain browser download, and a "Copy adventure JSON" button
+   * for when even that is blocked. The status line under the button says in words which of these happened.
+   */
+  async function exportAdventure(): Promise<void> {
+    if (exporting) return;
+    exporting = true;
+    try {
+      let built: { filename: string; bytes: Uint8Array };
+      try {
+        built = adventureZip(adventureBundle());
+      } catch (err) {
+        setExportStatus(`Could not build the export: ${err instanceof Error ? err.message : "unknown error"}. Try Copy adventure JSON.`, true);
+        return;
+      }
+      const { filename, bytes } = built;
+      const dl = await downloadsCapability();
+      if (dl) {
+        try {
+          const res = await dl.save({ filename, data: bytes });
+          setExportStatus(res.status === "delivered" ? `Sent ${filename} (${kb(bytes.length)}).` : `Saved ${filename} (${kb(bytes.length)}).`, false);
+          return;
+        } catch (err) {
+          const code = typeof err === "object" && err !== null && typeof (err as { code?: unknown }).code === "string" ? (err as { code: string }).code : "";
+          if (code === "declined") return setExportStatus("Not saved: you declined. Press Export again when you are ready.", false);
+          if (code === "rate_limited") return setExportStatus("Another save prompt is still open. Answer it, then press Export again.", false);
+          // Anything else (the capability failed): the plain download below is the next best thing.
+        }
+      }
+      const started = browserDownload(filename, bytes);
+      setExportStatus(
+        started
+          ? `${dl ? "The save did not go through, so " : "Saving files is not available here, so "}${filename} (${kb(bytes.length)}) was offered as a plain browser download. If nothing was saved, press Copy adventure JSON.`
+          : "The browser would not start a download. Press Copy adventure JSON.",
+        true,
+      );
+    } finally {
+      exporting = false;
+    }
+  }
+
+  /** The fallback of last resort: adventure.json (the whole adventure in one file) on the clipboard. */
+  async function copyAdventureJson(): Promise<void> {
+    const json = adventureFiles(adventureBundle()).find((f) => f.name === "adventure.json")?.data ?? "";
+    try {
+      await navigator.clipboard.writeText(json);
+      return setExportStatus(`Copied adventure.json (${kb(json.length)}) to the clipboard.`, true);
+    } catch {
+      // The async clipboard can be blocked in a frame: the old way, through a hidden text box.
+    }
+    try {
+      const box = document.createElement("textarea");
+      box.value = json;
+      box.setAttribute("readonly", "");
+      box.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+      document.body.appendChild(box);
+      box.select();
+      const ok = document.execCommand("copy");
+      box.remove();
+      if (ok) return setExportStatus(`Copied adventure.json (${kb(json.length)}) to the clipboard.`, true);
+    } catch {
+      // fall through
+    }
+    setExportStatus("The browser blocked the clipboard, so nothing was copied.", true);
+  }
+
   // ---- pointer ---------------------------------------------------------------
 
   viewport.addEventListener("pointermove", (e) => {
@@ -3888,7 +5575,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
   viewport.addEventListener("pointerleave", () => {
     hover = null;
   });
-  // Right-click, or a half-second press on a touch screen, looks closer at any square the hero has seen.
+  // Right-click, or a half-second press on a touch screen, opens the context menu on any square the hero has seen (Look closer is its first line).
   let touchExaminedAt = -Infinity;
   let longPressed = false;
   let pressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3902,8 +5589,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     e.preventDefault();
     // A long press on a phone can fire this as well as the timer below: one examine, not two.
     if (performance.now() - touchExaminedAt < 900) return;
-    const t = tileAt(e.clientX, e.clientY);
-    if (t) examineAt(t);
+    openMenu(e.clientX, e.clientY);
   });
   viewport.addEventListener("pointerdown", (e) => {
     if (e.pointerType !== "touch") return;
@@ -3917,7 +5603,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
       if (!t) return;
       longPressed = true;
       touchExaminedAt = performance.now();
-      examineAt(t);
+      openMenu(at.x, at.y);
     }, 500);
   });
   viewport.addEventListener("pointermove", (e) => {
@@ -3963,6 +5649,8 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     if (id === "end") return endTurnFlow();
     if (id === "cancel") return cancelDm();
     if (id === "sheet") return toggleSheet();
+    if (id === "export") return exportAdventure();
+    if (id === "export-copy") return copyAdventureJson();
   }
 
   /** Whose turn it is, what is left of it, everyone's hit points and the buttons: the game window's own readout. */
@@ -3989,13 +5677,18 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     }
     const bonus = attackerBonusFor(h);
     lines.push(`AC ${effectiveArmorClass(h)}, hit ${bonus >= 0 ? "+" : ""}${bonus}, ${weaponDamageNotationFor(h)}`);
+    // Hiding and sneaking are modes the table honours (the wake rule rolls Stealth), so the dock says so.
+    if (p.heroHidden) lines.push("Hidden (steps it could notice are Stealth checks)");
+    else if (p.sneaking) lines.push("Sneaking (steps it could notice are Stealth checks)");
     const bars: HudBar[] = [{ id: HERO_ID, label: h.name, hp: h.currentHp, max: h.maxHp, side: "hero", down: heroDown(p) }];
     // Unknown until it has been seen once ("???"); a fight that began on a sound alone still lists it.
     if (p.monster && (p.monsterSeen || p.round)) bars.push({ id: MONSTER_ID, label: foeName(p), hp: p.monster.hp, max: block.maxHp, side: "enemy" });
     else if (p.fallenAt) bars.push({ id: MONSTER_ID, label: block.name, hp: 0, max: block.maxHp, side: "enemy", down: true });
     // The door when it can be used (shut or open, not locked, nobody standing in it), or the chest when it is still shut.
-    const doorUsable = tileDistance(p.heroAt, DOOR_AT) <= 1 && !p.doorLocked && !same(p.heroAt, DOOR_AT) && !(p.monster && same(p.monster.at, DOOR_AT));
-    const near = doorUsable || (tileDistance(p.heroAt, CONTAINER_AT) <= 1 && !p.searched);
+    const useDoor = doorOrChestUsable(p);
+    // A body to search or a pile to look through beside you (and no door or chest to use) is what the Use button, E, does: it says Search.
+    const searchable = !useDoor && lootNear(p) !== null;
+    const near = useDoor || searchable;
     const myMove = !p.round || mine;
     const actionLeft = heroActionReady(p);
     const moveLeft = (c?.economy.movementRemaining ?? 0) >= FEET_PER_TILE;
@@ -4015,7 +5708,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     } else {
       actions.push(
         { id: "attack", label: "Attack", key: "F", enabled: free && !busy, hidden: !canAttack },
-        { id: "use", label: "Use", key: "E", enabled: free && !busy && myMove, hidden: !(near && myMove) },
+        { id: "use", label: searchable ? "Search" : "Use", key: "E", enabled: free && !busy && myMove, hidden: !(near && myMove) },
         { id: "potion", label: `Potion x${p.potions}`, key: "Q", enabled: free && !busy, hidden: !canPotion },
         // The thing to press once the action is spent, or nothing is left to do.
         { id: "end", label: "End turn", key: "T", enabled: free && !busy && mine, hidden: !mine, emphasis: free && !busy && mine && (!actionLeft || (!moveLeft && !near)) },
@@ -4028,7 +5721,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     // The DM's suggested next moves show only while the table is free (they are buttons that act when pressed).
     const options: HudOption[] = free && !busy && !down ? p.options.map((o, i) => ({ id: `opt:${i}`, label: o.label, key: String(i + 1) })) : [];
     const saveRows: HudSave[] = saves.map((s) => ({ id: s.id, label: saveLabel(s), detail: saveDetail(s), canLoad: free && !busy }));
-    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) }, options, log: p.log.map((l) => ({ text: l.text, tone: l.tone })), saves: saveRows });
+    hud.render({ title, lines, bars, actions, ask: askStateFor(p), pack: { sections: packSections(p) }, options, log: p.log.map((l) => ({ text: l.text, tone: l.tone })), saves: saveRows, ...(exportStatus ? { exportStatus } : {}), ...(exportCopyShown ? { exportCopy: true } : {}) });
     // The open sheet follows the hero: hit points, potions and anything the DM hands over.
     if (sheetView) {
       const sig = sheetSigFor(p);
@@ -4178,6 +5871,7 @@ function mountPlayPanel(el: HTMLElement, _api: unknown): () => void {
     fightWasOn = false;
     hover = null;
     said = st().log.length;
+    closeLoot();
     overlay.clear();
     tray.clear();
     stage.snapCamera();

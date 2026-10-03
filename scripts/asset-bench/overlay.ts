@@ -44,9 +44,9 @@
  */
 import type { RollReadout } from "../../src/games/livingtable/render/canvasRenderer";
 import { CELL_H, LINE_GAP, cssScale, deviceScale, fitScale, pixelText, textWidth, wrapText, wrapWidth, type PixelColor, type PixelRun, type PixelTextOptions, type PixelWeight } from "./pixelFont";
-import { attachTip, type TipContent } from "./tip";
+import { attachItemCard, attachTip, cardNavIndex, type ItemCardContent, type TipContent } from "./tip";
 
-export type { TipContent } from "./tip";
+export type { ItemCardAction, ItemCardContent, TipContent } from "./tip";
 
 // ---- the public contract ----------------------------------------------------
 
@@ -95,6 +95,39 @@ export interface NarrationHandle {
   close(): void;
 }
 
+/** One line of a context menu: what it does, why it is offered, and whether it can be done now. */
+export interface ContextMenuEntry {
+  id: string;
+  label: string;
+  /** Why the game offers it to YOU here ("Your skill: Sneak +5"). Shown small under the label. */
+  why?: string;
+  /** Offered because of your class or a skill you are good at: drawn with a small gold star. */
+  good?: boolean;
+  enabled: boolean;
+  /** Why it cannot be done now. Shown small under the label of a greyed entry. */
+  reason?: string;
+}
+/** One thing in a loot window. `tip` is the hover help on its name. */
+export interface LootWindowItem {
+  key: string;
+  name: string;
+  tip?: TipContent;
+}
+export interface LootWindowOptions {
+  title: string;
+  items: readonly LootWindowItem[];
+  /** The Take button of one item (its key), or Take all ("all"). The window does not remove anything itself: call update() with what is left. */
+  onTake: (key: string | "all") => void;
+  /** The player closed it (Close, Escape), or it closed itself once empty. Not called by close(). */
+  onClose: () => void;
+}
+export interface LootWindow {
+  /** Show what is left. An empty list shows "Nothing left." for a moment, then the window closes itself (and calls onClose). */
+  update(items: readonly LootWindowItem[]): void;
+  /** Close it now, without calling onClose. */
+  close(): void;
+}
+
 export interface Overlay {
   setStyle(style: TextStyle): void;
   /** A big centred title for about 900 ms. Banners queue; resolves when this one is gone. */
@@ -121,7 +154,23 @@ export interface Overlay {
   initiative(entries: readonly InitiativeEntry[], activeId: string | null, round: number): void;
   /** A short notice, for refused clicks. */
   toast(text: string): void;
-  /** Drop everything on screen (banners resolve at once), the story strip and the initiative strip included. */
+  /**
+   * A small menu of choices at a board point (the same space as float() and rollPlate(): CSS px from the host's top-left), clamped
+   * inside the board (it flips to the other side of the point when there is no room). The first entry has the focus; Up, Down, Home,
+   * End and Enter work, Escape or a click anywhere else closes it (that click is not passed on to the board). Disabled entries stay
+   * in the list with their reason printed under them and do nothing when pressed. A press within 300 ms of opening is ignored, so the
+   * finger lifting after a long press never picks the first entry. Only one menu is up at a time (a new one replaces it). Returns the
+   * function that closes it. onPick runs after the menu has closed.
+   */
+  contextMenu(at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, opts?: { title?: string }): () => void;
+  /**
+   * A small panel at the top centre of the board that lists what can be taken, each with a Take button and hover help on its name,
+   * plus Take all and Close. See LootWindowOptions. One at a time: a new window replaces the old one without calling its onClose.
+   * clear() leaves it up; destroy() takes it down.
+   */
+  lootWindow(opts: LootWindowOptions): LootWindow;
+
+  /** Drop everything on screen (banners resolve at once), the story strip and the initiative strip included, and the context menu (not the loot window). */
   clear(): void;
   destroy(): void;
 }
@@ -328,6 +377,64 @@ export function newPackItems(prev: readonly PackSection[] | null | undefined, ne
 /** The words a pack item shows: the item itself when it is a string, its `text` otherwise. */
 export function packItemText(item: PackItem): string {
   return typeof item === "string" ? item : item.text;
+}
+
+/** The widest a context menu grows, in CSS px. */
+export const MENU_MAX_WIDTH = 272;
+/** The least air kept between a menu and the edge of the board. */
+export const MENU_MARGIN = 6;
+/** A context menu ignores presses this soon after it opens (the finger lifting after a long press). */
+export const MENU_GRACE_MS = 300;
+/** How long a loot window shows "Nothing left." before it closes itself. */
+export const LOOT_EMPTY_MS = 1200;
+
+/** The width a context menu gets on a board `boardWidth` wide: the usual maximum, less the margins on a narrow board. */
+export function menuWidth(boardWidth: number): number {
+  return Math.max(140, Math.min(MENU_MAX_WIDTH, boardWidth - 16));
+}
+
+export interface MenuPlacement {
+  left: number;
+  top: number;
+  /** The menu opened to the left of the point (no room on the right). */
+  flipX: boolean;
+  /** The menu opened above the point (no room below). */
+  flipY: boolean;
+  /** The tallest it may be: the board's height less the margins. Taller content scrolls. */
+  maxHeight: number;
+}
+
+/**
+ * Where a menu of `size` goes for a click at `at`, inside a board of `board` (all CSS px from the board's top-left): its top-left
+ * corner on the point; when it would run past the right or the bottom edge it opens to the left of or above the point instead
+ * (the point stays on a corner); and when it fits neither way it is clamped inside the board less `margin`. A menu bigger than the
+ * board is pinned to the near edge.
+ */
+export function menuPlacement(at: OverlayPoint, size: { width: number; height: number }, board: { width: number; height: number }, margin = MENU_MARGIN): MenuPlacement {
+  const maxHeight = Math.max(0, board.height - margin * 2);
+  const h = Math.min(size.height, maxHeight);
+  const span = (start: number, len: number, total: number): { pos: number; flip: boolean } => {
+    const lo = margin;
+    const hi = total - margin - len;
+    if (hi < lo) return { pos: lo, flip: false };
+    if (start + len <= total - margin) return { pos: Math.max(lo, start), flip: false };
+    const back = start - len;
+    if (back >= lo) return { pos: Math.min(hi, back), flip: true };
+    return { pos: clamp(start, lo, hi), flip: false };
+  };
+  const x = span(at.x, size.width, board.width);
+  const y = span(at.y, h, board.height);
+  return { left: x.pos, top: y.pos, flipX: x.flip, flipY: y.flip, maxHeight };
+}
+
+/** The words a screen reader gets for a menu entry: its label, why it is offered, and the reason it is unavailable. */
+export function menuEntryName(e: Pick<ContextMenuEntry, "label" | "why" | "enabled" | "reason">): string {
+  return [e.label, e.why, !e.enabled && e.reason ? `unavailable: ${e.reason}` : ""].filter(Boolean).join(", ");
+}
+
+/** The entries a menu really shows: the ones with an id and a label (the rest are dropped), in their order. */
+export function menuEntries(entries: readonly ContextMenuEntry[]): ContextMenuEntry[] {
+  return entries.filter((e) => e.id && e.label.trim() !== "").map((e) => ({ ...e, label: e.label.replace(/\s+/g, " ").trim() }));
 }
 
 function signed(n: number): string {
@@ -579,6 +686,59 @@ const CSS = `
 .lto-sb .lto-narr-dots{height:1.45em;color:var(--sb-spk)}
 .lto-sb .lto-narr-dots i{border-radius:50%}
 
+/* ---- buttons, the context menu and the loot window (they take the pointer) ---- */
+.lto-btn{appearance:none;font:inherit;color:inherit;margin:0;min-width:0;min-height:36px;padding:4px 12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation;pointer-events:auto}
+.lto-btn:disabled{opacity:.45;cursor:default}
+.lto-btn:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
+.lto-btn canvas{display:block}
+.lto-px .lto-btn.lto-fr{background:#141a3c}
+.lto-px .lto-btn:not(:disabled):hover{--frame:var(--fr-blue)}
+.lto-sb .lto-btn{border-radius:9px;background:linear-gradient(180deg,var(--sb-paper),var(--sb-paper2));border:1px solid var(--sb-rule);box-shadow:inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold);font:700 14px/1 var(--lto-serif);color:var(--sb-ink)}
+.lto-sb .lto-btn.is-pri{box-shadow:0 0 0 2px var(--sb-gold),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold)}
+.lto-root[data-size="s"] .lto-btn{min-height:44px}
+@media (pointer: coarse){.lto-btn{min-height:44px}}
+.lto-loot-host{position:absolute;left:0;right:0;top:0;display:flex;justify-content:center;pointer-events:none}
+.lto-loot{display:flex;flex-direction:column;gap:6px;width:min(340px,calc(100% - 16px));min-height:0;padding:6px 8px;pointer-events:auto;margin-top:8px}
+.lto-loot-title{padding:0 2px}
+.lto-sb .lto-loot-title{font:700 12px/1.2 var(--lto-serif);letter-spacing:.07em;text-transform:uppercase;color:var(--sb-spk)}
+.lto-loot-list{display:flex;flex-direction:column;gap:3px;min-height:0;padding:3px;margin:-3px;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;overscroll-behavior:contain}
+.lto-px .lto-loot-list{scrollbar-color:#4d5da6 #05061a}
+.lto-sb .lto-loot-list{scrollbar-color:var(--sb-rule) transparent}
+.lto-loot-row{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:1px 2px;min-width:0}
+.lto-loot-name{min-width:0;overflow-wrap:anywhere;padding:2px 2px;cursor:help;border-radius:3px}
+.lto-loot-name:focus-visible{outline:2px solid var(--sb-focus);outline-offset:1px}
+.lto-sb .lto-loot-name{font:15px/1.3 var(--lto-serif);color:var(--sb-ink)}
+.lto-px .lto-loot-name[data-lt-tip]{box-shadow:inset 0 -1px 0 rgb(152 165 216/.28)}
+.lto-sb .lto-loot-name[data-lt-tip]{box-shadow:inset 0 -1px 0 rgb(var(--sb-shade)/.18)}
+.lto-loot-take{min-height:32px;padding:2px 10px}
+.lto-root[data-size="s"] .lto-loot-take{min-height:44px}
+@media (pointer: coarse){.lto-loot-take{min-height:44px}}
+.lto-loot-empty{padding:4px 2px}
+.lto-sb .lto-loot-empty{font:italic 14px/1.3 var(--lto-serif);color:var(--sb-muted)}
+.lto-loot-foot{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.lto-root[data-size="s"] .lto-loot-foot{display:grid;grid-template-columns:1fr 1fr}
+.lto-menu-layer{position:absolute;inset:0;pointer-events:none}
+.lto-cm{position:absolute;display:flex;flex-direction:column;gap:1px;pointer-events:auto;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:3px;scrollbar-width:thin;touch-action:manipulation}
+.lto-px .lto-cm.lto-fr{padding:3px}
+.lto-cm-title{padding:3px 8px 4px}
+.lto-sb .lto-cm-title{font:700 11px/1.2 var(--lto-serif);letter-spacing:.1em;text-transform:uppercase;color:var(--sb-spk)}
+.lto-cm-row{flex:none;display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;align-items:start;min-width:0;min-height:34px;padding:6px 8px;cursor:pointer;outline:0}
+.lto-root[data-size="s"] .lto-cm-row{min-height:44px}
+@media (pointer: coarse){.lto-cm-row{min-height:44px}}
+.lto-cm-mark{display:grid;place-items:center;width:18px;height:18px}
+.lto-cm-mark svg{display:block;width:14px;height:14px;fill:#ffc72a;stroke:#3b1f00;stroke-width:28px;paint-order:stroke fill;stroke-linejoin:round}
+.lto-sb .lto-cm-mark svg{fill:#d99a1c}
+.lto-cm-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lto-cm-label canvas,.lto-cm-why canvas,.lto-cm-reason canvas{display:block}
+.lto-cm-row[aria-disabled="true"]{cursor:default}
+.lto-cm-row[aria-disabled="true"] .lto-cm-label{opacity:.55}
+.lto-px .lto-cm-row:focus,.lto-px .lto-cm-row.is-hot{background:rgb(77 93 166/.5);box-shadow:inset 0 0 0 2px #ffc72a}
+.lto-sb .lto-cm-row{border-radius:6px}
+.lto-sb .lto-cm-row:focus,.lto-sb .lto-cm-row.is-hot{background:rgb(var(--sb-shade)/.14);box-shadow:inset 0 0 0 2px var(--sb-gold)}
+.lto-sb .lto-cm-label{font:700 15px/1.25 var(--lto-serif);color:var(--sb-ink);overflow-wrap:anywhere}
+.lto-sb .lto-cm-why{font:italic 12.5px/1.3 var(--lto-serif);color:var(--sb-muted);overflow-wrap:anywhere}
+.lto-sb .lto-cm-reason{font:12.5px/1.3 var(--lto-serif);color:var(--sb-bad);overflow-wrap:anywhere}
+
 @media (prefers-reduced-motion: reduce){.lto-root *{animation:none!important;transition:none!important}}
 `;
 
@@ -769,6 +929,8 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
       renderInitiative();
       if (narr && !narr.closed) renderNarration(narr);
       enforceStripMax();
+      if (menu) renderMenu(menu);
+      if (loot) renderLoot(loot);
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
     else run();
@@ -1322,7 +1484,10 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     const { entries, activeId, round } = initState;
     initEl.replaceChildren();
     initEl.hidden = entries.length === 0;
-    if (entries.length === 0) return;
+    if (entries.length === 0) {
+      layoutLoot();
+      return;
+    }
     const tab = el("div", "lto-round");
     tab.dataset.ltoRound = String(round);
     if (isPixel()) {
@@ -1365,6 +1530,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     const active = initEl.querySelector<HTMLElement>('[data-active="true"]');
     if (active) initEl.scrollLeft = active.offsetLeft - (initEl.clientWidth - active.offsetWidth) / 2;
     else initEl.scrollLeft = 0;
+    layoutLoot();
   }
 
   function initiative(entries: readonly InitiativeEntry[], activeId: string | null, round: number): void {
@@ -1563,9 +1729,361 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     };
   }
 
+  // ---- context menu
+
+  /** The star of a "good" entry: Font Awesome's solid star outline, drawn inline so there is no icon font. */
+  const STAR_PATH =
+    "M316.9 18C311.6 7 300.4 0 288.1 0s-23.4 7-28.8 18L195 150.3 51.4 171.5c-12 1.8-22 10.2-25.7 21.7s-.7 24.2 7.9 32.7L137.8 329 113.2 474.7c-2 12 3 24.2 12.9 31.3s23 8 33.8 2.3l128.3-68.5 128.3 68.5c10.8 5.7 23.9 4.9 33.8-2.3s14.9-19.3 12.9-31.3L438.5 329 542.7 225.9c8.6-8.5 11.7-21.2 7.9-32.7s-13.8-19.9-25.7-21.7L381.2 150.3 316.9 18z";
+
+  interface MenuState {
+    at: OverlayPoint;
+    entries: ContextMenuEntry[];
+    onPick: (id: string) => void;
+    title?: string;
+    node: HTMLElement;
+    rows: HTMLElement[];
+    focus: number;
+    openedAt: number;
+    prevFocus: Element | null;
+    off: () => void;
+  }
+  let menu: MenuState | null = null;
+  const menuLayer = el("div", "lto-menu-layer");
+
+  function starMark(): SVGSVGElement {
+    const svg = svgEl("svg", { viewBox: "0 0 576 512", "aria-hidden": "true", focusable: "false" });
+    svg.append(svgEl("path", { d: STAR_PATH }));
+    return svg;
+  }
+
+  function setMenuFocus(m: MenuState, i: number): void {
+    if (i < 0 || i >= m.rows.length) return;
+    m.focus = i;
+    m.rows[i]?.focus({ preventScroll: true });
+  }
+
+  function placeMenu(m: MenuState): void {
+    const n = m.node;
+    const board = { width: root.clientWidth || width, height: root.clientHeight };
+    n.style.visibility = "hidden";
+    n.style.left = "0px";
+    n.style.top = "0px";
+    n.style.maxHeight = `${Math.max(0, board.height - MENU_MARGIN * 2)}px`;
+    const p = menuPlacement(m.at, { width: n.offsetWidth, height: n.offsetHeight }, board);
+    n.style.left = `${Math.round(p.left)}px`;
+    n.style.top = `${Math.round(p.top)}px`;
+    n.style.maxHeight = `${p.maxHeight}px`;
+    n.dataset.flipX = String(p.flipX);
+    n.dataset.flipY = String(p.flipY);
+    n.style.visibility = "";
+  }
+
+  /** Draw the menu's rows for the current style and width, keeping the focused row. */
+  function renderMenu(m: MenuState): void {
+    const pixel = isPixel();
+    const n = m.node;
+    n.className = "lto-cm";
+    if (pixel) frame(n, "win", true);
+    else n.classList.add("lto-plate");
+    const W = menuWidth(root.clientWidth || width);
+    n.style.width = `${W}px`;
+    const room = Math.max(40, W - (pixel ? 10 : 2) - 6 - 16 - 26);
+    const ratio = deviceRatio();
+    const kids: HTMLElement[] = [];
+    if (m.title) {
+      const t = el("div", "lto-cm-title");
+      t.setAttribute("aria-hidden", "true");
+      if (pixel) t.append(px(m.title, { scale: 2, weight: "bold", color: PX.gold, outline: PX.dark, maxWidth: wrapWidth(W - 30, 2, ratio) }));
+      else t.textContent = m.title;
+      kids.push(t);
+    }
+    m.rows = [];
+    m.entries.forEach((e, i) => {
+      const row = el("div", "lto-cm-row");
+      row.setAttribute("role", "menuitem");
+      row.tabIndex = -1;
+      row.dataset.ltoMenuItem = e.id;
+      row.dataset.enabled = String(e.enabled);
+      row.dataset.good = String(!!e.good);
+      row.dataset.text = e.label;
+      if (!e.enabled) row.setAttribute("aria-disabled", "true");
+      row.setAttribute("aria-label", menuEntryName(e));
+      const mark = el("span", "lto-cm-mark");
+      mark.setAttribute("aria-hidden", "true");
+      if (e.good) mark.append(starMark());
+      const text = el("div", "lto-cm-text");
+      text.setAttribute("aria-hidden", "true");
+      const line = (cls: string, words: string, color: PixelColor, bold = false): HTMLElement => {
+        const d = el("div", cls);
+        if (pixel) d.append(px(words, { scale: cls === "lto-cm-label" ? 2 : 1, weight: bold ? "bold" : "regular", color, outline: PX.dark, maxWidth: wrapWidth(room, cls === "lto-cm-label" ? 2 : 1, ratio) }));
+        else d.textContent = words;
+        return d;
+      };
+      text.append(line("lto-cm-label", e.label, e.good ? PX.gold : PX.ink, e.good));
+      if (e.why) text.append(line("lto-cm-why", e.why, PX.muted));
+      if (!e.enabled && e.reason) text.append(line("lto-cm-reason", e.reason, "#ff8c7a"));
+      row.append(mark, text);
+      row.addEventListener("pointerenter", (ev) => {
+        if (ev.pointerType === "mouse") setMenuFocus(m, i);
+      });
+      row.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        pickMenu(m, i, "pointer");
+      });
+      m.rows.push(row);
+      kids.push(row);
+    });
+    n.replaceChildren(...kids);
+    placeMenu(m);
+    setMenuFocus(m, m.focus);
+  }
+
+  function closeMenu(refocus: boolean): void {
+    const m = menu;
+    if (!m) return;
+    menu = null;
+    m.off();
+    m.node.remove();
+    if (refocus && m.prevFocus instanceof HTMLElement && m.prevFocus.isConnected) m.prevFocus.focus({ preventScroll: true });
+  }
+
+  function pickMenu(m: MenuState, i: number, via: "pointer" | "key"): void {
+    if (menu !== m) return;
+    const e = m.entries[i];
+    if (!e) return;
+    if (via === "pointer" && performance.now() - m.openedAt < MENU_GRACE_MS) return;
+    if (!e.enabled) {
+      if (e.reason) announce(`${e.label}: ${e.reason}`);
+      return;
+    }
+    const pick = m.onPick;
+    closeMenu(via === "key");
+    pick(e.id);
+  }
+
+  function contextMenu(at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, mopts: { title?: string } = {}): () => void {
+    if (destroyed) return () => {};
+    closeMenu(false);
+    const list = menuEntries(entries);
+    if (list.length === 0) return () => {};
+    const node = el("div");
+    node.dataset.ltoMenu = "";
+    node.setAttribute("role", "menu");
+    node.setAttribute("aria-label", mopts.title ?? "Actions");
+    const m: MenuState = { at: { x: at.x, y: at.y }, entries: list, onPick, title: mopts.title, node, rows: [], focus: 0, openedAt: performance.now(), prevFocus: document.activeElement, off: () => {} };
+    // The board and the page must not act on what is done in the menu.
+    for (const type of ["pointerdown", "mousedown", "click", "dblclick", "contextmenu", "wheel"]) {
+      node.addEventListener(type, (ev) => {
+        ev.stopPropagation();
+        if (type === "contextmenu") ev.preventDefault();
+      });
+    }
+    const onDown = (ev: PointerEvent): void => {
+      const t = ev.target as Node | null;
+      if (t && node.contains(t)) return;
+      closeMenu(false);
+      // The click that dismisses it is not also a walk or an attack on the board underneath.
+      if (ev.button === 0 && t && host.contains(t)) {
+        const eat = (c: MouseEvent): void => {
+          c.stopPropagation();
+          c.preventDefault();
+        };
+        document.addEventListener("click", eat, { capture: true, once: true });
+        window.setTimeout(() => document.removeEventListener("click", eat, true), 600);
+      }
+    };
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeMenu(true);
+      } else if (ev.key === "ArrowDown" || ev.key === "ArrowUp" || ev.key === "Home" || ev.key === "End") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setMenuFocus(m, cardNavIndex(m.rows.length, m.focus, ev.key));
+      } else if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        pickMenu(m, m.focus, "key");
+      } else if (ev.key === "Tab") {
+        closeMenu(false);
+      }
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    m.off = () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+    menu = m;
+    menuLayer.append(node);
+    renderMenu(m);
+    return () => {
+      if (menu === m) closeMenu(false);
+    };
+  }
+
+  // ---- loot window
+
+  interface LootState {
+    opts: LootWindowOptions;
+    items: LootWindowItem[];
+    node: HTMLElement;
+    tipOff: Array<() => void>;
+    emptyTimer: number;
+    /** The first draw puts the focus on a Take button; later ones only keep it where it was. */
+    drawn: boolean;
+  }
+  let loot: LootState | null = null;
+  const lootHost = el("div", "lto-loot-host");
+
+  function layoutLoot(): void {
+    if (!loot) return;
+    lootHost.style.top = `${safeTop()}px`;
+    const list = loot.node.querySelector<HTMLElement>(".lto-loot-list");
+    if (!list) return;
+    // The list takes what the panel leaves of the board (its own title and buttons are measured, not guessed) and scrolls past that.
+    list.style.maxHeight = "";
+    const chrome = loot.node.offsetHeight - list.offsetHeight;
+    list.style.maxHeight = `${Math.max(80, root.clientHeight - safeTop() - bottom.offsetHeight - 16 - chrome)}px`;
+  }
+
+  function renderLoot(l: LootState): void {
+    const pixel = isPixel();
+    const n = l.node;
+    const was = document.activeElement as HTMLElement | null;
+    const focusKey = was && n.contains(was) ? (was.dataset.lootTake ?? (was.dataset.lootAll !== undefined ? "@all" : was.dataset.lootClose !== undefined ? "@close" : null)) : null;
+    for (const off of l.tipOff) off();
+    l.tipOff = [];
+    n.className = "lto-loot";
+    if (pixel) frame(n, "win", true);
+    else n.classList.add("lto-plate");
+    const ratio = deviceRatio();
+    const W = Math.min(340, (root.clientWidth || width) - 16);
+    const takeW = pixel ? Math.ceil(textWidth("Take", "bold") * 2) + 34 : 64;
+    const room = Math.max(40, W - (pixel ? 10 : 2) - 16 - 8 - takeW);
+    const empty = l.items.length === 0;
+    n.dataset.empty = String(empty);
+    n.dataset.count = String(l.items.length);
+    const btn = (label: string, cls: string, pri = false): HTMLButtonElement => {
+      const b = el("button", `lto-btn ${cls}${pri ? " is-pri" : ""}`);
+      b.type = "button";
+      b.setAttribute("aria-label", label);
+      if (pixel) {
+        b.classList.add("lto-fr", "fs1", pri ? "fr-gold" : "fr-win");
+        b.append(px(label, { scale: 2, weight: "bold", color: pri ? PX.gold : PX.ink, outline: PX.dark }));
+      } else {
+        b.append(el("span", undefined, label));
+      }
+      return b;
+    };
+    const head = el("div", "lto-loot-title");
+    head.setAttribute("role", "heading");
+    head.setAttribute("aria-level", "2");
+    if (pixel) head.append(px(l.opts.title, { scale: 2, weight: "bold", color: PX.gold, outline: PX.dark, maxWidth: wrapWidth(W - 30, 2, ratio) }), srText(l.opts.title));
+    else head.textContent = l.opts.title;
+    n.setAttribute("aria-label", l.opts.title);
+    const list = el("div", "lto-loot-list");
+    list.setAttribute("role", "list");
+    if (empty) {
+      const e = el("div", "lto-loot-empty");
+      e.setAttribute("role", "status");
+      if (pixel) e.append(px("Nothing left.", { scale: 2, color: PX.muted, outline: PX.dark }), srText("Nothing left."));
+      else e.textContent = "Nothing left.";
+      list.append(e);
+    }
+    for (const it of l.items) {
+      const row = el("div", "lto-loot-row");
+      row.setAttribute("role", "listitem");
+      row.dataset.ltoLootItem = it.key;
+      row.dataset.text = it.name;
+      const name = el("div", "lto-loot-name");
+      if (pixel) name.append(px(it.name, { scale: 2, color: PX.ink, outline: PX.dark, maxWidth: wrapWidth(room, 2, ratio) }), srText(it.name));
+      else name.textContent = it.name;
+      if (it.tip) l.tipOff.push(attachTip(name, it.tip, { boundary: host.closest<HTMLElement>(".lt-game") ?? host, style: () => (isPixel() ? "pixel" : "storybook") }));
+      const take = btn("Take", "lto-loot-take");
+      take.dataset.lootTake = it.key;
+      take.setAttribute("aria-label", `Take ${it.name}`);
+      take.addEventListener("click", () => l.opts.onTake(it.key));
+      row.append(name, take);
+      list.append(row);
+    }
+    const foot = el("div", "lto-loot-foot");
+    if (!empty) {
+      const all = btn("Take all", "lto-loot-all", true);
+      all.dataset.lootAll = "";
+      all.addEventListener("click", () => l.opts.onTake("all"));
+      foot.append(all);
+    }
+    const close = btn("Close", "lto-loot-close");
+    close.dataset.lootClose = "";
+    close.addEventListener("click", () => closeLoot(l, true));
+    foot.append(close);
+    n.replaceChildren(head, list, foot);
+    layoutLoot();
+    // Focus: where it was, else (first draw) the first Take button.
+    let target: HTMLElement | null = null;
+    if (focusKey !== null) {
+      target = focusKey === "@all" ? n.querySelector("[data-loot-all]") : focusKey === "@close" ? n.querySelector("[data-loot-close]") : (Array.from(n.querySelectorAll<HTMLElement>("[data-loot-take]")).find((b) => b.dataset.lootTake === focusKey) ?? null);
+      target ??= n.querySelector<HTMLElement>("[data-loot-take]") ?? n.querySelector<HTMLElement>("[data-loot-all]") ?? n.querySelector<HTMLElement>("[data-loot-close]");
+    } else if (!l.drawn) {
+      target = n.querySelector<HTMLElement>("[data-loot-take]") ?? n.querySelector<HTMLElement>("[data-loot-close]");
+    }
+    l.drawn = true;
+    target?.focus({ preventScroll: true });
+  }
+
+  function closeLoot(l: LootState, notify: boolean): void {
+    if (loot !== l) return;
+    loot = null;
+    window.clearTimeout(l.emptyTimer);
+    for (const off of l.tipOff) off();
+    l.tipOff = [];
+    l.node.remove();
+    if (notify) l.opts.onClose();
+  }
+
+  function setLootItems(l: LootState, items: readonly LootWindowItem[]): void {
+    if (loot !== l) return;
+    l.items = items.map((i) => ({ ...i }));
+    window.clearTimeout(l.emptyTimer);
+    if (l.items.length === 0) l.emptyTimer = window.setTimeout(() => closeLoot(l, true), LOOT_EMPTY_MS);
+    renderLoot(l);
+  }
+
+  function lootWindow(lopts: LootWindowOptions): LootWindow {
+    const dead: LootWindow = { update() {}, close() {} };
+    if (destroyed) return dead;
+    if (loot) closeLoot(loot, false);
+    const node = el("div");
+    node.dataset.ltoLoot = "";
+    node.setAttribute("role", "dialog");
+    node.addEventListener("keydown", (e) => {
+      // Typing in the window is the window's own: the game behind it never sees it (Tab and Enter still work on the buttons).
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (loot === l) closeLoot(l, true);
+      }
+    });
+    for (const type of ["keyup", "keypress", "pointerdown", "mousedown", "click", "dblclick", "contextmenu"]) node.addEventListener(type, (e) => e.stopPropagation());
+    const l: LootState = { opts: lopts, items: [], node, tipOff: [], emptyTimer: 0, drawn: false };
+    loot = l;
+    lootHost.append(node);
+    setLootItems(l, lopts.items);
+    return {
+      update: (items) => setLootItems(l, items),
+      close: () => closeLoot(l, false),
+    };
+  }
+
+  root.insertBefore(lootHost, platesLayer);
+  root.append(menuLayer);
+
   // ---- control
 
   function clear(): void {
+    closeMenu(false);
     epoch++;
     for (const [id, resolve] of waits) {
       window.clearTimeout(id);
@@ -1604,11 +2122,14 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     renderDialogue();
     renderInitiative();
     if (narr && !narr.closed) renderNarration(narr);
+    if (menu) renderMenu(menu);
+    if (loot) renderLoot(loot);
   }
 
   function destroy(): void {
     if (destroyed) return;
     clear();
+    if (loot) closeLoot(loot, false);
     destroyed = true;
     ro?.disconnect();
     root.remove();
@@ -1616,7 +2137,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     internals.delete(api);
   }
 
-  const api: Overlay = { setStyle, banner, float, rollPlate, say, dismissStory, narrate, initiative, toast, clear, destroy };
+  const api: Overlay = { setStyle, banner, float, rollPlate, say, dismissStory, narrate, initiative, toast, contextMenu, lootWindow, clear, destroy };
   internals.set(api, { host, root });
   applyStyleClass();
   measure();
@@ -1733,8 +2254,12 @@ export interface PackSection {
 /**
  * One thing in the pack: its line, and optionally the hover help that says exactly what it is (shown on hover, keyboard
  * focus or a tap, in the HUD's current text style, inside the game window). A plain string has no help.
+ *
+ * With `card` the row is an item card instead (attachItemCard): hover or focus shows the facts with the status line on top, and a
+ * click, tap or Enter pins the card with its action buttons, each press going to createHud's `onItemAction(key, actionId)`. `key` is
+ * the host's name for the item (default: its text) and is what onItemAction gets back. `card` is read each time the card opens.
  */
-export type PackItem = string | { text: string; tip?: TipContent };
+export type PackItem = string | { text: string; tip?: TipContent; key?: string; card?: () => ItemCardContent };
 /** One of the DM's suggested next moves: a button that, pressed, is the same as typing the label. Its key is shown on it (default 1 to 4 by position). */
 export interface HudOption {
   id: string;
@@ -1776,8 +2301,12 @@ export interface HudState {
   options?: readonly HudOption[];
   /** Everything that happened, oldest first. With it the HUD has a "Log (L)" button; the drawer shows the newest at the bottom. */
   log?: readonly HudLogLine[];
-  /** The save points. With it the HUD has a "Saves" button; the drawer lists them, each with a Load button. */
+  /** The save points. With it the HUD has a "Saves" button; the drawer lists them, each with a Load button, and under them the debug export button. */
   saves?: readonly HudSave[];
+  /** A small line under the export button in the Saves drawer: "Saved.", "Copied to the clipboard.", or why it did not work. */
+  exportStatus?: string;
+  /** Show a second button, "Copy adventure JSON", beside the export one (the fallback when the file cannot be saved). Pressing it calls onAction("export-copy"). */
+  exportCopy?: boolean;
 }
 export type DrawerTab = "pack" | "log" | "saves";
 export interface Hud {
@@ -1890,6 +2419,11 @@ const HUD_CSS = `
 .lto-hud-save{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:2px 4px}
 .lto-hud-save-info{display:flex;flex-direction:column;gap:2px;min-width:0}
 .lto-hud-load{min-height:34px;padding:4px 12px;justify-content:center}
+.lto-hud-row[data-lt-card]{cursor:pointer}
+.lto-hud-exportrow{display:flex;flex-wrap:wrap;gap:6px}
+.lto-hud-export{flex:1 1 auto;justify-content:center;min-height:38px;padding:4px 12px;text-align:center}
+.lto-px .lto-hud-export canvas{display:block}
+.lto-hud-export-status{min-width:0;padding:0 2px}
 .lto-px .lto-hud-load canvas{display:block}
 .lto-hud-tab canvas,.lto-hud-opt canvas{flex:none}
 .lto-sb .lto-hud-tone-good{color:var(--sb-good)}
@@ -1988,7 +2522,18 @@ function hpColour(bar: HudBar): string {
   return bar.side === "hero" ? "#59a8ff" : "#ff5a4a";
 }
 
-export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: (id: string) => void, opts: { slot?: HTMLElement; onAsk?: (text: string) => void } = {}): Hud {
+export function createHud(
+  host: HTMLElement,
+  initialStyle: TextStyle,
+  /** Every HUD button: the game's actions and options by id, "load:<save id>", "export" and "export-copy". */
+  onAction: (id: string) => void,
+  opts: {
+    slot?: HTMLElement;
+    onAsk?: (text: string) => void;
+    /** A button of a pinned item card in the Pack tab: the item's key (PackItem.key) and the action's id. */
+    onItemAction?: (itemKey: string, actionId: string) => void;
+  } = {},
+): Hud {
   injectStyle();
   if (typeof document !== "undefined" && !document.getElementById(HUD_STYLE_ID)) {
     const s = document.createElement("style");
@@ -2073,6 +2618,9 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
   const isPixel = (): boolean => style === "pixel";
   /** The pack's hover helps, detached whenever the drawer is rebuilt (their rows are replaced). */
   let tipOff: Array<() => void> = [];
+  /** What the pack rows on screen were drawn from (look, width, items): while a card is pinned on one of them, a redraw for some other reason leaves them be. */
+  let drawnPackSig = "";
+  const packSig = (s: HudState): string => `${isPixel()}|${root.clientWidth}|${JSON.stringify(s.pack?.sections ?? null)}`;
   /** What a tip stays inside: the game window the HUD sits in, or the HUD itself. */
   const tipBoundary = (): HTMLElement => host.closest<HTMLElement>(".lt-game") ?? root;
   const px = (text: string, o: PixelTextOptions): HTMLCanvasElement => {
@@ -2126,8 +2674,12 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       scroll: prevList?.scrollTop ?? 0,
       atBottom: !prevList || prevList.scrollHeight - prevList.scrollTop - prevList.clientHeight < 14,
     };
-    for (const off of tipOff) off();
-    tipOff = [];
+    // A pinned item card stays up through a redraw that did not change the pack (the DM answering, a notice, the turn passing).
+    const pinned = tab === "pack" && sameTab && !!s.pack && packSig(s) === drawnPackSig && !!drawerBox.querySelector('.lto-hud-row[aria-expanded="true"]');
+    if (!pinned) {
+      for (const off of tipOff) off();
+      tipOff = [];
+    }
     panel.className = "lto-hud-panel";
     if (isPixel()) panel.classList.add("lto-fr", "fr-win");
     else panel.classList.add("lto-plate");
@@ -2157,7 +2709,10 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     drawNext(s);
     drawActions(s);
     drawTabs(s, tab);
-    drawDrawer(s, tab, keep);
+    if (!pinned) {
+      drawDrawer(s, tab, keep);
+      drawnPackSig = tab === "pack" ? packSig(s) : "";
+    }
     applyAsk(s.ask);
   }
 
@@ -2283,7 +2838,7 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     else drawerBox.classList.add("lto-plate");
     if (tab === "pack" && s.pack) drawerBox.append(packView(s.pack.sections, keep.sameTab ? keep.scroll : 0));
     else if (tab === "log" && s.log) drawerBox.append(logView(s.log, keep));
-    else if (tab === "saves" && s.saves) drawerBox.append(savesView(s.saves, keep.sameTab ? keep.scroll : 0));
+    else if (tab === "saves" && s.saves) drawerBox.append(savesView(s.saves, keep.sameTab ? keep.scroll : 0, { status: s.exportStatus, copy: s.exportCopy }));
   }
 
   /** The pack list: a heading per section, its items under it, scrolling inside when long. Items in `freshNow` get a brief highlight. */
@@ -2318,8 +2873,12 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
           firstFresh ??= row;
         }
         row.append(text(item, "item", 18));
-        // Hover help: on the row, in the HUD's own style, kept inside the game window.
-        if (typeof it !== "string" && it.tip) {
+        // An item card (hover facts, a click pins the buttons), or plain hover help: on the row, in the HUD's own style, kept inside the game window.
+        if (typeof it !== "string" && it.card) {
+          const key = it.key ?? item;
+          row.dataset.itemKey = key;
+          tipOff.push(attachItemCard(row, it.card, (actionId) => opts.onItemAction?.(key, actionId), { boundary: tipBoundary(), style: () => (isPixel() ? "pixel" : "storybook") }));
+        } else if (typeof it !== "string" && it.tip) {
           tipOff.push(attachTip(row, it.tip, { boundary: tipBoundary(), style: () => (isPixel() ? "pixel" : "storybook") }));
         }
         box.append(row);
@@ -2374,8 +2933,8 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     return wrap;
   }
 
-  /** The save points, each with a Load button (greyed where it cannot be loaded), or the empty-state line. */
-  function savesView(saves: readonly HudSave[], prevScroll: number): HTMLElement {
+  /** The save points, each with a Load button (greyed where it cannot be loaded), or the empty-state line; under them the export row. */
+  function savesView(saves: readonly HudSave[], prevScroll: number, exp: { status?: string; copy?: boolean }): HTMLElement {
     const wrap = el("div", "lto-hud-savesview");
     wrap.dataset.hudSavesView = "";
     const list = el("div", "lto-hud-pack-list lto-hud-list lto-hud-saves");
@@ -2407,6 +2966,36 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
       list.append(row);
     }
     wrap.append(list);
+    // The debug export: everything about this adventure in one file, for finding what went wrong.
+    const foot = el("div", "lto-hud-exportrow");
+    foot.dataset.hudExportRow = "";
+    foot.setAttribute("role", "group");
+    foot.setAttribute("aria-label", "Debugging");
+    const exportBtn = (label: string, key: string, id: string): HTMLButtonElement => {
+      const btn = el("button", "lto-hud-btn lto-hud-export");
+      btn.type = "button";
+      btn.dataset[key] = "";
+      btn.setAttribute("aria-label", label);
+      if (isPixel()) {
+        btn.classList.add("lto-fr", "fs1", "fr-win");
+        const room = Math.max(40, Math.floor(((root.clientWidth || 300) - 76) / 2));
+        btn.append(px(label, { scale: 2, weight: "bold", color: PX.ink, outline: PX.dark, maxWidth: room }));
+      } else {
+        btn.append(el("span", undefined, label));
+      }
+      btn.onclick = () => onAction(id);
+      return btn;
+    };
+    foot.append(exportBtn("Export adventure (debug)", "export", "export"));
+    if (exp.copy) foot.append(exportBtn("Copy adventure JSON", "exportCopy", "export-copy"));
+    wrap.append(foot);
+    const status = el("div", "lto-hud-export-status");
+    status.dataset.hudExportStatus = "";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.hidden = !exp.status;
+    if (exp.status) status.append(text(exp.status, "line", 18));
+    wrap.append(status);
     queueMicrotask(() => {
       list.scrollTop = prevScroll;
     });
@@ -2434,7 +3023,7 @@ export function createHud(host: HTMLElement, initialStyle: TextStyle, onAction: 
     const at = document.activeElement as HTMLElement | null;
     let focusKey: [string, string] | null = null;
     if (at && root.contains(at)) {
-      for (const k of ["action", "option", "hudDrawer", "save"]) {
+      for (const k of ["action", "option", "hudDrawer", "save", "export", "exportCopy"]) {
         const v = at.dataset[k];
         if (v !== undefined) {
           focusKey = [k, v];

@@ -40,6 +40,10 @@ import {
   FLOAT_GAP_PX,
   HUD_OPTIONS_MAX,
   LOG_RENDER_MAX,
+  LOOT_EMPTY_MS,
+  MENU_GRACE_MS,
+  MENU_MARGIN,
+  MENU_MAX_WIDTH,
   NOTICE_MAX,
   OPTION_LABEL_MAX,
   STRIP_MAX_LINES,
@@ -50,6 +54,10 @@ import {
   floatStackIndex,
   floatStackTop,
   logWindow,
+  menuEntries,
+  menuEntryName,
+  menuPlacement,
+  menuWidth,
   narrationHoldMs,
   newPackItems,
   noticeOverflow,
@@ -65,9 +73,27 @@ import {
   verdictWords,
   wrapClamp,
   type DrawerTab,
+  type PackItem,
   type RecentFloat,
 } from "../scripts/asset-bench/overlay";
-import { TIP_GAP, TIP_MARGIN, TIP_MAX_WIDTH, attachTip, intersectBoxes, placeTip, tipMaxWidth, tipTone, type Box } from "../scripts/asset-bench/tip";
+import {
+  CARD_CLOSED,
+  TIP_GAP,
+  TIP_MARGIN,
+  TIP_MAX_WIDTH,
+  attachItemCard,
+  attachTip,
+  cardNavIndex,
+  cardStep,
+  intersectBoxes,
+  itemCardIsUp,
+  placeTip,
+  tipMaxWidth,
+  tipTone,
+  type Box,
+  type CardEvent,
+  type CardState,
+} from "../scripts/asset-bench/tip";
 
 const PRINTABLE = Array.from({ length: LAST_CODE - FIRST_CODE + 1 }, (_, i) => String.fromCharCode(FIRST_CODE + i));
 const code = (n: number) => String.fromCodePoint(n);
@@ -779,6 +805,168 @@ test("noticeOverflow: the stack holds two, so the third pushes the oldest out", 
 test("the HUD exports its calmer contract and loads without a DOM", () => {
   assert.equal(typeof createHud, "function");
   assert.equal(typeof document, "undefined");
+});
+
+// ---- the item card ----------------------------------------------------------
+
+const ACTS = [
+  { id: "equip", enabled: true },
+  { id: "use", enabled: false },
+  { id: "drop", enabled: true },
+  { id: "destroy", enabled: true, confirm: "Destroy it? It is gone for good." },
+];
+const OPEN: CardState = { open: true, confirming: null };
+
+test("cardStep: a click pins the card and a second click unpins it", () => {
+  const a = cardStep(CARD_CLOSED, { type: "toggle" }, ACTS);
+  assert.deepEqual(a, { state: OPEN, fire: null });
+  assert.deepEqual(cardStep(a.state, { type: "toggle" }, ACTS), { state: CARD_CLOSED, fire: null });
+});
+
+test("cardStep: a plain button fires and closes the card", () => {
+  assert.deepEqual(cardStep(OPEN, { type: "press", id: "equip" }, ACTS), { state: CARD_CLOSED, fire: "equip" });
+  assert.deepEqual(cardStep(OPEN, { type: "press", id: "drop" }, ACTS), { state: CARD_CLOSED, fire: "drop" });
+});
+
+test("cardStep: a disabled, unknown or unpinned press does nothing at all", () => {
+  assert.deepEqual(cardStep(OPEN, { type: "press", id: "use" }, ACTS), { state: OPEN, fire: null });
+  assert.deepEqual(cardStep(OPEN, { type: "press", id: "nope" }, ACTS), { state: OPEN, fire: null });
+  assert.deepEqual(cardStep(CARD_CLOSED, { type: "press", id: "equip" }, ACTS), { state: CARD_CLOSED, fire: null });
+});
+
+test("cardStep: a confirm button asks first and only Yes fires it", () => {
+  const asked = cardStep(OPEN, { type: "press", id: "destroy" }, ACTS);
+  assert.deepEqual(asked, { state: { open: true, confirming: "destroy" }, fire: null });
+  assert.deepEqual(cardStep(asked.state, { type: "yes" }, ACTS), { state: CARD_CLOSED, fire: "destroy" });
+  // No goes back to the buttons and fires nothing.
+  assert.deepEqual(cardStep(asked.state, { type: "no" }, ACTS), { state: OPEN, fire: null });
+  // Yes and No with nothing being asked are inert.
+  assert.deepEqual(cardStep(OPEN, { type: "yes" }, ACTS), { state: OPEN, fire: null });
+  assert.deepEqual(cardStep(OPEN, { type: "no" }, ACTS), { state: OPEN, fire: null });
+});
+
+test("cardStep: Yes cannot fire an action that went disabled while the question was up", () => {
+  const asked: CardState = { open: true, confirming: "destroy" };
+  const now = ACTS.map((a) => (a.id === "destroy" ? { ...a, enabled: false } : a));
+  assert.deepEqual(cardStep(asked, { type: "yes" }, now), { state: OPEN, fire: null });
+});
+
+test("cardStep: Escape or a click elsewhere closes the card from any state and fires nothing", () => {
+  for (const s of [OPEN, { open: true, confirming: "destroy" } as CardState, CARD_CLOSED]) assert.deepEqual(cardStep(s, { type: "dismiss" }, ACTS), { state: CARD_CLOSED, fire: null });
+});
+
+test("cardStep never fires anything but an enabled action of the list, whatever the sequence", () => {
+  const ids = new Set(ACTS.filter((a) => a.enabled).map((a) => a.id));
+  const events: CardEvent[] = [{ type: "toggle" }, { type: "yes" }, { type: "no" }, { type: "dismiss" }, ...ACTS.map((a) => ({ type: "press", id: a.id }) as CardEvent), { type: "press", id: "ghost" }];
+  let seed = 7;
+  for (let run = 0; run < 40; run++) {
+    let state: CardState = CARD_CLOSED;
+    for (let i = 0; i < 25; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      const r = cardStep(state, events[seed % events.length]!, ACTS);
+      if (r.fire !== null) assert.ok(ids.has(r.fire), `fired ${r.fire}`);
+      if (r.fire !== null) assert.equal(r.state.open, false, "a fired action closes the card");
+      state = r.state;
+    }
+  }
+});
+
+test("cardNavIndex: arrows wrap around the buttons and Home and End jump", () => {
+  assert.equal(cardNavIndex(0, -1, "ArrowDown"), -1);
+  assert.equal(cardNavIndex(4, -1, "ArrowDown"), 0);
+  assert.equal(cardNavIndex(4, -1, "ArrowUp"), 3);
+  assert.equal(cardNavIndex(4, 3, "ArrowDown"), 0);
+  assert.equal(cardNavIndex(4, 0, "ArrowUp"), 3);
+  assert.equal(cardNavIndex(4, 1, "ArrowDown"), 2);
+  assert.equal(cardNavIndex(4, 2, "Home"), 0);
+  assert.equal(cardNavIndex(4, 0, "End"), 3);
+  assert.equal(cardNavIndex(4, 2, "x"), 2);
+});
+
+test("attachItemCard is inert without a DOM, and a pack item may carry a card and a key", () => {
+  const off = attachItemCard({} as HTMLElement, () => ({ tip: { title: "x", lines: [] }, status: "s", actions: [] }), () => {});
+  assert.equal(typeof off, "function");
+  off();
+  assert.equal(itemCardIsUp(), false);
+  const item: PackItem = { text: "Ring", key: "bag:0", card: () => ({ tip: { title: "Ring", lines: [] }, status: "Cannot be used", actions: [{ id: "drop", label: "Drop", enabled: true }] }) };
+  assert.equal(packItemText(item), "Ring");
+  // A card on a row does not make it "new" under another name.
+  assert.equal(newPackItems([{ label: "Bag", items: [item] }], [{ label: "Bag", items: [item] }]).size, 0);
+});
+
+// ---- the context menu and the loot window ------------------------------------
+
+const BOARD = { width: 640, height: 420 };
+const MENU = { width: 272, height: 200 };
+
+test("menuPlacement: the menu's corner goes on the point when there is room", () => {
+  assert.deepEqual(menuPlacement({ x: 100, y: 80 }, MENU, BOARD), { left: 100, top: 80, flipX: false, flipY: false, maxHeight: 408 });
+});
+
+test("menuPlacement: no room on the right opens it to the left of the point, no room below opens it above", () => {
+  const p = menuPlacement({ x: 600, y: 380 }, MENU, BOARD);
+  assert.equal(p.flipX, true);
+  assert.equal(p.flipY, true);
+  assert.equal(p.left, 600 - MENU.width);
+  assert.equal(p.top, 380 - MENU.height);
+  const right = menuPlacement({ x: 600, y: 50 }, MENU, BOARD);
+  assert.equal(right.flipX, true);
+  assert.equal(right.flipY, false);
+  assert.equal(right.top, 50);
+});
+
+test("menuPlacement: always inside the board less the margin, wherever the point is", () => {
+  for (const [w, h] of [[640, 420], [370, 340], [280, 200]]) {
+    const board = { width: w!, height: h! };
+    for (let x = -20; x <= w! + 20; x += 23) {
+      for (let y = -20; y <= h! + 20; y += 19) {
+        const size = { width: menuWidth(w!), height: 150 };
+        const p = menuPlacement({ x, y }, size, board);
+        assert.ok(p.left >= MENU_MARGIN, `left ${p.left} at ${x},${y} on ${w}x${h}`);
+        assert.ok(p.top >= MENU_MARGIN, `top ${p.top} at ${x},${y} on ${w}x${h}`);
+        assert.ok(p.left + size.width <= w! - MENU_MARGIN + 0.001, `right edge at ${x},${y} on ${w}x${h}`);
+        assert.ok(p.top + Math.min(size.height, p.maxHeight) <= h! - MENU_MARGIN + 0.001, `bottom edge at ${x},${y} on ${w}x${h}`);
+      }
+    }
+  }
+});
+
+test("menuPlacement: a point near the left or top edge clamps to the margin, and a menu taller than the board scrolls", () => {
+  const p = menuPlacement({ x: 1, y: 2 }, MENU, BOARD);
+  assert.deepEqual([p.left, p.top, p.flipX, p.flipY], [MENU_MARGIN, MENU_MARGIN, false, false]);
+  const tall = menuPlacement({ x: 100, y: 300 }, { width: 272, height: 900 }, BOARD);
+  assert.equal(tall.maxHeight, BOARD.height - MENU_MARGIN * 2);
+  assert.equal(tall.top, MENU_MARGIN);
+  const wide = menuPlacement({ x: 10, y: 10 }, { width: 900, height: 100 }, { width: 300, height: 300 });
+  assert.equal(wide.left, MENU_MARGIN);
+});
+
+test("menuWidth: the usual width on a wide board, less the margins on a phone", () => {
+  assert.equal(menuWidth(1000), MENU_MAX_WIDTH);
+  assert.equal(menuWidth(370), 272);
+  assert.equal(menuWidth(260), 244);
+  assert.equal(menuWidth(100), 140);
+});
+
+test("menuEntries drops blank ones and tidies labels; menuEntryName says why it is offered and why it cannot be done", () => {
+  const list = menuEntries([
+    { id: "a", label: "  Look   closer ", enabled: true },
+    { id: "", label: "No id", enabled: true },
+    { id: "b", label: "   ", enabled: true },
+    { id: "c", label: "Pickpocket", why: "Rogue: Sleight of Hand +7", good: true, enabled: false, reason: "It is watching you." },
+  ]);
+  assert.deepEqual(list.map((e) => e.id), ["a", "c"]);
+  assert.equal(list[0]!.label, "Look closer");
+  assert.equal(menuEntryName(list[0]!), "Look closer");
+  assert.equal(menuEntryName(list[1]!), "Pickpocket, Rogue: Sleight of Hand +7, unavailable: It is watching you.");
+  // A reason on an enabled entry is not "unavailable".
+  assert.equal(menuEntryName({ label: "Kick it", enabled: true, reason: "Hurts" }), "Kick it");
+});
+
+test("the menu and loot timings are the ones the contract states", () => {
+  assert.equal(MENU_GRACE_MS, 300);
+  assert.ok(LOOT_EMPTY_MS >= 800 && LOOT_EMPTY_MS <= 2000);
+  assert.equal(typeof createOverlay, "function");
 });
 
 // ---- hygiene ----------------------------------------------------------------

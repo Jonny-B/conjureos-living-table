@@ -36,6 +36,8 @@ export interface TipContent {
   footer?: string;
   /** Colours the heading and the frame: good (green), bad (red), magic (violet). Default plain. */
   tone?: "plain" | "good" | "bad" | "magic";
+  /** A short line set apart right under the title, in the accent colour: "Cannot be used", "Worn". What the thing is to you right now. */
+  lead?: string;
 }
 export type TipStyle = "pixel" | "storybook" | "bench";
 
@@ -44,6 +46,10 @@ export interface TipOptions {
   boundary?: HTMLElement;
   /** The look. A function is read each time the tip opens, for a surface that can change style. Default "bench". */
   style?: TipStyle | (() => TipStyle);
+  /** Mouse hover and keyboard focus only: a tap on a touch screen does nothing here (the caller gives the tap its own meaning). Default false. */
+  hoverOnly?: boolean;
+  /** While this returns true the tip does not open (a card pinned on the same thing). */
+  suppressed?: () => boolean;
 }
 
 // ---- pure helpers (unit tested) --------------------------------------------
@@ -155,7 +161,7 @@ const SANS = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-
 
 const TIP_CSS = `
 .lt-tip{position:fixed;left:0;top:0;z-index:2147483000;box-sizing:border-box;width:max-content;max-width:${TIP_MAX_WIDTH}px;padding:8px 10px;margin:0;pointer-events:none;opacity:0;transition:opacity .12s ease;overflow-wrap:anywhere;text-align:left;
-  --tt-bg:#fff;--tt-ink:#1d1b16;--tt-muted:#6c6656;--tt-edge:#ddd7c9;--tt-accent:var(--tt-ink);color:var(--tt-ink);background:var(--tt-bg);border:1px solid var(--tt-edge)}
+  --tt-bg:#fff;--tt-ink:#1d1b16;--tt-muted:#6c6656;--tt-edge:#ddd7c9;--tt-accent:var(--tt-ink);--tt-btn:#f4f1ea;color:var(--tt-ink);background:var(--tt-bg);border:1px solid var(--tt-edge)}
 .lt-tip *{box-sizing:border-box}
 .lt-tip[hidden]{display:none}
 .lt-tip.on{opacity:1}
@@ -169,7 +175,7 @@ const TIP_CSS = `
 [data-lt-tip]{cursor:help}
 [data-lt-tip]:focus-visible{outline:2px solid var(--bn-focus,#1d63e0);outline-offset:2px}
 
-.lt-tip[data-style="pixel"]{--tt-bg:#141a3c;--tt-ink:#f4ecd0;--tt-muted:#98a5d8;--tt-edge:#4d5da6;--tt-accent:#ffc72a;border:2px solid var(--tt-edge);border-radius:0;
+.lt-tip[data-style="pixel"]{--tt-btn:#1f2858;--tt-bg:#141a3c;--tt-ink:#f4ecd0;--tt-muted:#98a5d8;--tt-edge:#4d5da6;--tt-accent:#ffc72a;border:2px solid var(--tt-edge);border-radius:0;
   box-shadow:0 0 0 2px #05061a,inset 0 0 0 1px #2c3874,0 6px 0 2px rgb(5 6 26/.45);font:13px/1.4 ${SANS}}
 .lt-tip[data-style="pixel"][data-tone="good"]{--tt-edge:#59dd82;--tt-accent:#59dd82}
 .lt-tip[data-style="pixel"][data-tone="bad"]{--tt-edge:#ff5a4a;--tt-accent:#ff5a4a}
@@ -177,27 +183,27 @@ const TIP_CSS = `
 .lt-tip[data-style="pixel"] .lt-tip-title{font-size:14px}
 .lt-tip[data-style="pixel"] .lt-tip-foot{font-size:12px;border-top:2px solid #2c3874}
 
-.lt-tip[data-style="storybook"]{--tt-bg:#f6edd6;--tt-ink:#2a2016;--tt-muted:#6a5a3f;--tt-edge:#7c5c1e;--tt-accent:#8a5208;border-radius:9px;
+.lt-tip[data-style="storybook"]{--tt-btn:#fbf4df;--tt-bg:#f6edd6;--tt-ink:#2a2016;--tt-muted:#6a5a3f;--tt-edge:#7c5c1e;--tt-accent:#8a5208;border-radius:9px;
   background:linear-gradient(180deg,#f6edd6,#e8d8b0);box-shadow:inset 0 0 0 2px #f6edd6,inset 0 0 0 3px #cf9f3b,0 8px 18px rgb(46 28 8/.35);font:14px/1.38 ${SERIF}}
 .lt-tip[data-style="storybook"][data-tone="good"]{--tt-accent:#2a6a33}
 .lt-tip[data-style="storybook"][data-tone="bad"]{--tt-accent:#a5281c}
 .lt-tip[data-style="storybook"][data-tone="magic"]{--tt-accent:#6b3fa0}
 .lt-tip[data-style="storybook"] .lt-tip-title{font-size:13px;letter-spacing:.07em;text-transform:uppercase}
 .lt-tip[data-style="storybook"] .lt-tip-foot{font-size:12.5px;font-style:italic;border-top:1px solid #7c5c1e55}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lt-tip[data-style="storybook"]{--tt-bg:#25203a;--tt-ink:#f3e9cf;--tt-muted:#b6ab90;--tt-edge:#c79d45;--tt-accent:#ffd27a;
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lt-tip[data-style="storybook"]{--tt-btn:#312b4d;--tt-bg:#25203a;--tt-ink:#f3e9cf;--tt-muted:#b6ab90;--tt-edge:#c79d45;--tt-accent:#ffd27a;
   background:linear-gradient(180deg,#25203a,#181526);box-shadow:inset 0 0 0 2px #25203a,inset 0 0 0 3px #e6bf5e,0 8px 18px rgb(0 0 0/.55)}
 :root:not([data-theme="light"]) .lt-tip[data-style="storybook"][data-tone="good"]{--tt-accent:#86e096}
 :root:not([data-theme="light"]) .lt-tip[data-style="storybook"][data-tone="bad"]{--tt-accent:#ff8c7a}
 :root:not([data-theme="light"]) .lt-tip[data-style="storybook"][data-tone="magic"]{--tt-accent:#c9a6ff}
 :root:not([data-theme="light"]) .lt-tip[data-style="storybook"] .lt-tip-foot{border-top-color:#c79d4566}}
-:root[data-theme="dark"] .lt-tip[data-style="storybook"]{--tt-bg:#25203a;--tt-ink:#f3e9cf;--tt-muted:#b6ab90;--tt-edge:#c79d45;--tt-accent:#ffd27a;
+:root[data-theme="dark"] .lt-tip[data-style="storybook"]{--tt-btn:#312b4d;--tt-bg:#25203a;--tt-ink:#f3e9cf;--tt-muted:#b6ab90;--tt-edge:#c79d45;--tt-accent:#ffd27a;
   background:linear-gradient(180deg,#25203a,#181526);box-shadow:inset 0 0 0 2px #25203a,inset 0 0 0 3px #e6bf5e,0 8px 18px rgb(0 0 0/.55)}
 :root[data-theme="dark"] .lt-tip[data-style="storybook"][data-tone="good"]{--tt-accent:#86e096}
 :root[data-theme="dark"] .lt-tip[data-style="storybook"][data-tone="bad"]{--tt-accent:#ff8c7a}
 :root[data-theme="dark"] .lt-tip[data-style="storybook"][data-tone="magic"]{--tt-accent:#c9a6ff}
 :root[data-theme="dark"] .lt-tip[data-style="storybook"] .lt-tip-foot{border-top-color:#c79d4566}
 
-.lt-tip[data-style="bench"]{--tt-bg:var(--bn-panel,#fff);--tt-ink:var(--bn-text,#1d1b16);--tt-muted:var(--bn-muted,#6c6656);--tt-edge:var(--bn-line,#ddd7c9);--tt-accent:var(--bn-text,#1d1b16);border-radius:8px;
+.lt-tip[data-style="bench"]{--tt-btn:var(--bn-bg,#f6f4ef);--tt-bg:var(--bn-panel,#fff);--tt-ink:var(--bn-text,#1d1b16);--tt-muted:var(--bn-muted,#6c6656);--tt-edge:var(--bn-line,#ddd7c9);--tt-accent:var(--bn-text,#1d1b16);border-radius:8px;
   box-shadow:0 6px 20px rgb(0 0 0/.25);font:13px/1.45 ${SANS}}
 .lt-tip[data-style="bench"][data-tone="good"]{--tt-accent:#2a7d45}
 .lt-tip[data-style="bench"][data-tone="bad"]{--tt-accent:var(--bn-danger,#b3311d)}
@@ -205,6 +211,35 @@ const TIP_CSS = `
 .lt-tip[data-style="bench"] .lt-tip-foot{font-size:12px}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lt-tip[data-style="bench"][data-tone="good"]{--tt-accent:#6fd68f}}
 :root[data-theme="dark"] .lt-tip[data-style="bench"][data-tone="good"]{--tt-accent:#6fd68f}
+
+.lt-tip-lead{margin:0 0 5px;font-weight:700;color:var(--tt-accent)}
+.lt-tip[data-style="storybook"] .lt-tip-lead{font-style:italic}
+
+/* ---- the pinned item card: the same box, but it takes the pointer ---- */
+.lt-card{pointer-events:auto;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;opacity:1;transition:none}
+[data-lt-card]{cursor:pointer}
+[data-lt-card][aria-expanded="true"]{outline:2px solid var(--bn-focus,#1d63e0);outline-offset:1px}
+.lt-card-acts{display:flex;flex-direction:column;gap:5px;margin:8px 0 0;padding-top:8px;border-top:1px solid var(--tt-edge)}
+.lt-card-q{margin:8px 0 0;padding-top:8px;border-top:1px solid var(--tt-edge);font-weight:700;color:var(--tt-accent)}
+.lt-card-yn{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+.lt-card-btn{appearance:none;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:1px;width:100%;min-width:0;margin:0;padding:6px 10px;min-height:34px;text-align:left;font:inherit;font-weight:700;line-height:1.25;color:var(--tt-ink);background:var(--tt-btn);border:1px solid var(--tt-edge);border-radius:6px;cursor:pointer;touch-action:manipulation;overflow-wrap:anywhere}
+.lt-card-btn .why{font-weight:400;font-size:.9em;line-height:1.3;color:var(--tt-muted)}
+.lt-card-btn[data-confirm] .lbl{color:var(--bn-danger,#b3311d)}
+.lt-card-btn[aria-disabled="true"]{cursor:default;background:transparent;border-style:dashed}
+.lt-card-btn[aria-disabled="true"] .lbl{opacity:.55}
+.lt-card-btn:not([aria-disabled="true"]):hover{border-color:var(--tt-accent)}
+.lt-card-btn:focus-visible{outline:2px solid var(--bn-focus,#1d63e0);outline-offset:1px}
+.lt-card-yn .lt-card-btn{align-items:center;text-align:center}
+.lt-card[data-style="pixel"] .lt-card-btn{border-radius:0;border-width:2px;font-size:13px}
+.lt-card[data-style="pixel"] .lt-card-btn:not([aria-disabled="true"]):hover{border-color:#ffc72a}
+.lt-card[data-style="pixel"] .lt-card-btn[data-confirm] .lbl,.lt-card[data-style="pixel"] .lt-card-q{color:#ff8c7a}
+.lt-card[data-style="pixel"] .lt-card-acts,.lt-card[data-style="pixel"] .lt-card-q{border-top:2px solid #2c3874}
+.lt-card[data-style="storybook"] .lt-card-btn{border-radius:8px;font-family:${SERIF};font-size:14px}
+.lt-card[data-style="storybook"] .lt-card-btn[data-confirm] .lbl,.lt-card[data-style="storybook"] .lt-card-q{color:#a5281c}
+.lt-card[data-style="storybook"] .lt-card-acts,.lt-card[data-style="storybook"] .lt-card-q{border-top:1px solid #7c5c1e55}
+@media (pointer: coarse){.lt-card-btn{min-height:44px}}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lt-card[data-style="storybook"] .lt-card-btn[data-confirm] .lbl,:root:not([data-theme="light"]) .lt-card[data-style="storybook"] .lt-card-q{color:#ff8c7a}}
+:root[data-theme="dark"] .lt-card[data-style="storybook"] .lt-card-btn[data-confirm] .lbl,:root[data-theme="dark"] .lt-card[data-style="storybook"] .lt-card-q{color:#ff8c7a}
 `;
 
 const PIXEL_TITLE: Record<NonNullable<TipContent["tone"]>, PixelColor> = {
@@ -252,7 +287,7 @@ function boxOf(r: DOMRect): Box {
 }
 
 /** Fill the tip node for one tip. The heading is bitmap text in the pixel look (with the words kept for screen readers). */
-function fill(n: HTMLElement, c: TipContent, style: TipStyle, maxWidth: number): void {
+function fill(n: HTMLElement, c: TipContent, style: TipStyle, maxWidth: number, extra: readonly HTMLElement[] = []): void {
   const tone = tipTone(c);
   n.dataset.style = style;
   n.dataset.tone = tone;
@@ -277,6 +312,13 @@ function fill(n: HTMLElement, c: TipContent, style: TipStyle, maxWidth: number):
     title.textContent = c.title;
   }
   parts.push(title);
+  if (c.lead) {
+    const lead = document.createElement("p");
+    lead.className = "lt-tip-lead";
+    lead.dataset.tipLead = "";
+    lead.textContent = c.lead;
+    parts.push(lead);
+  }
   for (const line of c.lines) {
     const p = document.createElement("p");
     p.className = "lt-tip-line";
@@ -289,6 +331,7 @@ function fill(n: HTMLElement, c: TipContent, style: TipStyle, maxWidth: number):
     f.textContent = c.footer;
     parts.push(f);
   }
+  parts.push(...extra);
   n.replaceChildren(...parts);
 }
 
@@ -335,7 +378,7 @@ export function attachTip(el: HTMLElement, content: TipContent | (() => TipConte
   const onDismissScroll = (): void => hide();
 
   function show(): void {
-    if (shown || !el.isConnected) return;
+    if (shown || !el.isConnected || opts.suppressed?.()) return;
     const c = resolveContent();
     const style = resolveStyle();
     if (active) active.hide();
@@ -411,10 +454,10 @@ export function attachTip(el: HTMLElement, content: TipContent | (() => TipConte
   const onDown = (e: PointerEvent): void => {
     lastDown = performance.now();
     if (e.pointerType === "mouse") hide();
-    else touchWasUp = shown;
+    else if (!opts.hoverOnly) touchWasUp = shown;
   };
   const onUp = (e: PointerEvent): void => {
-    if (e.pointerType === "mouse") return;
+    if (e.pointerType === "mouse" || opts.hoverOnly) return;
     if (touchWasUp) {
       hide();
       return;
@@ -466,5 +509,376 @@ export function attachTip(el: HTMLElement, content: TipContent | (() => TipConte
     if (attached.get(el) === detach) attached.delete(el);
   };
   attached.set(el, detach);
+  return detach;
+}
+
+// ---- the item card: a hover tip that a click pins, with buttons ---------------
+
+/** One button of an item card. A disabled one stays in the list with its reason printed under it. */
+export interface ItemCardAction {
+  id: string;
+  label: string;
+  enabled: boolean;
+  /** Why it cannot be done (when disabled), or a short note on what it costs. Printed under the label. */
+  reason?: string;
+  /** When set, pressing the button asks this question first, with Yes and No ("Destroy the tarnished ring? It is gone for good."). */
+  confirm?: string;
+}
+/** What an item card shows: the hover tip's facts, one clarity line on top, and the buttons. */
+export interface ItemCardContent {
+  tip: TipContent;
+  /** The clarity line ("Cannot be used", "Worn: unequip it first"). Shown at the top of both the hover tip and the card. */
+  status: string;
+  actions: ItemCardAction[];
+}
+
+/** Where a pinned card is: shut, or open and maybe asking "are you sure" about one action. */
+export type CardState = { open: false } | { open: true; confirming: string | null };
+export type CardEvent = { type: "toggle" } | { type: "press"; id: string } | { type: "yes" } | { type: "no" } | { type: "dismiss" };
+export interface CardStep {
+  state: CardState;
+  /** The action to run now (the card has already shut), or null. */
+  fire: string | null;
+}
+export const CARD_CLOSED: CardState = { open: false };
+
+/**
+ * The card's whole behaviour as a pure step: a click or Enter pins it (and unpins it again); a button that needs no
+ * confirmation fires and closes the card; one with a confirm asks first, and only Yes fires it; No goes back to the
+ * buttons; Escape or a click elsewhere closes it. A disabled or unknown button does nothing at all.
+ */
+export function cardStep(state: CardState, ev: CardEvent, actions: readonly Pick<ItemCardAction, "id" | "enabled" | "confirm">[]): CardStep {
+  const stay: CardStep = { state, fire: null };
+  const find = (id: string) => actions.find((a) => a.id === id);
+  switch (ev.type) {
+    case "toggle":
+      return { state: state.open ? CARD_CLOSED : { open: true, confirming: null }, fire: null };
+    case "dismiss":
+      return { state: CARD_CLOSED, fire: null };
+    case "press": {
+      if (!state.open) return stay;
+      const a = find(ev.id);
+      if (!a || !a.enabled) return stay;
+      if (a.confirm && state.confirming !== a.id) return { state: { open: true, confirming: a.id }, fire: null };
+      return { state: CARD_CLOSED, fire: a.id };
+    }
+    case "yes": {
+      if (!state.open || state.confirming === null) return stay;
+      const a = find(state.confirming);
+      return a && a.enabled ? { state: CARD_CLOSED, fire: a.id } : { state: { open: true, confirming: null }, fire: null };
+    }
+    case "no":
+      return state.open && state.confirming !== null ? { state: { open: true, confirming: null }, fire: null } : stay;
+  }
+}
+
+/** The index the arrow keys land on in a row of `count` buttons (wrapping), or -1 when there are none. Home and End jump to the ends. */
+export function cardNavIndex(count: number, current: number, key: string): number {
+  if (count <= 0) return -1;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  if (key === "ArrowDown" || key === "ArrowRight") return current < 0 ? 0 : (current + 1) % count;
+  if (key === "ArrowUp" || key === "ArrowLeft") return current < 0 ? count - 1 : (current - 1 + count) % count;
+  return current;
+}
+
+const CARD_ID = "lt-card";
+const CARD_QUIET_MS = 450;
+let cardBox: HTMLElement | null = null;
+/** The card that is up, if any: how to close it. One at a time. */
+let activeCard: { close: (refocus: boolean) => void } | null = null;
+const cardAttached = new WeakMap<HTMLElement, () => void>();
+
+function cardNode(): HTMLElement {
+  if (cardBox && cardBox.isConnected) return cardBox;
+  injectCss();
+  cardBox = document.createElement("div");
+  cardBox.id = CARD_ID;
+  cardBox.className = "lt-tip lt-card";
+  cardBox.setAttribute("role", "dialog");
+  cardBox.hidden = true;
+  document.body.appendChild(cardBox);
+  return cardBox;
+}
+
+/** True while an item card is pinned (the character sheet leaves Escape to it). */
+export function itemCardIsUp(): boolean {
+  if (typeof document === "undefined") return false;
+  const c = document.getElementById(CARD_ID);
+  return !!c && !c.hidden;
+}
+
+function cardButton(a: ItemCardAction, n: number, press: (id: string) => void): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "lt-card-btn";
+  b.dataset.action = a.id;
+  if (a.confirm) b.dataset.confirm = "";
+  const lbl = document.createElement("span");
+  lbl.className = "lbl";
+  lbl.textContent = a.label;
+  b.append(lbl);
+  if (!a.enabled) b.setAttribute("aria-disabled", "true");
+  if (a.reason) {
+    const why = document.createElement("span");
+    why.className = "why";
+    why.id = `${CARD_ID}-why-${n}`;
+    why.textContent = a.reason;
+    b.append(why);
+    b.setAttribute("aria-describedby", why.id);
+  }
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    press(a.id);
+  });
+  return b;
+}
+
+/**
+ * Hover, focus and pinned help for a thing you can act on (an item). It shows exactly what attachTip shows (with the status line at
+ * the top) on a mouse hover or keyboard focus. A click, a tap, or Enter or Space PINS a card instead: the same facts and the status
+ * line, then one button per action. A button that cannot be used is greyed and prints its reason under it (not only on hover); a button
+ * with a `confirm` asks that question inline with Yes and No before it calls onAction. Escape, a click anywhere else or pressing a
+ * button closes the card. Tab and the arrow keys move through the buttons. The card is bounded by opts.boundary like a tip and follows
+ * the surface's style. `content` is read each time the card opens, so it is always the current facts. Returns the detach function.
+ * Attaching twice to one element replaces the first.
+ */
+export function attachItemCard(el: HTMLElement, content: () => ItemCardContent, onAction: (id: string) => void, opts: TipOptions = {}): () => void {
+  if (typeof document === "undefined") return () => {};
+  cardAttached.get(el)?.();
+  const resolveStyle = (): TipStyle => (typeof opts.style === "function" ? opts.style() : (opts.style ?? "bench"));
+
+  let state: CardState = CARD_CLOSED;
+  let current: ItemCardContent | null = null;
+  let quietUntil = -Infinity;
+  let watch: ReturnType<typeof setInterval> | undefined;
+  /** The button last pressed, so Escape from a confirm puts the focus back on it. */
+  let lastPressed = "";
+  /** The card node this attachment put its key listeners on while it is up. */
+  let listening: HTMLElement | null = null;
+
+  const hadRole = el.hasAttribute("role");
+  const interactive = el.matches(INTERACTIVE) || typeof el.onclick === "function";
+  if (!hadRole && !interactive) el.setAttribute("role", "button");
+  el.setAttribute("data-lt-card", "");
+  el.setAttribute("aria-haspopup", "dialog");
+  el.setAttribute("aria-expanded", "false");
+  const detachTip = attachTip(
+    el,
+    () => {
+      const c = content();
+      return { ...c.tip, lead: c.status };
+    },
+    { ...opts, hoverOnly: true, suppressed: () => state.open || performance.now() < quietUntil },
+  );
+
+  const bounds = (): Box => {
+    const view = viewportBox();
+    const b = opts.boundary && opts.boundary.isConnected ? intersectBoxes(boxOf(opts.boundary.getBoundingClientRect()), view) : null;
+    return b ?? view;
+  };
+
+  /** Where the card stands now, so a change of its content (the "are you sure" question) keeps its top and the buttons do not jump under the pointer. */
+  let spotNow: { left: number; top: number } | null = null;
+  const place = (keep = false): void => {
+    const n = cardNode();
+    const bb = bounds();
+    n.style.maxHeight = `${Math.max(120, bb.height - TIP_MARGIN * 2)}px`;
+    const size = n.getBoundingClientRect();
+    const spot = placeTip(boxOf(el.getBoundingClientRect()), { width: size.width, height: size.height }, bb);
+    let { left, top } = spot;
+    if (keep && spotNow) {
+      left = spotNow.left;
+      top = Math.max(bb.top + TIP_MARGIN, Math.min(spotNow.top, bb.top + bb.height - TIP_MARGIN - size.height));
+    }
+    spotNow = { left, top };
+    n.style.left = `${Math.round(left)}px`;
+    n.style.top = `${Math.round(top)}px`;
+    n.dataset.side = spot.side;
+  };
+
+  const buttons = (): HTMLButtonElement[] => (cardBox ? Array.from(cardBox.querySelectorAll<HTMLButtonElement>(".lt-card-btn")) : []);
+  const focusFirst = (): void => {
+    const list = buttons();
+    (list.find((b) => b.getAttribute("aria-disabled") !== "true") ?? list[0])?.focus({ preventScroll: true });
+  };
+
+  function render(focus: "none" | "first" | "keep"): void {
+    const c = content();
+    current = c;
+    const n = cardNode();
+    const style = resolveStyle();
+    const bb = bounds();
+    n.style.visibility = "hidden";
+    n.style.left = "0px";
+    n.style.top = "0px";
+    n.hidden = false;
+    let extra: HTMLElement;
+    let focusSel = "";
+    const asking = state.open ? state.confirming : null;
+    if (asking !== null) {
+      const a = c.actions.find((x) => x.id === asking);
+      extra = document.createElement("div");
+      const q = document.createElement("p");
+      q.className = "lt-card-q";
+      q.dataset.cardQuestion = "";
+      q.textContent = a?.confirm ?? "Are you sure?";
+      const yn = document.createElement("div");
+      yn.className = "lt-card-yn";
+      const yes = cardButton({ id: "yes", label: "Yes", enabled: true }, 0, () => step({ type: "yes" }));
+      const no = cardButton({ id: "no", label: "No", enabled: true }, 1, () => step({ type: "no" }));
+      yes.dataset.yes = "";
+      no.dataset.no = "";
+      yn.append(yes, no);
+      extra.append(q, yn);
+      focusSel = "[data-no]";
+    } else {
+      extra = document.createElement("div");
+      extra.className = "lt-card-acts";
+      extra.setAttribute("role", "group");
+      extra.setAttribute("aria-label", "Actions");
+      c.actions.forEach((a, i) => extra.append(cardButton(a, i, (id) => step({ type: "press", id }))));
+      if (c.actions.length === 0) extra = document.createElement("div");
+    }
+    fill(n, { ...c.tip, lead: c.status }, style, tipMaxWidth(bb), [extra]);
+    n.setAttribute("aria-label", c.tip.title);
+    place(focus === "keep");
+    n.style.visibility = "";
+    n.classList.add("on");
+    if (focus === "first") focusFirst();
+    else if (focus === "keep" && focusSel) cardBox?.querySelector<HTMLElement>(focusSel)?.focus({ preventScroll: true });
+    else if (focus === "keep") {
+      const back = asking === null ? cardBox?.querySelector<HTMLElement>(`[data-action="${lastPressed}"]`) : null;
+      (back ?? buttons()[0])?.focus({ preventScroll: true });
+    }
+  }
+
+  const onDocPointerDown = (e: Event): void => {
+    const t = e.target as Node | null;
+    if (t && (el.contains(t) || cardBox?.contains(t))) return;
+    step({ type: "dismiss" }, false);
+  };
+  const onDocKey = (e: KeyboardEvent): void => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation();
+    e.preventDefault();
+    step({ type: "dismiss" }, true);
+  };
+  const reposition = (): void => {
+    if (state.open && el.isConnected) place();
+  };
+
+  function open(source: "pointer" | "keyboard"): void {
+    if (!el.isConnected) return;
+    activeCard?.close(false);
+    active?.hide();
+    state = { open: true, confirming: null };
+    activeCard = { close: (refocus) => step({ type: "dismiss" }, refocus) };
+    el.setAttribute("aria-expanded", "true");
+    render(source === "keyboard" ? "first" : "none");
+    document.addEventListener("pointerdown", onDocPointerDown, true);
+    document.addEventListener("keydown", onDocKey, true);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    watch = setInterval(() => {
+      if (!el.isConnected) step({ type: "dismiss" }, false);
+    }, 200);
+    listening = cardNode();
+    listening.addEventListener("keydown", onCardKey);
+    listening.addEventListener("keyup", onCardKey);
+    listening.addEventListener("keypress", onCardKey);
+  }
+
+  function shut(refocus: boolean): void {
+    if (!state.open) return;
+    state = CARD_CLOSED;
+    clearInterval(watch);
+    watch = undefined;
+    document.removeEventListener("pointerdown", onDocPointerDown, true);
+    document.removeEventListener("keydown", onDocKey, true);
+    window.removeEventListener("scroll", reposition, true);
+    window.removeEventListener("resize", reposition);
+    quietUntil = performance.now() + CARD_QUIET_MS;
+    el.setAttribute("aria-expanded", "false");
+    if (listening) {
+      listening.removeEventListener("keydown", onCardKey);
+      listening.removeEventListener("keyup", onCardKey);
+      listening.removeEventListener("keypress", onCardKey);
+      listening = null;
+    }
+    activeCard = null;
+    if (cardBox) {
+      cardBox.classList.remove("on");
+      cardBox.hidden = true;
+    }
+    if (refocus && el.isConnected) el.focus({ preventScroll: true });
+  }
+
+  /** Run one event through the state machine and show the result. */
+  function step(ev: CardEvent, refocus = true): void {
+    const actions = current?.actions ?? [];
+    if (ev.type === "press") lastPressed = ev.id;
+    const r = cardStep(state, ev, actions);
+    if (!r.state.open) {
+      const was = state.open;
+      if (was) shut(refocus && r.fire === null);
+      if (r.fire !== null) onAction(r.fire);
+      return;
+    }
+    const changed = r.state !== state;
+    state = r.state;
+    if (changed) render("keep");
+  }
+
+  const onClick = (e: MouseEvent): void => {
+    // A click that came from a key (detail 0) was already handled by onKey.
+    if (e.detail === 0) return;
+    e.stopPropagation();
+    if (cardStep(state, { type: "toggle" }, []).state.open) open("pointer");
+    else step({ type: "dismiss" }, false);
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.target !== el) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (cardStep(state, { type: "toggle" }, []).state.open) open("keyboard");
+      else step({ type: "dismiss" }, true);
+    } else if (e.key === "Tab" && !e.shiftKey && state.open) {
+      e.preventDefault();
+      focusFirst();
+    }
+  };
+  const onCardKey = (e: KeyboardEvent): void => {
+    // Whatever is typed in the card is the card's own: the game behind it never sees it.
+    e.stopPropagation();
+    if (e.type !== "keydown" || !state.open) return;
+    const list = buttons();
+    const at = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "Tab") {
+      e.preventDefault();
+      if (list.length === 0) return;
+      if (e.shiftKey && at <= 0) el.focus({ preventScroll: true });
+      else list[e.shiftKey ? at - 1 : (at + 1) % list.length]?.focus({ preventScroll: true });
+    } else if (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      list[cardNavIndex(list.length, at, e.key)]?.focus({ preventScroll: true });
+    }
+  };
+  el.addEventListener("click", onClick);
+  el.addEventListener("keydown", onKey);
+
+  const detach = (): void => {
+    if (state.open) shut(false);
+    detachTip();
+    el.removeEventListener("click", onClick);
+    el.removeEventListener("keydown", onKey);
+    el.removeAttribute("data-lt-card");
+    el.removeAttribute("aria-haspopup");
+    el.removeAttribute("aria-expanded");
+    if (!hadRole && !interactive) el.removeAttribute("role");
+    if (cardAttached.get(el) === detach) cardAttached.delete(el);
+  };
+  cardAttached.set(el, detach);
   return detach;
 }
