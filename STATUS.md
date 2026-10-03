@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-02, the bench plays like D&D: saves, DM suggestions, item cards, bodies, context menus, foe dice, export (0.7.0).
+Last updated: 2026-10-03, the bench runs predefined adventures; The Rat Cellar draft plays start to end (0.8.0).
 
 ## Where the move stands
 
@@ -59,8 +59,11 @@ clothing drab, and the skeleton is near white in Cel bands and Plain.
 
 **0.7.0 (2026-10-02), the table loop (#6, #10, #11):** engine modules `session/savePoints.ts`, `contextActions.ts`, `maneuvers.ts`, `adventureExport.ts` and `zip.ts`, `inventory/itemActions.ts`, `rules/corpses.ts`. On the bench: story-only board text that fades with a Log tab, the DM suggesting next moves (keys 1 to 4) and context-only buttons, Rest and save points (browser), item cards with real actions, lootable bodies, class and skill context menus whose engine actions change the board, DM push/hurt/prone inside attack and contest checks (the kick bug), foe dice in six tiers in their own trays, and a debug export zip.
 
+**0.8.0 (2026-10-02 to 03), predefined adventures (#12):** adventures are Markdown files the owner writes (`adventures/`, TEMPLATE.md, README.md, `npm run adventures:check`), parsed and validated by `src/games/livingtable/adventures/` (model, progress, gospel brief for the DM, maps from ASCII, optional AI writer). The Rat Cellar is drafted from the owner's outline with 30 marked additions awaiting review. Heroes can be unarmored (AC 10 + DEX) and the adventure kit is the class weapon only. Rats (art, statblocks). On the bench: many creatures, a start screen, locations and exits, NPCs, a Journal, the DM bound by the adventure, the AI writer; a full Rat Cellar playthrough per class.
+
 ## Next
 
+- Owner review of adventures/rat-cellar.md (30 marks) and the balance calls on #12 (the goblin is the hard fight unarmored; sleeper advantage and sneak attack are not in the engine).
 - Bring the bench's DM powers, fog of war and freehand into the game (#7): the game's DM schema needs the new powers (contract 11.6 and 11.7), explored memory saved per room in the stats blob, and the dice tray. Owner calls on #7: narration stacking, spells and sight, the '1 credit' badge.
 - Bring the bench's turn-based play into the game (#5): the click layer, turn order, overlay text and floating numbers into LivingTable.tsx. The owner picks the text style first (Pixel or Storybook, on the Play tab).
 - Owner's calls pending: how dice skins are sold (#6); a deliberate 1 px breathing bob for 16 px idles (they are now still).
