@@ -51,7 +51,7 @@ function toCellar(p: Play): void {
 // The adventures the bench carries
 
 test("the embedded adventure data is exactly adventures/*.md (run node scripts/asset-bench/gen-adventures.mjs when it is stale)", () => {
-  const written = readFileSync(new URL("../scripts/asset-bench/adventuresData.ts", import.meta.url), "utf8").replace(/\r\n?/g, "\n");
+  const written = readFileSync(new URL("../src/games/livingtable/table/adventures/data.ts", import.meta.url), "utf8").replace(/\r\n?/g, "\n");
   assert.equal(written, buildModule());
   const files = ADVENTURE_FILES.map((f) => f.file);
   assert.deepEqual(files, ["rat-cellar.md", "TEMPLATE.md"]);

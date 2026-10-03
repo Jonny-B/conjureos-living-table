@@ -1,7 +1,7 @@
 /**
  * Tests for the asset bench's on-screen text layer: the bitmap pixel font
- * (scripts/asset-bench/pixelFont.ts) and the pure parts of the overlay
- * (scripts/asset-bench/overlay.ts). The DOM drawing is covered by the bench's
+ * (src/games/livingtable/table/ui/pixelFont.ts) and the pure parts of the overlay
+ * (src/games/livingtable/table/ui/overlay.ts). The DOM drawing is covered by the bench's
  * Play-tab browser checks; everything here runs in plain Node, which is also
  * the proof that neither module touches the DOM at import time (the bench
  * registry is imported in Node for validation before it reaches a browser).
@@ -33,7 +33,7 @@ import {
   textWidth,
   wrapText,
   wrapWidth,
-} from "../scripts/asset-bench/pixelFont";
+} from "../src/games/livingtable/table/ui/pixelFont";
 import {
   CARD_SUMMARY_MAX,
   DRAWER_TABS,
@@ -100,7 +100,7 @@ import {
   type WriteStage,
   type PackItem,
   type RecentFloat,
-} from "../scripts/asset-bench/overlay";
+} from "../src/games/livingtable/table/ui/overlay";
 import {
   CARD_CLOSED,
   TIP_GAP,
@@ -118,7 +118,7 @@ import {
   type Box,
   type CardEvent,
   type CardState,
-} from "../scripts/asset-bench/tip";
+} from "../src/games/livingtable/table/ui/tip";
 
 const PRINTABLE = Array.from({ length: LAST_CODE - FIRST_CODE + 1 }, (_, i) => String.fromCharCode(FIRST_CODE + i));
 const code = (n: number) => String.fromCodePoint(n);
@@ -1152,20 +1152,25 @@ test("journal helpers: objectives tidied, progress counted, recent beats newest 
 test("the adventure screens are part of the Overlay and the Hud, and need no DOM to import", () => {
   assert.equal(typeof createOverlay, "function");
   assert.equal(typeof createHud, "function");
-  const text = readFileSync(new URL("../scripts/asset-bench/overlay.ts", import.meta.url), "utf8");
+  const text = readFileSync(new URL("../src/games/livingtable/table/ui/overlay.ts", import.meta.url), "utf8");
   for (const name of ["startScreen", "startHero", "locationCard", "sceneCard", "endingCard", "toggleJournal"]) assert.ok(text.includes(name), name);
 });
 
 // ---- hygiene ----------------------------------------------------------------
 
-test("the new bench files hold no em or en dash, and the overlay imports src for types only", () => {
-  for (const file of ["pixelFont.ts", "overlay.ts", "tip.ts"]) {
-    const text = readFileSync(new URL(`../scripts/asset-bench/${file}`, import.meta.url), "utf8");
+test("the table UI files hold no em or en dash, import the engine for types only, and name no bench path", () => {
+  for (const file of ["pixelFont.ts", "overlay.ts", "tip.ts", "cast.ts"]) {
+    const text = readFileSync(new URL(`../src/games/livingtable/table/ui/${file}`, import.meta.url), "utf8");
     assert.equal(text.includes(code(0x2014)), false, `${file} has an em dash`);
     assert.equal(text.includes(code(0x2013)), false, `${file} has an en dash`);
+    assert.equal(text.includes("asset-bench"), false, `${file} names the bench folder`);
   }
-  const overlay = readFileSync(new URL("../scripts/asset-bench/overlay.ts", import.meta.url), "utf8");
-  assert.equal(/^import (?!type\b)[^\n]*"\.\.\/\.\.\/src\//m.test(overlay), false, "overlay.ts must not pull src/ into the bench at runtime");
-  const tip = readFileSync(new URL("../scripts/asset-bench/tip.ts", import.meta.url), "utf8");
-  assert.equal(/^import [^\n]*"\.\.\/\.\.\/src\//m.test(tip), false, "tip.ts must not import from src/");
+  // Any import that leaves ui/ (a "../" path) must be type-only in the overlay, and absent in tip.
+  const overlay = readFileSync(new URL("../src/games/livingtable/table/ui/overlay.ts", import.meta.url), "utf8");
+  const leavesUi = String.raw`^import (?!type\b)[^\n]*"\.\./`;
+  assert.equal(new RegExp(leavesUi, "m").test(overlay), false, "overlay.ts must not pull the engine in at runtime");
+  const tip = readFileSync(new URL("../src/games/livingtable/table/ui/tip.ts", import.meta.url), "utf8");
+  assert.equal(new RegExp(String.raw`^import [^\n]*"\.\./`, "m").test(tip), false, "tip.ts must not import from outside ui/");
+  const cast = readFileSync(new URL("../src/games/livingtable/table/ui/cast.ts", import.meta.url), "utf8");
+  assert.equal(cast.includes("bench-data-kaycast"), false, "cast.ts takes its data from the host, not from a page element");
 });

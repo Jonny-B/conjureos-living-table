@@ -1,5 +1,5 @@
 /**
- * Tests for the asset bench's dice tray (scripts/asset-bench/dice.ts): the pure
+ * Tests for the asset bench's dice tray (src/games/livingtable/table/ui/dice.ts): the pure
  * parts, which is nearly all the logic. The polyhedra (convex, planar, the right
  * counts, numbered with opposite faces adding up), the resting orientations (the
  * face showing the result is always the one most facing the viewer, upright), the
@@ -17,7 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { getGlyph } from "../scripts/asset-bench/pixelFont";
+import { getGlyph } from "../src/games/livingtable/table/ui/pixelFont";
 import {
   DICE_SKINS,
   DIE_KINDS,
@@ -62,7 +62,7 @@ import {
   type Mat3,
   type RollLayout,
   type Vec3,
-} from "../scripts/asset-bench/dice";
+} from "../src/games/livingtable/table/ui/dice";
 
 const EXPECTED: Record<DieKind, { v: number; e: number; f: number; sides: number }> = {
   d4: { v: 4, e: 6, f: 4, sides: 4 },
@@ -681,7 +681,7 @@ test("the skin picker's preview is a d20 showing its 20, in every skin", () => {
 });
 
 test("the tray never switches numerals off, and the only place the renderer can is an explicit option", () => {
-  const src = readFileSync(new URL("../scripts/asset-bench/dice.ts", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../src/games/livingtable/table/ui/dice.ts", import.meta.url), "utf8");
   const code = src.split(/\r?\n/).filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//"));
   assert.equal(code.some((l) => /numerals:\s*false/.test(l)), false, "no call in dice.ts passes numerals: false");
 });

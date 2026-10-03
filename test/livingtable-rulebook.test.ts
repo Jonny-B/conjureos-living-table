@@ -11,7 +11,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { RULEBOOK, ruleSection, rulebookText, type RuleBlock, type RuleSection } from "../src/games/livingtable/rules/rulebook";
 import { ANCESTRIES } from "../src/games/livingtable/characters/ancestries";
 import { ARCHETYPES, PLAYABLE_ARCHETYPE_IDS, getArchetype } from "../src/games/livingtable/characters/templates";
@@ -392,8 +392,22 @@ test("modifiers and proficiency in the book are the engine's", () => {
 
 // ── the bench's own numbers, read from the bench ─────────────────────────
 
-test("the bench-only numbers in the book match the bench", () => {
-  const bench = readFileSync(new URL("../scripts/asset-bench/assets.ts", import.meta.url), "utf8");
+/**
+ * Every module of the table window (src/games/livingtable/table/*.ts, not its subfolders) as one text. The numbers and words the book
+ * quotes from the window live there now (state.ts holds the wake and hearing distances and the potion cap), so the scans read the
+ * folder rather than one file and keep working when a constant moves between its modules.
+ */
+function tableSource(): string {
+  const dir = new URL("../src/games/livingtable/table/", import.meta.url);
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".ts"))
+    .sort()
+    .map((f) => readFileSync(new URL(f, dir), "utf8"))
+    .join("\n");
+}
+
+test("the bench-only numbers in the book match the table window", () => {
+  const bench = tableSource();
   assert.match(bench, /const MONSTER_WAKE_TILES = 6;/);
   assert.match(bench, /const MONSTER_HEARS_STEPS = 2;/);
   assert.match(bench, /const DM_POTION_CAP = 2;/);
@@ -637,8 +651,9 @@ test("who rolls: the engine rolls every die, and the tray only animates", () => 
   says("checks", "The engine rolls every die");
   lacks("checks", /You roll your own initiative/, "the engine rolls them");
   says("checks", "the number was fixed by the engine before the tray moved");
-  const bench = readFileSync(new URL("../scripts/asset-bench/assets.ts", import.meta.url), "utf8");
-  assert.ok(/the engine has rolled it; the player throws the die and sees it land/.test(bench), "the bench still says the engine rolled first");
+  // The Play window's closure moves into table/mountTable.ts at the end of the port; until then it is still in the bench's assets.ts.
+  const bench = tableSource() + readFileSync(new URL("../scripts/asset-bench/assets.ts", import.meta.url), "utf8");
+  assert.ok(/the engine has rolled it; the player throws the die and sees it land/.test(bench), "the window still says the engine rolled first");
   lacks("checks", /with its number on every face that can hold one/, "the tray draws a numeral where it fits");
 });
 
