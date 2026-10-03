@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-02, D&D character sheet and creation, rulebook and bestiary on the bench (0.6.0).
+Last updated: 2026-10-02, the bench plays like D&D: saves, DM suggestions, item cards, bodies, context menus, foe dice, export (0.7.0).
 
 ## Where the move stands
 
@@ -57,9 +57,10 @@ clothing drab, and the skeleton is near white in Cel bands and Plain.
 
 **0.6.0 (2026-10-02), character sheet and creation, rules, bestiary (#8, #9):** SRD 5.1 creation in the engine (standard array, point buy, 4d6 drop lowest; nine ancestries; class skills; custom background; alignment; backstory; old inputs build the old sheet exactly), `inventory/itemInfo.ts` (what every item is and does), `rules/rulebook.ts` (checked against the engine) and `rules/bestiary.ts` (40 SRD creatures, checked against the SRD). On the bench: Sheet (C) and New character inside the game window with hover help on every number and item, the 4d6 thrown in the dice tray, Rules and Bestiary tabs, dice numerals in every state.
 
+**0.7.0 (2026-10-02), the table loop (#6, #10, #11):** engine modules `session/savePoints.ts`, `contextActions.ts`, `maneuvers.ts`, `adventureExport.ts` and `zip.ts`, `inventory/itemActions.ts`, `rules/corpses.ts`. On the bench: story-only board text that fades with a Log tab, the DM suggesting next moves (keys 1 to 4) and context-only buttons, Rest and save points (browser), item cards with real actions, lootable bodies, class and skill context menus whose engine actions change the board, DM push/hurt/prone inside attack and contest checks (the kick bug), foe dice in six tiers in their own trays, and a debug export zip.
+
 ## Next
 
-- Next on the bench (owner, 2026-10-02): calmer board text (story fades, numbers move to the HUD, a Log), context-aware buttons with the DM suggesting next moves, and save points (Rest = long rest saves; checkpoints per scene; Load last save on death).
 - Bring the bench's DM powers, fog of war and freehand into the game (#7): the game's DM schema needs the new powers (contract 11.6 and 11.7), explored memory saved per room in the stats blob, and the dice tray. Owner calls on #7: narration stacking, spells and sight, the '1 credit' badge.
 - Bring the bench's turn-based play into the game (#5): the click layer, turn order, overlay text and floating numbers into LivingTable.tsx. The owner picks the text style first (Pixel or Storybook, on the Play tab).
 - Owner's calls pending: how dice skins are sold (#6); a deliberate 1 px breathing bob for 16 px idles (they are now still).
