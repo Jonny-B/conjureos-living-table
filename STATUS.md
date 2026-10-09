@@ -1,6 +1,14 @@
 # Status
 
-Last updated: 2026-10-09, 0.10.1 is live on the dev store (version 3) and the prod store (version 1): the standalone, sealed game with the bug bash and the fit-every-screen pass.
+Last updated: 2026-10-09, 0.11.0 is on the dev store: the animated art now ships as the app's own asset files (ConjureOS #1149); prod stays on 0.10.1 until ConjureOS is promoted.
+
+## 0.11.0, the art ships as asset files (ConjureOS #1149)
+
+The cast (6.3 MB) and the KayKit library (0.2 MB) are committed in `asset-files/` and listed in `package.json` under `conjureos.assetFiles`. Every publish uploads them as the bot (content-addressed, so an unchanged file is not stored twice) and the version records their hashes. Installing or updating the game from Discover downloads them to the player's device; the game reads them with `window.__conjureos.assets.load(name)` (`table/host/assetFiles.ts`, `gameArt.ts`). No upload by hand, no address or hash pasted into the code. Outside ConjureOS, on a ConjureOS without the feature (the phone today, issue conjureos-mobile#68) or when a load fails, the game draws the still figures and the hand-drawn art and says why in the art status.
+
+- **Files**: `scripts/assets/export-asset-files.mjs` writes them into `asset-files/` from `.cache/kaykit/` (the Blender renders are not in the repo, so CI cannot rebuild them; commit a changed file). `scripts/build-bundle.mjs` and ConjureOS's shared bundler both leave declared files out of the page (1.67 MB).
+- **Tests**: `test/livingtable-table-asset-files.test.ts` pins the names, the package.json declaration, that the committed files parse, and the fallbacks (no bridge, no `assets.list`, `unknown_name`, a failed load).
+- **Prod**: do not push `main` until ConjureOS 0.175.x is promoted to prod; the workflow checks out ConjureOS `dev`, and prod `store-version` does not know the list yet. Old art-less 0.10.1 stays live there meanwhile.
 
 ## 0.10.0 and 0.10.1, the bug bash and the fit pass (issue #13, shipped)
 
@@ -96,7 +104,7 @@ clothing drab, and the skeleton is near white in Cel bands and Plain.
 
 ## Next
 
-- Sealed-app work in ConjureOS (issue to be opened and claimed there): ship an app's asset files with each published version and install them for the player, so the animated art streams from Supabase with no upload by hand; then give The Living Table's asset files to it. Until then the game draws the hand-drawn art (issues #1 and #2 here wait on it).
+- Check 0.11.0 on a real dev install: open Discover on dev, install The Living Table, see "Getting The Living Table ready", then confirm the animated figures draw (the art status says so). Issues #1 and #2 here were waiting on this. Then promote ConjureOS to prod, then `main`.
 - Music and sound effects (#14): the owner picks six tracks (title, village, tavern, cellar, combat, victory); effects are procedural plus CC0 packs; an Audio tab on the bench first.
 - Open owner questions from the bug bash are listed on issue #13 (a bigger phone board by following the hero, the portrait tablet layout, the "AI written" tag).
 - Owner calls from the port: (1) a player with a save lands in their newest save on open, not the start screen, keep it? (2) the Adventures bar button mid-game opens the start screen with no confirm; saves are kept. (3) with no AI permission or outside ConjureOS the DM is off and says so, no stand-in answer; keep it? (4) the start screen's "Test rooms" heading, rename it "Example adventures for testing"? (5) prune the old CSS, and trim the hub and campaign code left in `src/bridge/gamesApi.ts` and `src/bridge/ai.ts`?

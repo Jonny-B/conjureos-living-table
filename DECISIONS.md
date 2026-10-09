@@ -2,6 +2,11 @@
 
 Cross-cutting calls, newest first. Terse: what, why, what it touches. STATUS.md says where the project is; this says why it is that way.
 
+## 2026-10-09 (asset files, ConjureOS #1149, 0.11.0)
+
+### The animated art is the app's own asset files, committed in the repo and installed with the game
+Owner: "These assets should stream from supabase game files. When the game installs from the discovery store it should install all the assets ... for that user." So the cast and the library are two files in `asset-files/`, declared in `package.json` `conjureos.assetFiles` (`name`, `path`, `type`). The publish uploads them as the bot and records `{name, url, sha256, size, type}` with the version; the kernel fetches them at install and update; the game asks for each by name. No url or hash lives in the game's code, and nobody uploads by hand. Committed rather than built in CI because the Blender renders behind them are not in the repo. Both bundlers skip declared files, so the page stays 1.67 MB. The game falls back to still figures and the hand-drawn art whenever a file is not there, and feature-detects `assets.list` so the phone and an older ConjureOS say so instead of misreading `load(name)`. The files are public (sealed means not editable, not secret). Touches: `table/host/assetFiles.ts`, `gameArt.ts`, `package.json`, `scripts/build-bundle.mjs`, `scripts/assets/export-asset-files.mjs`, `.github/workflows/publish-store.yml`.
+
 ## 2026-10-08 (bug bash, issue #13, 0.10.0)
 
 The owner played 0.9.0 from the dev store and left thirty items (issue #13). Owner calls first, then the defaults taken where the owner left a question open. Every one touches the files named; the per-item story is on the issue.
