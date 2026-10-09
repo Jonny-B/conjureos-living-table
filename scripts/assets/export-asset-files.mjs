@@ -1,6 +1,6 @@
 /**
- * Writes the Living Table's big art as the two files the owner uploads to ConjureOS
- * (Settings, Apps, Asset files), and prints each one's name, size and sha256.
+ * Writes the Living Table's big art as the app's two ASSET FILES (package.json `conjureos.assetFiles`), and
+ * prints each one's name, size and sha256. Publishing uploads them and installing the game downloads them.
  *
  *   node scripts/assets/export-asset-files.mjs [--out <dir>] [--regenerate]
  *
@@ -8,7 +8,7 @@
  *   .cache/kaykit/bench-cast.json      (scripts/kaykit/pack-cast.mjs)     the animated figures, ~6 MB
  *   .cache/kaykit/bench-library.json   (scripts/kaykit/pack-library.mjs)  the sprite library, ~0.2 MB
  *   .cache/kaykit/palette-fantasy.json (scripts/kaykit/export-palette.ts) the palette the library indexes
- * and writes, by default into .cache/asset-files/ (never into the repo's tracked files):
+ * and writes, by default into asset-files/ (committed: CI cannot rebuild them, the Blender renders are not in the repo):
  *   living-table-cast.json      the bench cast, byte for byte (so its hash is the pack's own)
  *   living-table-library.json   { palette, parts } (the library plus the palette it was converted to)
  *
@@ -16,9 +16,9 @@
  * and the converted parts under .cache/kaykit/library/parts; without them the cast comes out empty and
  * this script refuses to write it). --out <dir> picks another folder.
  *
- * The hash is over the exact bytes written, which is what `window.__conjureos.assets.load(url, sha256)`
- * checks. Writing the same inputs twice gives the same files and the same hashes, so running it again
- * is harmless; a changed input is a new hash and so a new upload.
+ * The hash is over the exact bytes written; the platform records it at publish and checks it on every
+ * `window.__conjureos.assets.load(name)`. Writing the same inputs twice gives the same files and the same
+ * hashes, so running it again is harmless; a changed input is a new hash, so commit the new file and publish.
  *
  * The file names are the ones src/games/livingtable/table/host/assetFiles.ts lists.
  */
@@ -54,7 +54,7 @@ export function buildAssetFiles({
   castPath = ".cache/kaykit/bench-cast.json",
   libraryPath = ".cache/kaykit/bench-library.json",
   palettePath = ".cache/kaykit/palette-fantasy.json",
-  outDir = ".cache/asset-files",
+  outDir = "asset-files",
 } = {}) {
   const cast = readJson(castPath, "Run: node scripts/kaykit/pack-cast.mjs (or this script with --regenerate).");
   const castBytes = readFileSync(castPath);
@@ -88,7 +88,7 @@ export function buildAssetFiles({
 function main() {
   const argv = process.argv.slice(2);
   const outIdx = argv.indexOf("--out");
-  const outDir = outIdx >= 0 && argv[outIdx + 1] ? argv[outIdx + 1] : ".cache/asset-files";
+  const outDir = outIdx >= 0 && argv[outIdx + 1] ? argv[outIdx + 1] : "asset-files";
   if (argv.includes("--regenerate")) {
     for (const cmd of [
       ["npx", ["tsx", "scripts/kaykit/export-palette.ts"]],
@@ -103,10 +103,7 @@ function main() {
   const mb = (n) => `${(n / 1024 / 1024).toFixed(2)} MB`;
   console.log(`Wrote ${files.length} asset files to ${resolve(outDir)}\n`);
   for (const f of files) console.log(`${f.name}\n  size    ${f.bytes} bytes (${mb(f.bytes)})\n  sha256  ${f.sha256}\n  path    ${resolve(f.path)}\n`);
-  console.log("After uploading both in Settings, Apps, Asset files, paste each address and its sha256 into");
-  console.log("src/games/livingtable/table/host/assetFiles.ts (or hand them to the session that commits it):\n");
-  const key = { [CAST_NAME]: "cast", [LIBRARY_NAME]: "library" };
-  for (const f of files) console.log(`  ${key[f.name]}: { url: "<the address ConjureOS gave ${f.name}>", sha256: "${f.sha256}" },`);
+  console.log("Commit both files. package.json `conjureos.assetFiles` already lists them and the next publish uploads them.");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

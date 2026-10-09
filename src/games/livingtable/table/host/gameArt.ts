@@ -40,15 +40,17 @@
  *     the id with spaces stands in.
  *
  * The animated art (the cast, and the KayKit sprite library that goes with it) is too big for the app
- * package, so it lives in ConjureOS asset files (assetFiles.ts) and arrives AFTER the first paint:
+ * package, so it ships as the app's ConjureOS asset files (assetFiles.ts; installing the game downloads
+ * them) and is read AFTER the first paint:
  *
  *   await art.load();   // the hand-drawn art settles; the window mounts and paints with still figures
  *   // load() has already started art.loadAssets() in the background; when a file lands the art
  *   // changes (onChange fires, signature() differs) and the window repaints with it.
  *
- * Each file goes through `window.__conjureos.assets.load(url, sha256)` (hash checked, cached by the
- * runner), is parsed and checked once, and kept. A file that is not uploaded yet (assetFiles null), a bridge
- * that is not there (outside the ConjureOS app), a failed or mismatched load, or a file that does not
+ * Each file goes through `window.__conjureos.assets.load(name)` (the platform checks it against the hash
+ * recorded at publish and keeps it on the device), is parsed and checked once, and kept. A file with no name
+ * (assetFiles null), a bridge that is not there (outside the ConjureOS app) or that does not give a game its
+ * files (an older ConjureOS, the phone today), a failed or mismatched load, or a file that does not
  * parse each leave that part on its fallback (still figures, the hand-drawn art) and say why in
  * `assetStatus()`. Nothing here throws or rejects because of an asset file.
  *
@@ -70,7 +72,7 @@ import { isOpaqueAssetId } from "../../world/visibility";
 import type { AssetManifest } from "../../world/cell";
 import type { AdventureFile, ArtCatalog, CastData, CastStyle, RenderManifest, TableArt, TemplateGenre } from "../host";
 import type { BundledLibrary, BundledSprite } from "./bundledArt";
-import { ASSET_FILES, type AssetFileRef, type AssetFiles, validAssetRef } from "./assetFiles";
+import { ASSET_FILES, type AssetFiles, validAssetName } from "./assetFiles";
 
 export type { BundledLibrary, BundledSprite };
 
@@ -266,7 +268,7 @@ export interface GameArtOptions {
   bundled?: () => Promise<Partial<Record<TemplateGenre, BundledLibrary>>> | Partial<Record<TemplateGenre, BundledLibrary>>;
   /** A cast the host already has. Default: none (the cast file is loaded instead, or still figures). */
   cast?: () => { data: CastData; style: CastStyle } | null;
-  /** The uploaded asset files. Default: ASSET_FILES (assetFiles.ts, null until the owner uploads them). */
+  /** The asset files to read, by name. Default: ASSET_FILES (assetFiles.ts, the two files package.json lists). */
   assetFiles?: AssetFiles;
   /** ConjureOS's asset loader. Default: `window.__conjureos.assets`, read when the load starts (absent outside the app). */
   assets?: AssetsBridge | null | (() => AssetsBridge | null | undefined);
@@ -283,9 +285,14 @@ export interface GameArtOptions {
 /** The result `assets.load` hands back; it never rejects. */
 export type AssetLoadResult = { ok: true; objectUrl: string } | { ok: false; reason: string; error?: string };
 
-/** The part of `window.__conjureos.assets` this adapter uses. */
+/**
+ * The part of `window.__conjureos.assets` this adapter uses. `load(name)` reads one of the app's own asset files;
+ * `list` is present only on a ConjureOS that gives a game its files, which is how an older ConjureOS and the phone
+ * are told apart.
+ */
 export interface AssetsBridge {
-  load(url: string, sha256: string): Promise<AssetLoadResult>;
+  load(name: string): Promise<AssetLoadResult>;
+  list?: () => Promise<unknown>;
 }
 
 export type GroundStyle = "painted" | "lit";
@@ -437,8 +444,8 @@ export function kaykitRender(
 /** The plain words for a failed `assets.load`. */
 export function assetReason(what: string, r: { reason: string; error?: string }): string {
   switch (r.reason) {
-    case "bad_hash":
-      return `The ${what} file's hash is not valid (it must be 64 lowercase hex characters), so it was not loaded.`;
+    case "unknown_name":
+      return `The ${what} file is not one this copy of the game came with, so it was not loaded.`;
     case "mismatch":
       return `The ${what} file does not match its hash (it was changed or cut short), so it was not used.`;
     case "too_large":
@@ -598,25 +605,27 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
   };
 
   /**
-   * What stops an asset file loading before any work is done (not uploaded, a malformed reference, no bridge), as a plain
-   * reason, or the bridge and reference to go ahead with. Synchronous, so a part that cannot load settles at once.
+   * What stops an asset file loading before any work is done (no name, a malformed name, no bridge, a ConjureOS that does
+   * not give a game its files), as a plain reason, or the bridge and name to go ahead with. Synchronous, so a part that
+   * cannot load settles at once.
    */
-  function preflight(what: string, ref: AssetFileRef | null, instead: string): { reason: string } | { b: AssetsBridge; ref: AssetFileRef } {
+  function preflight(what: string, name: string | null, instead: string): { reason: string } | { b: AssetsBridge; name: string } {
     const no = (why: string): { reason: string } => ({ reason: `${why} The table shows ${instead}.` });
-    if (!ref) return no(`The ${what} file is not uploaded yet.`);
-    if (!validAssetRef(ref)) return no(`The ${what} file's address or hash is not valid.`);
+    if (!name) return no(`The ${what} file is not part of this build.`);
+    if (!validAssetName(name)) return no(`The ${what} file's name is not valid.`);
     const b = bridge();
     if (!b || typeof b.load !== "function") return no("Asset files are not available here (the game is not running inside the ConjureOS app).");
-    return { b, ref };
+    if (typeof b.list !== "function") return no("This ConjureOS does not give a game its asset files yet (the phone app and older versions do not).");
+    return { b, name };
   }
 
   /** One asset file, through the bridge, parsed and checked. Never throws. `what` and `instead` are plain words for the reason. */
-  async function fetchAsset<T>(what: string, go: { b: AssetsBridge; ref: AssetFileRef }, parse: (x: unknown) => T | null, instead: string): Promise<{ ok: true; value: T } | { ok: false; reason: string }> {
+  async function fetchAsset<T>(what: string, go: { b: AssetsBridge; name: string }, parse: (x: unknown) => T | null, instead: string): Promise<{ ok: true; value: T } | { ok: false; reason: string }> {
     const no = (why: string): { ok: false; reason: string } => ({ ok: false, reason: `${why} The table shows ${instead}.` });
-    const { b, ref } = go;
+    const { b, name } = go;
     let r: AssetLoadResult;
     try {
-      r = await b.load(ref.url, ref.sha256);
+      r = await b.load(name);
     } catch (e) {
       r = { ok: false, reason: "fetch_failed", error: errText(e) };
     }

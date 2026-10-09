@@ -2,43 +2,43 @@
  * Where the Living Table's big art files live on ConjureOS.
  *
  * The animated cast (about 6.3 MB of JSON) and the KayKit library (about 0.2 MB) are too big for the app
- * package's 5 MB limit (the cast) or not worth carrying in every download (the library), so they are
- * uploaded once as ConjureOS asset files (Settings, Apps, Asset files) and loaded at run time with
- * `window.__conjureos.assets.load(url, sha256)`, which refuses any file whose bytes do not match the hash.
+ * package's 5 MB limit (the cast) or not worth carrying in the page itself (the library), so they ship as
+ * the app's ASSET FILES: package.json lists them under `conjureos.assetFiles`, publishing uploads them, and
+ * installing the game from Discover downloads them to the player's device. The game reads each one by its
+ * name with `window.__conjureos.assets.load(name)`, which checks the bytes against the hash recorded at
+ * publish. The files are committed under `asset-files/` and are left out of the page's own bundle.
  *
- * Each entry is null until the owner has uploaded the file and its address and hash are pasted in here.
- * While it is null (or when the load fails, or outside ConjureOS) the table draws still figures and the
- * hand-drawn art, and says so in the art status (gameArt.ts `assetStatus()`).
+ * Outside ConjureOS, on a ConjureOS that does not give a game its files (the phone today), or when a load
+ * fails, the table draws still figures and the hand-drawn art, and says why in the art status
+ * (gameArt.ts `assetStatus()`).
  *
- * The files are written by `node scripts/assets/export-asset-files.mjs`, which prints each one's name,
- * size and sha256. The hash is 64 lowercase hex characters; the url is the address "Copy address" gives.
- * A changed file has a new hash, so a new upload means new values here.
+ * The files are written by `node scripts/assets/export-asset-files.mjs`, which prints each one's name, size
+ * and sha256. A changed file is a new publish; the platform records the new hash itself.
  */
 
-export interface AssetFileRef {
-  /** The public address of the uploaded file. */
-  url: string;
-  /** The file's SHA-256, 64 lowercase hex characters. */
-  sha256: string;
-}
-
 export interface AssetFiles {
-  /** living-table-cast.json: the animated figures (CastData). */
-  cast: AssetFileRef | null;
-  /** living-table-library.json: the KayKit sprite library, `{ palette, parts }`. */
-  library: AssetFileRef | null;
+  /** living-table-cast.json: the animated figures (CastData). A file name, or null for none. */
+  cast: string | null;
+  /** living-table-library.json: the KayKit sprite library, `{ palette, parts }`. A file name, or null for none. */
+  library: string | null;
 }
 
-/** The file names scripts/assets/export-asset-files.mjs writes (keep the two in step). */
+/**
+ * The file names scripts/assets/export-asset-files.mjs writes and package.json `conjureos.assetFiles` lists
+ * (keep the three in step; a test checks it).
+ */
 export const ASSET_FILE_NAMES = { cast: "living-table-cast.json", library: "living-table-library.json" } as const;
 
-/** What the owner has uploaded so far. Both null until the upload is done. */
+/** The files this build asks for. */
 export const ASSET_FILES: AssetFiles = {
-  cast: null,
-  library: null,
+  cast: ASSET_FILE_NAMES.cast,
+  library: ASSET_FILE_NAMES.library,
 };
 
-/** True when a reference has the shape `assets.load` accepts (an http(s) address and 64 lowercase hex). */
-export function validAssetRef(ref: AssetFileRef | null | undefined): ref is AssetFileRef {
-  return !!ref && typeof ref.url === "string" && /^https?:\/\//.test(ref.url) && typeof ref.sha256 === "string" && /^[0-9a-f]{64}$/.test(ref.sha256);
+/** What ConjureOS accepts as an asset file name (the same rule it applies at publish). */
+export const ASSET_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+
+/** True when a name is one `assets.load(name)` could be given. */
+export function validAssetName(name: string | null | undefined): name is string {
+  return typeof name === "string" && ASSET_NAME_RE.test(name);
 }

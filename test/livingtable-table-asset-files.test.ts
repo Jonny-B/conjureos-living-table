@@ -1,11 +1,10 @@
 /**
- * Tests for the animated art as ConjureOS asset files: host/assetFiles.ts (where the files are),
- * host/gameArt.ts (loading them through `window.__conjureos.assets.load`, falling back, caching),
- * and scripts/assets/export-asset-files.mjs (writing the files the owner uploads).
+ * Tests for the animated art as the app's ConjureOS asset files: host/assetFiles.ts (the names),
+ * host/gameArt.ts (loading them through `window.__conjureos.assets.load(name)`, falling back, caching),
+ * scripts/assets/export-asset-files.mjs (writing the files), and package.json (declaring them).
  *
  * Runs with no DOM and no network: the bridge, the object-URL reader and the inflate are fakes
- * (the real inflate is node's zlib). A last test reads the real packed files from .cache when they
- * are there and is skipped when they are not.
+ * (the real inflate is node's zlib). The last tests read the real committed files in asset-files/.
  *
  * Run: npx tsx --test test/livingtable-table-asset-files.test.ts
  */
@@ -22,7 +21,7 @@ import { PALETTE as FANTASY_PALETTE, SPRITES as FANTASY_SPRITES } from "../scrip
 import { CAST_NAME, LIBRARY_NAME, buildAssetFiles } from "../scripts/assets/export-asset-files.mjs";
 import { adaptManifest, type LoadedManifest } from "../src/games/livingtable/assets/manifestCache";
 import type { CastData } from "../src/games/livingtable/table/host";
-import { ASSET_FILES, ASSET_FILE_NAMES, validAssetRef, type AssetFiles } from "../src/games/livingtable/table/host/assetFiles";
+import { ASSET_FILES, ASSET_FILE_NAMES, ASSET_NAME_RE, validAssetName, type AssetFiles } from "../src/games/livingtable/table/host/assetFiles";
 import {
   DEFAULT_LOOK,
   assetReason,
@@ -46,11 +45,7 @@ const wireOf = (palette: unknown, sprites: typeof FANTASY_SPRITES) =>
 /** The hand-drawn art games-db serves, through the same adapter the game uses. */
 const BASE: LoadedManifest = adaptManifest(wireOf(FANTASY_PALETTE, FANTASY_SPRITES));
 
-const sha = (n: number): string => n.toString(16).padStart(64, "0");
-const FILES: AssetFiles = {
-  cast: { url: "https://assets.example/cast", sha256: sha(1) },
-  library: { url: "https://assets.example/library", sha256: sha(2) },
-};
+const FILES: AssetFiles = { cast: "living-table-cast.json", library: "living-table-library.json" };
 
 const CAST: CastData = {
   palette: [[0, 0, 0]],
@@ -90,24 +85,27 @@ const inflate = async (b: Uint8Array): Promise<Uint8Array> => new Uint8Array(inf
 
 interface Fake {
   bridge: AssetsBridge;
-  calls: { url: string; sha256: string }[];
+  calls: string[];
 }
 
-/** A bridge that answers each address from `answers` (ok by default), and records what it was asked. */
+/** A bridge that answers each name from `answers` (ok by default), and records what it was asked. It has `list`, like a ConjureOS that gives a game its files. */
 function fakeBridge(answers: Record<string, AssetLoadResult | "throw" | Promise<AssetLoadResult>> = {}): Fake {
   const calls: Fake["calls"] = [];
   const defaults: Record<string, AssetLoadResult> = {
-    [FILES.cast!.url]: { ok: true, objectUrl: "blob:cast" },
-    [FILES.library!.url]: { ok: true, objectUrl: "blob:library" },
+    [FILES.cast!]: { ok: true, objectUrl: "blob:cast" },
+    [FILES.library!]: { ok: true, objectUrl: "blob:library" },
   };
   return {
     calls,
     bridge: {
-      async load(url, sha256) {
-        calls.push({ url, sha256 });
-        const a = answers[url] ?? defaults[url] ?? { ok: false, reason: "fetch_failed" };
+      async load(name) {
+        calls.push(name);
+        const a = answers[name] ?? defaults[name] ?? { ok: false, reason: "unknown_name" };
         if (a === "throw") throw new Error("the bridge fell over");
         return a;
+      },
+      async list() {
+        return [];
       },
     },
   };
@@ -121,19 +119,22 @@ function artWith(opts: Parameters<typeof createGameArt>[0] = {}) {
 
 // ---- assetFiles.ts ---------------------------------------------------------------
 
-test("assetFiles: nothing is uploaded yet, and the names match what the export script writes", () => {
-  assert.deepEqual(ASSET_FILES, { cast: null, library: null }, "paste the uploaded address and hash here, in assetFiles.ts, once the owner has them");
+test("assetFiles: the build asks for both files, and the names match what the export script writes", () => {
+  assert.deepEqual(ASSET_FILES, { cast: CAST_NAME, library: LIBRARY_NAME });
   assert.equal(ASSET_FILE_NAMES.cast, CAST_NAME);
   assert.equal(ASSET_FILE_NAMES.library, LIBRARY_NAME);
 });
 
-test("assetFiles: validAssetRef wants an http(s) address and 64 lowercase hex", () => {
-  assert.equal(validAssetRef(FILES.cast), true);
-  assert.equal(validAssetRef(null), false);
-  assert.equal(validAssetRef({ url: "https://x/y", sha256: "ABC" }), false);
-  assert.equal(validAssetRef({ url: "https://x/y", sha256: "A".repeat(64) }), false, "uppercase hex is refused by the bridge too");
-  assert.equal(validAssetRef({ url: "ftp://x/y", sha256: sha(3) }), false);
-  assert.equal(validAssetRef({ url: "", sha256: sha(3) }), false);
+test("assetFiles: validAssetName is the rule ConjureOS applies at publish", () => {
+  assert.equal(validAssetName("living-table-cast.json"), true);
+  assert.equal(validAssetName("A.b_c-1"), true);
+  assert.equal(validAssetName(null), false);
+  assert.equal(validAssetName(""), false);
+  assert.equal(validAssetName(".hidden"), false, "starts with a letter or digit");
+  assert.equal(validAssetName("a b"), false);
+  assert.equal(validAssetName("art/board.png"), false, "a name, not a path");
+  assert.equal(validAssetName("x".repeat(101)), false);
+  assert.equal(validAssetName("x".repeat(100)), true);
 });
 
 // ---- the parsers and the decoder ---------------------------------------------------
@@ -191,7 +192,7 @@ test("kaykitRender: library pixels where it has them, the hand-drawn art upscale
 });
 
 test("assetReason says each bridge reason in plain words", () => {
-  assert.match(assetReason("cast", { reason: "bad_hash" }), /hash is not valid/);
+  assert.match(assetReason("cast", { reason: "unknown_name" }), /not one this copy of the game came with/);
   assert.match(assetReason("cast", { reason: "mismatch" }), /does not match its hash/);
   assert.match(assetReason("cast", { reason: "too_large" }), /size limit/);
   assert.match(assetReason("cast", { reason: "fetch_failed", error: "HTTP 404" }), /could not be downloaded \(HTTP 404\)/);
@@ -200,7 +201,7 @@ test("assetReason says each bridge reason in plain words", () => {
 
 // ---- gameArt with no files uploaded -----------------------------------------------
 
-test("gameArt: with assetFiles empty it asks the bridge for nothing, shows still figures and says why", async () => {
+test("gameArt: with no file names it asks the bridge for nothing, shows still figures and says why", async () => {
   const f = fakeBridge();
   const art = createGameArt({ load: async () => BASE, assetFiles: { cast: null, library: null }, assets: f.bridge });
   let n = 0;
@@ -213,19 +214,26 @@ test("gameArt: with assetFiles empty it asks the bridge for nothing, shows still
   assert.equal(n, 1, "load() announced once; nothing else changed");
   const s = art.assetStatus();
   assert.equal(s.cast.state, "fallback");
-  assert.match(s.cast.reason ?? "", /not uploaded yet.*still figures/);
+  assert.match(s.cast.reason ?? "", /not part of this build.*still figures/);
   assert.equal(s.library.state, "fallback");
-  assert.match(s.library.reason ?? "", /not uploaded yet.*hand-drawn art/);
+  assert.match(s.library.reason ?? "", /not part of this build.*hand-drawn art/);
   assert.match(s.summary, /still figures/);
   assert.doesNotMatch(art.signature(), /kaykit/);
 });
 
-test("gameArt: the default ASSET_FILES is the empty set, so a build with nothing uploaded behaves the same", async () => {
+test("gameArt: the default is ASSET_FILES, both files by name; with no bridge outside ConjureOS it falls back", async () => {
+  delete (globalThis as { __conjureos?: unknown }).__conjureos;
   const art = createGameArt({ load: async () => BASE });
   await art.load();
   await art.loadAssets();
   assert.equal(art.cast(), null);
   assert.equal(art.assetStatus().cast.state, "fallback");
+  const f = fakeBridge();
+  const inApp = createGameArt({ load: async () => BASE, assets: f.bridge, inflate, readJson: reader(blobs()) });
+  await inApp.load();
+  await inApp.loadAssets();
+  assert.deepEqual(f.calls.sort(), [CAST_NAME, LIBRARY_NAME].sort());
+  assert.ok(inApp.cast());
 });
 
 // ---- gameArt with files -----------------------------------------------------------
@@ -235,9 +243,12 @@ test("gameArt: the first paint does not wait for the files; when they land the a
   const slow = new Promise<AssetLoadResult>((res) => (release = res));
   const calls: string[] = [];
   const bridge: AssetsBridge = {
-    async load(url, sha256) {
-      calls.push(`${url} ${sha256}`);
-      return url === FILES.cast!.url ? slow : { ok: true, objectUrl: "blob:library" };
+    async load(name) {
+      calls.push(name);
+      return name === FILES.cast! ? slow : { ok: true, objectUrl: "blob:library" };
+    },
+    async list() {
+      return [];
     },
   };
   const art = artWith({ assets: bridge });
@@ -253,7 +264,7 @@ test("gameArt: the first paint does not wait for the files; when they land the a
   await art.loadAssets();
   assert.ok(n >= 2, "the cast and the library each told the window");
   assert.notEqual(art.signature(), before);
-  assert.deepEqual(calls.sort(), [`${FILES.cast!.url} ${FILES.cast!.sha256}`, `${FILES.library!.url} ${FILES.library!.sha256}`].sort(), "the exact address and hash from assetFiles");
+  assert.deepEqual(calls.sort(), [FILES.cast!, FILES.library!].sort(), "the exact names from assetFiles");
 });
 
 test("gameArt: both files in: the cast in the bands style, the KayKit render at 32 px, a signature that says so", async () => {
@@ -305,15 +316,15 @@ test("gameArt: a cast style the file lacks falls to the first one", async () => 
 // ---- the ways it falls back --------------------------------------------------------
 
 for (const [reason, pattern] of [
-  ["bad_hash", /hash is not valid/],
+  ["unknown_name", /not one this copy of the game came with/],
   ["mismatch", /does not match its hash/],
   ["fetch_failed", /could not be downloaded/],
   ["too_large", /size limit/],
 ] as const) {
   test(`gameArt: assets.load says ${reason}: still figures and hand-drawn art, a plain reason, no throw`, async () => {
     const f = fakeBridge({
-      [FILES.cast!.url]: { ok: false, reason, error: "HTTP 404" },
-      [FILES.library!.url]: { ok: false, reason },
+      [FILES.cast!]: { ok: false, reason, error: "HTTP 404" },
+      [FILES.library!]: { ok: false, reason },
     });
     const art = artWith({ assets: f.bridge });
     let n = 0;
@@ -338,6 +349,9 @@ test("gameArt: a bridge that throws or answers nothing is the same as a failed l
       async load() {
         if (answer === "throw") throw new Error("the bridge fell over");
         return undefined as unknown as AssetLoadResult;
+      },
+      async list() {
+        return [];
       },
     };
     const art = artWith({ assets: bridge });
@@ -375,14 +389,33 @@ test("gameArt: the default bridge is window.__conjureos.assets, read when the lo
   }
 });
 
-test("gameArt: a malformed reference never reaches the bridge", async () => {
+test("gameArt: a malformed name never reaches the bridge", async () => {
   const f = fakeBridge();
-  const art = artWith({ assets: f.bridge, assetFiles: { cast: { url: "https://x/y", sha256: "not-a-hash" }, library: { url: "/relative", sha256: sha(2) } } });
+  const art = artWith({ assets: f.bridge, assetFiles: { cast: "../cast.json", library: "has space.json" } });
   await art.load();
   await art.loadAssets();
   assert.equal(f.calls.length, 0);
-  assert.match(art.assetStatus().cast.reason ?? "", /address or hash is not valid/);
-  assert.match(art.assetStatus().library.reason ?? "", /address or hash is not valid/);
+  assert.match(art.assetStatus().cast.reason ?? "", /name is not valid/);
+  assert.match(art.assetStatus().library.reason ?? "", /name is not valid/);
+});
+
+test("gameArt: a ConjureOS that does not give a game its files (the phone today, an older version) falls back and says so", async () => {
+  const calls: string[] = [];
+  // Only `load`, as an older ConjureOS has it: `load(name)` there would be read as a address and hash, so it must not be called.
+  const bridge: AssetsBridge = {
+    async load(name) {
+      calls.push(name);
+      return { ok: false, reason: "bad_hash" };
+    },
+  };
+  const art = artWith({ assets: bridge });
+  await art.load();
+  await art.loadAssets();
+  assert.equal(calls.length, 0);
+  assert.equal(art.cast(), null);
+  assert.equal(art.render("fantasy"), BASE.render);
+  assert.match(art.assetStatus().cast.reason ?? "", /does not give a game its asset files yet.*still figures/);
+  assert.match(art.assetStatus().library.reason ?? "", /does not give a game its asset files yet.*hand-drawn art/);
 });
 
 test("gameArt: a file that arrives but is not what the table expects, or cannot be read, falls back", async () => {
@@ -440,15 +473,18 @@ test("gameArt: a good load is kept (asked once however often it is called); a fa
   await art.loadAssets();
   await art.load();
   await art.loadAssets();
-  assert.equal(f.calls.length, 2, "one ask per file, the second reload included");
+  assert.deepEqual([...f.calls].sort(), [FILES.cast!, FILES.library!].sort(), "one ask per file, the second reload included");
   const r = art.render("fantasy");
   await art.load();
   assert.equal(art.render("fantasy"), r, "the decoded KayKit render is not rebuilt for the same art on a reload of the same library");
 
   let down = true;
   const flaky: AssetsBridge = {
-    async load(url) {
-      return down ? { ok: false, reason: "fetch_failed", error: "offline" } : { ok: true, objectUrl: url === FILES.cast!.url ? "blob:cast" : "blob:library" };
+    async load(name) {
+      return down ? { ok: false, reason: "fetch_failed", error: "offline" } : { ok: true, objectUrl: name === FILES.cast! ? "blob:cast" : "blob:library" };
+    },
+    async list() {
+      return [];
     },
   };
   const again = artWith({ assets: flaky });
@@ -468,7 +504,7 @@ test("gameArt: a cast the host set wins; the file is not asked for", async () =>
   await art.load();
   await art.loadAssets();
   assert.equal(art.cast(), mine);
-  assert.deepEqual(f.calls.map((c) => c.url), [FILES.library!.url], "only the library went to the bridge");
+  assert.deepEqual(f.calls, [FILES.library!], "only the library went to the bridge");
   const viaSet = artWith({ assets: fakeBridge().bridge });
   await viaSet.load();
   viaSet.setCast(mine);
@@ -479,7 +515,7 @@ test("gameArt: a cast the host set wins; the file is not asked for", async () =>
 test("gameArt: a file that lands after dispose is dropped", async () => {
   let release!: (r: AssetLoadResult) => void;
   const late = new Promise<AssetLoadResult>((res) => (release = res));
-  const bridge: AssetsBridge = { load: async (url) => (url === FILES.cast!.url ? late : { ok: false, reason: "fetch_failed" }) };
+  const bridge: AssetsBridge = { load: async (name) => (name === FILES.cast! ? late : { ok: false, reason: "fetch_failed" }), list: async () => [] };
   const art = artWith({ assets: bridge });
   await art.load();
   const pending = art.loadAssets();
@@ -549,18 +585,42 @@ test("export-asset-files: refuses an empty cast, a library without the default l
   });
 });
 
-// ---- the real files, when they are on this machine ----------------------------------
+// ---- the real files, committed in asset-files/ and declared in package.json ----------
 
-const REAL_CAST = ".cache/kaykit/bench-cast.json";
-const REAL_LIB = ".cache/kaykit/bench-library.json";
-const REAL_PAL = ".cache/kaykit/palette-fantasy.json";
+const COMMITTED_CAST = `asset-files/${CAST_NAME}`;
+const COMMITTED_LIB = `asset-files/${LIBRARY_NAME}`;
 
-test("the real packed files load through the same path, against the real hand-drawn art", { skip: !(existsSync(REAL_CAST) && existsSync(REAL_LIB) && existsSync(REAL_PAL)) }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "lt-real-"));
-  try {
-    const [castFile, libFile] = buildAssetFiles({ outDir: dir }) as { path: string }[];
-    const cast = JSON.parse(readFileSync(castFile!.path, "utf8"));
-    const lib = JSON.parse(readFileSync(libFile!.path, "utf8"));
+test("package.json declares exactly the two asset files, by the names the game asks for, and both are committed", () => {
+  const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { conjureos: { editStyle?: string; assetFiles?: { name: string; path: string; type?: string }[] } };
+  assert.equal(pkg.conjureos.editStyle, "locked", "a sealed app");
+  const declared = pkg.conjureos.assetFiles ?? [];
+  assert.deepEqual(declared.map((d) => d.name).sort(), [ASSET_FILE_NAMES.cast, ASSET_FILE_NAMES.library].sort());
+  for (const d of declared) {
+    assert.match(d.name, ASSET_NAME_RE, "a name ConjureOS accepts");
+    assert.equal(d.type, "application/json");
+    assert.ok(!d.path.startsWith("/") && !d.path.includes(".."), "a path inside the repo");
+    assert.ok(existsSync(d.path), `${d.path} is committed (the publish run cannot rebuild it: the Blender renders are not in the repo)`);
+    assert.ok(readFileSync(d.path).length > 0 && readFileSync(d.path).length <= 50 * 1024 * 1024, "not empty, and under ConjureOS's 50 MB per file");
+  }
+  assert.ok(declared.reduce((n, d) => n + readFileSync(d.path).length, 0) <= 200 * 1024 * 1024, "under 200 MB in all");
+  assert.equal(declared.find((d) => d.name === CAST_NAME)?.path, COMMITTED_CAST);
+  assert.equal(declared.find((d) => d.name === LIBRARY_NAME)?.path, COMMITTED_LIB);
+});
+
+test("the committed files are the shapes the game reads, and the page's own bundle does not carry them", () => {
+  assert.ok(parseCastFile(JSON.parse(readFileSync(COMMITTED_CAST, "utf8"))), "the cast parses");
+  assert.ok(parseLibraryFile(JSON.parse(readFileSync(COMMITTED_LIB, "utf8"))), "the library parses");
+  // The shared bundler skips declared files, and so must the gate's own build (scripts/build-bundle.mjs), which
+  // otherwise embeds 6.5 MB of JSON in the page and goes over the 5 MB package limit.
+  const builder = readFileSync("scripts/build-bundle.mjs", "utf8");
+  assert.ok(builder.includes("conjureos?.assetFiles"), "the build reads the declared files from package.json");
+  assert.ok(builder.includes("if (ASSET_PATHS.has(rel)) continue;"), "and skips them");
+});
+
+test("the real committed files load through the same path, against the real hand-drawn art", async () => {
+  {
+    const cast = JSON.parse(readFileSync(COMMITTED_CAST, "utf8"));
+    const lib = JSON.parse(readFileSync(COMMITTED_LIB, "utf8"));
     const f = fakeBridge();
     const art = createGameArt({ load: async () => BASE, assetFiles: FILES, assets: f.bridge, readJson: reader({ "blob:cast": cast, "blob:library": lib }) });
     await art.load();
@@ -576,7 +636,5 @@ test("the real packed files load through the same path, against the real hand-dr
     // Every id the hand-drawn art has is still there, whichever source drew it.
     assert.deepEqual(Object.keys(r.tiles), Object.keys(BASE.render.tiles));
     assert.deepEqual(Object.keys(r.tokens), Object.keys(BASE.render.tokens));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
   }
 });

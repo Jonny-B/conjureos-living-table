@@ -1,6 +1,6 @@
 {
   "name": "conjureos-living-table",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "private": true,
   "description": "The Living Table: an AI dungeon master runs your D&D campaign in pixel art, and the dice are real, rolled by the rules engine and never the model.",
   "type": "module",
@@ -42,6 +42,18 @@
     "permissions": [
       "ai.complete",
       "display.fullscreen"
+    ],
+    "assetFiles": [
+      {
+        "name": "living-table-cast.json",
+        "path": "asset-files/living-table-cast.json",
+        "type": "application/json"
+      },
+      {
+        "name": "living-table-library.json",
+        "path": "asset-files/living-table-library.json",
+        "type": "application/json"
+      }
     ],
     "remoteActions": {
       "gamesDb": {
