@@ -24,8 +24,10 @@ const CSS = `
 .lto-root [hidden]{display:none!important}
 .lto-layer{position:absolute;inset:0;pointer-events:none}
 .lto-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
-.lto-top{position:absolute;left:8px;right:8px;top:8px;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
-.lto-bottom{position:absolute;left:8px;right:8px;bottom:8px;display:flex;flex-direction:column;align-items:center;pointer-events:none}
+.lto-top{position:absolute;left:50%;translate:-50% 0;width:min(calc(100% - 16px),max(var(--lto-board-w,100%),440px));top:8px;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
+/* a phone on its side: the board is small and the room is wide, so the turn strip takes the whole width (one row, not a column beside a thumbnail board) */
+@media (max-height:500px){.lto-top{width:calc(100% - 16px)}}
+.lto-bottom{position:absolute;left:50%;translate:-50% 0;width:min(calc(100% - 16px),var(--lto-board-w,100%));bottom:8px;display:flex;flex-direction:column;align-items:center;pointer-events:none}
 .lto-banners{display:flex;flex-direction:column;align-items:center;width:100%;pointer-events:none}
 .lto-float{position:absolute;transform:translate(-50%,-100%);pointer-events:none;white-space:nowrap;will-change:transform,opacity}
 .lto-float-in{transform-origin:50% 100%}
@@ -38,8 +40,7 @@ const CSS = `
 .lto-fr.fr-gold{--frame:var(--fr-gold)}.lto-fr.fr-red{--frame:var(--fr-red)}.lto-fr.fr-blue{--frame:var(--fr-blue)}
 .lto-fr.fs1{border-width:5px;border-image-width:5px}
 .lto-px canvas{image-rendering:pixelated}
-.lto-px .lto-init{position:relative;display:flex;align-items:flex-start;gap:4px;max-width:100%;overflow-x:auto;overflow-y:hidden;pointer-events:auto;scrollbar-width:none;padding:4px 4px 10px}
-.lto-px .lto-init::-webkit-scrollbar{display:none}
+.lto-px .lto-init{position:relative;display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:16px 4px;max-width:100%;pointer-events:auto;padding:4px 4px 12px}
 .lto-px .lto-chip{display:flex;align-items:center;gap:6px;padding:0 3px;flex:none;position:relative}
 .lto-px .lto-chip.is-active{transform:translateY(1px)}
 .lto-px .lto-chip[data-side].is-active{box-shadow:0 0 0 2px #ffe27a,0 0 0 4px #1a0f00}
@@ -60,8 +61,7 @@ const CSS = `
 .lto-sb .lto-plate{background:linear-gradient(180deg,var(--sb-paper),var(--sb-paper2));color:var(--sb-ink);border-radius:9px;border:1px solid var(--sb-rule);
   box-shadow:0 0 0 1px rgb(var(--sb-shade)/.55),0 6px 16px rgb(0 0 0/.45),inset 0 0 0 2px var(--sb-paper),inset 0 0 0 3px var(--sb-gold)}
 .lto-sb .lto-t2{font-weight:700;letter-spacing:.05em;text-transform:uppercase;paint-order:stroke fill;-webkit-text-stroke:.6px rgb(0 0 0/.7);text-shadow:0 1px 0 rgb(0 0 0/.5),0 2px 4px rgb(var(--sb-shade)/.7)}
-.lto-sb .lto-init{position:relative;display:flex;align-items:center;gap:6px;max-width:100%;overflow-x:auto;overflow-y:hidden;pointer-events:auto;scrollbar-width:none;padding:2px 2px 12px}
-.lto-sb .lto-init::-webkit-scrollbar{display:none}
+.lto-sb .lto-init{position:relative;display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:14px 6px;max-width:100%;pointer-events:auto;padding:2px 2px 12px}
 .lto-sb .lto-round,.lto-sb .lto-chip,.lto-sb .lto-verdict{font-family:var(--lto-num)}
 .lto-sb .lto-round{flex:none;padding:4px 10px;border-radius:999px;background:var(--sb-badge);color:var(--sb-badge-ink);font-size:11px;border:1px solid var(--sb-gold);box-shadow:0 2px 6px rgb(0 0 0/.4)}
 .lto-sb .lto-chip{position:relative;flex:none;display:flex;align-items:center;gap:7px;padding:3px 4px 3px 11px;border-radius:999px;font-size:13px;font-weight:700;letter-spacing:.02em}
@@ -133,8 +133,9 @@ const CSS = `
 /* ---- the DM box while it waits on the DM: the dots, and Cancel beside them ---- */
 .lto-dlg-wait{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
 .lto-dlg-cancel{flex:none;min-height:30px;padding:2px 10px}
+.lto-root[data-size="s"] .lto-dlg-cancel{min-height:44px}
 .lto-px .lto-dlg-cancel.lto-fr{padding:0 2px}
-@media (pointer: coarse){.lto-dlg-cancel{min-height:40px}}
+@media (pointer: coarse){.lto-dlg-cancel{min-height:44px}}
 /* the story screen covers the board: the DM box is out of sight (and out of reach) until it is read through */
 .lto-root[data-story] .lto-bottom{visibility:hidden}
 
@@ -143,6 +144,8 @@ const CSS = `
 .lto-px .lto-story{background:rgb(5 6 26/.86)}
 .lto-sb .lto-story{background:radial-gradient(ellipse at 50% 42%,rgb(var(--sb-shade)/.55),rgb(var(--sb-shade)/.92))}
 .lto-story-panel{position:relative;display:flex;flex-direction:column;align-items:center;gap:12px;width:var(--sw,560px);max-width:100%;max-height:100%;min-width:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;text-align:center;outline:0;scrollbar-width:thin}
+.lto-sb .lto-story-panel[data-more="down"],.lto-sb .lto-story-panel[data-more="both"]{box-shadow:inset 0 -14px 10px -10px rgb(var(--sb-shade)/.5)}
+.lto-px .lto-story-panel[data-more="down"],.lto-px .lto-story-panel[data-more="both"]{box-shadow:inset 0 -10px 8px -8px rgb(130 148 230/.5)}
 .lto-story-panel:focus-visible{outline:2px solid var(--sb-focus);outline-offset:3px}
 .lto-story-panel>*{min-width:0;max-width:100%}
 .lto-px .lto-story-panel{padding:6px 18px 12px}

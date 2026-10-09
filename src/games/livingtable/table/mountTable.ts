@@ -23,6 +23,7 @@ import { type SaveKind } from "../session/savePoints";
 import { spriteSizeOf } from "../render/canvasRenderer";
 import { createHud, createOverlay, textSpeedOf, type Hud, type Overlay } from "./ui/overlay";
 import { createDiceTray, createSkinPicker, type DiceTray } from "./ui/dice";
+import { trackMore } from "./ui/menuHelpers";
 import { visibilityStates } from "../world/visibility";
 import { type AdventureEvent } from "../adventures/types";
 import { ROOM_FLOOR, carryJournals, createSessionLog, newPlay, sandboxFromAddress, type PlayState, type RoomChoice, type SessionLog } from "./state";
@@ -39,9 +40,10 @@ import { advApply, advBoard, currentLocation, exitIsOpen, exitsHere, featureIsFo
 import { creaturesInSight, heroSees } from "./sight";
 import { dmAdventureView } from "./dmScene";
 import { createPlayStage } from "./stage";
-import { createStageFit, type StageFit } from "./stageFit";
+import { createStageFit, pageZoom, type StageFit } from "./stageFit";
 import { CELL_HEIGHT, CELL_WIDTH } from "../world/coordinates";
 import type { TableCtx } from "./tableCtx";
+import type { OverlayPoint } from "./ui/overlayTypes";
 import { installRolls } from "./flows/rolls";
 import { installSheetViews } from "./flows/sheetViews";
 import { installAdventureStart } from "./flows/adventureStart";
@@ -206,6 +208,13 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
   const trayCol = el_("div", "lt-tray-col");
   const trayHost = el_("div", "lt-dice-host");
   arena.append(stageWrap, trayCol);
+  // The side panel scrolls on a short window (a phone on its side): data-more on it says which edge has more (tableStyle fades that edge).
+  const trayMore = trackMore(trayCol);
+  const trayMoreLook = (): void => trayMore.update();
+  const trayMoreWatch = typeof ResizeObserver === "function" ? new ResizeObserver(() => requestAnimationFrame(trayMoreLook)) : null;
+  trayMoreWatch?.observe(trayCol);
+  const trayMoreMutations = typeof MutationObserver === "function" ? new MutationObserver(() => requestAnimationFrame(trayMoreLook)) : null;
+  trayMoreMutations?.observe(trayCol, { childList: true, subtree: true, characterData: true });
   el.appendChild(arena);
   const overlay: Overlay = createOverlay(stageWrap, tc.textStyle);
   /** Reduced motion prints a page at once; otherwise the text speed setting rules. */
@@ -257,6 +266,16 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
   installGameMenu(tc);
   installAdventureWorld(tc);
   installBoard(tc);
+  // On a big screen the page is zoomed (app.css --lt-zoom), and board.ts measures in screen pixels (getBoundingClientRect) while the overlay places its menus,
+  // plates and floats with style.left and top, which are in the page's own pixels: divide by the zoom here, so they land on the square they belong to.
+  const screenToHost = (p: OverlayPoint): OverlayPoint => {
+    const z = pageZoom(stageWrap);
+    return z === 1 ? p : { ...p, x: p.x / z, y: p.y / z };
+  };
+  const toHostPx = tc.toHost;
+  const headOfTile = tc.headOf;
+  tc.toHost = (px, py) => screenToHost(toHostPx(px, py));
+  tc.headOf = (who, tile) => screenToHost(headOfTile(who, tile));
   installAct(tc);
   installFight(tc);
   installAttack(tc);
@@ -364,6 +383,9 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     tc.endPress();
     tc.closeViews();
     tc.closeScreens();
+    trayMoreWatch?.disconnect();
+    trayMoreMutations?.disconnect();
+    trayMore.off();
     hud.destroy();
     stage.dispose();
     fit?.dispose();

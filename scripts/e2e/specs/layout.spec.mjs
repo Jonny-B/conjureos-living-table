@@ -126,8 +126,10 @@ export const specs = [
         assert.ok(m.board && m.board.w > 0 && m.board.h > 0, `${at}: no board`);
         // The window is filled: the arena reaches the bottom of the window (a phone page may run on below it, scrolling).
         const gap = m.win.bottom - m.arena.bottom;
-        if (m.stageScrolls) assert.ok(gap <= 8, `${at}: the arena stops ${gap} px short of the window`);
-        else assert.ok(Math.abs(gap) <= 8, `${at}: the arena is ${gap} px from the bottom of the window`);
+        // The page is scaled up on a big screen (app.css --lt-zoom 1.5 from 2400 px, 2 from 3500), and so is the 6 px edge around the arena.
+        const edge = 8 * (width >= 3500 ? 2 : width >= 2400 ? 1.5 : 1);
+        if (m.stageScrolls) assert.ok(gap <= edge, `${at}: the arena stops ${gap} px short of the window`);
+        else assert.ok(Math.abs(gap) <= edge, `${at}: the arena is ${gap} px from the bottom of the window`);
         // The board never leaves the stage, and uses its width or its height.
         assert.ok(m.board.w <= m.availW + 2 && m.board.h <= m.availH + 2, `${at}: board ${Math.round(m.board.w)}x${Math.round(m.board.h)} is bigger than the stage ${Math.round(m.availW)}x${Math.round(m.availH)}`);
         const use = Math.max(m.board.w / m.availW, m.board.h / m.availH);

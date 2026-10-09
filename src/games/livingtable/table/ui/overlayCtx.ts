@@ -113,7 +113,7 @@ export interface OverlayCtx {
   menuLayer: HTMLDivElement;
   renderMenu: (m: MenuState) => void;
   closeMenu: (refocus: boolean) => void;
-  contextMenu: (at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, mopts?: { title?: string; }) => () => void;
+  contextMenu: (at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, mopts?: { title?: string; avoid?: { x: number; y: number; w: number; h: number } }) => () => void;
   // ---- src/games/livingtable/table/ui/lootWindow.ts
   loot: LootState | null;
   lootHost: HTMLDivElement;

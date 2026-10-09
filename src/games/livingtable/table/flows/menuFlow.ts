@@ -45,6 +45,11 @@ export function askPlaceholder(target: ContextTarget, who?: string): string {
   return `Do something with ${target.name}`;
 }
 
+/** The short words the menu's empty text line shows (18 characters at most; askPlaceholder's full words stay the screen reader's). */
+export function askHint(target: ContextTarget): string {
+  return target.kind === "creature" ? "Say something" : "Do something else";
+}
+
 export function installMenuFlow(tc: TableCtx): void {
   // ---- the context menu ------------------------------------------------------------------------
   //
@@ -209,6 +214,7 @@ export function installMenuFlow(tc: TableCtx): void {
       label: target.kind === "creature" ? `Say something to ${personNameAt(p, at) ?? target.name}` : "Do something",
       kind: "text",
       placeholder: askPlaceholder(target, personNameAt(p, at)),
+      hint: askHint(target),
       enabled: s.enabled,
       ...(reason ? { reason } : {}),
       onSubmit: (text) => submitAsk(at, text),
@@ -225,6 +231,15 @@ export function installMenuFlow(tc: TableCtx): void {
     tc.clearOptions();
     const ask = { kind: "freehand" as const, text, at: { ...at }, what: same(at, p.heroAt) ? "yourself" : whatIsAt(p, at), ...(npc ? { npc: { id: npc.id, name: npc.name } } : {}) };
     void tc.runDm(ask);
+  }
+
+  /** The hero's square as a rectangle in the overlay's pixels, with the head: the figure stands taller than its square, so the rectangle reaches up three quarters of one. */
+  function heroRect(sq: XY, ts: number): { x: number; y: number; w: number; h: number } {
+    const a = tc.toHost(sq.x * ts, sq.y * ts);
+    const b = tc.toHost((sq.x + 1) * ts, (sq.y + 1) * ts);
+    const w = b.x - a.x;
+    const h = b.y - a.y;
+    return { x: a.x, y: a.y - h * 0.75, w, h: h * 1.75 };
   }
 
   /** Open the menu on the square under a pointer. */
@@ -245,7 +260,9 @@ export function installMenuFlow(tc: TableCtx): void {
     }));
     entries.push(askEntry(p, t, m.target));
     const ts = tc.tileScale();
-    tc.overlay.contextMenu(tc.toHost((t.x + 0.5) * ts, (t.y + 0.5) * ts), entries, (id) => pickContext(t, id), { title: m.title });
+    // The hero's own square stays in view: the menu opens on a side of the click that does not cover it (unless the click IS the hero).
+    const avoid = same(t, p.heroAt) ? undefined : heroRect(p.heroAt, ts);
+    tc.overlay.contextMenu(tc.toHost((t.x + 0.5) * ts, (t.y + 0.5) * ts), entries, (id) => pickContext(t, id), { title: m.title, ...(avoid ? { avoid } : {}) });
   }
 
   /** What picking a line does once the hero is where it needs them to be. */

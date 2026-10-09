@@ -516,6 +516,12 @@ export const CREATION_STEPS: readonly { id: StepId; label: string }[] = Object.f
   { id: "review", label: "Review" },
 ]);
 
+/** The line under the step tabs on a phone, where the tabs show only their numbers: "Step 2 of 7: Class". An index out of range is clamped. */
+export function stepCaption(index: number): string {
+  const i = Math.max(0, Math.min(CREATION_STEPS.length - 1, Math.floor(index)));
+  return `Step ${i + 1} of ${CREATION_STEPS.length}: ${CREATION_STEPS[i]!.label}`;
+}
+
 /** True when the draft has a name once the spaces are gone: the one thing every other step waits for. */
 export function hasName(input: Pick<CreateCharacterInput, "name">): boolean {
   return typeof input.name === "string" && input.name.trim().length > 0;
@@ -940,12 +946,45 @@ const CSS = `
 .lts-step.on{background:var(--s-accent);color:var(--s-onaccent);border-color:var(--s-accent);font-weight:700}
 .lts-step.bad::after{content:"!";font-weight:700;color:var(--s-bad);background:var(--s-panel);border-radius:99px;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;font-size:11px}
 .lts-root[data-style="pixel"] .lts-step{border-radius:0;border-width:2px}
-@container (max-width:700px){.lts-step .n{display:none}.lts-step.on{flex:2 1 0}}
-@container (max-width:520px){.lts-step:not(.on) .t{display:none}.lts-step .n{display:inline}.lts-step.on{flex:4 1 0}}
-@media (pointer:coarse),(max-width:720px){.lts-btn,.lts-step,.lts-tab{min-height:44px}.lts-btn.sq,.lts-step{min-width:44px}.lts-steps{flex-wrap:wrap}}
+@container (max-width:700px){.lts-step:not(.on) .t{display:none}.lts-step .n{display:inline}.lts-step.on{flex:3 1 0}}
+@media (pointer:coarse),(max-width:720px){.lts-btn,.lts-step,.lts-tab{min-height:44px}.lts-btn.sq,.lts-step{min-width:44px}.lts-root .lts-sel,.lts-root .lts-input,.lts-root .lts-item[data-lt-card]{min-height:44px}}
+.lts-step-cap{display:none;margin-top:4px;font-size:12.5px;line-height:1.2;color:var(--s-muted)}
+/* a phone: seven numbered tabs in ONE row of 44 px targets (the name of the step is the line under them) */
+@container (max-width:520px){
+  .lts-root .lts-cre-head{padding-inline:4px}
+  .lts-root .lts-cre-top{padding-inline:6px}
+  .lts-root .lts-steps{display:grid;grid-template-columns:repeat(7,minmax(44px,1fr));gap:0}
+  .lts-root .lts-step{min-width:44px;min-height:44px;padding:5px 0}
+  .lts-root .lts-step+.lts-step{margin-left:-1px}
+  .lts-step-cap{padding-inline:6px}
+  .lts-root .lts-step .t{display:none}
+  .lts-root .lts-step .n{display:inline}
+  .lts-root .lts-step.bad::after{width:12px;height:12px;font-size:10px}
+  .lts-step-cap{display:block}
+}
 .lts-cre-body{flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:10px 10px 14px;overscroll-behavior:contain;scrollbar-width:thin}
 .lts-cre-inner{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
+/* Back, Next and Begin sit under the content, not at the far edges of a wide window */
+.lts-cre-head,.lts-cre-foot{padding-inline:max(10px,calc((100% - 760px)/2))}
+@container (min-width:900px){
+  .lts-cre-head,.lts-cre-foot{padding-inline:max(10px,calc((100% - 1100px)/2))}
+  .lts-cre-inner{max-width:min(1100px,100%)}
+}
+/* scroll shadows (Lea Verou's): a shade at the edge a scroller still has content past */
+.lts-cre-body,.lts-root:not(.lts-embed):not(.lts-cre){--s-shade:color-mix(in srgb,var(--s-ink) 26%,transparent);background-image:linear-gradient(var(--s-bg) 30%,transparent),linear-gradient(transparent,var(--s-bg) 70%),radial-gradient(farthest-side at 50% 0,var(--s-shade),transparent),radial-gradient(farthest-side at 50% 100%,var(--s-shade),transparent);background-position:top,bottom,top,bottom;background-size:100% 28px,100% 28px,100% 10px,100% 10px;background-repeat:no-repeat;background-attachment:local,local,scroll,scroll}
 .lts-cre-foot{flex:none;display:flex;gap:6px;align-items:center;padding:8px 10px;background:var(--s-bg);border-top:1px solid var(--s-edge)}
+/* a phone on its side: the head and foot are slim, and the heading and lede above the cards and each class's flavour line go (the step tab already names the step; the facts and kit stay), so the body has the room */
+@media (max-height:500px){
+  .lts-root .lts-cre-head{padding-block:2px}
+  .lts-root .lts-cre-top{margin:0}
+  .lts-root .lts-steps{margin-top:2px}
+  .lts-root .lts-cre-foot{padding-block:3px}
+  .lts-root .lts-cre-body{padding-block:6px}
+  .lts-root .lts-cre-inner{gap:6px}
+  .lts-root .lts-cre-inner>.lts-h,.lts-root .lts-cre-inner>.lts-lede{display:none}
+  .lts-root .lts-pickbtn .ds{display:none}
+  .lts-root .lts-cards>.lts-blank{align-self:start}
+}
 .lts-root[data-style="pixel"] .lts-cre-foot{border-top:2px solid var(--s-edge)}
 .lts-lede{margin:0;color:var(--s-muted)}
 .lts-errs{margin:0;padding:8px 10px 8px 26px;border:1px solid var(--s-bad);color:var(--s-bad);background:var(--s-panel);border-radius:8px}
@@ -1737,7 +1776,10 @@ export function openCreation(
       b.addEventListener("click", () => go(s.id));
       steps.append(b);
     });
-    headEl.append(top, steps);
+    // On a phone the tabs show only their numbers, so the step's name is the line under them.
+    const cap = h("div", "lts-step-cap", stepCaption(stepIndex()));
+    cap.dataset.ltsStepCaption = "";
+    headEl.append(top, steps, cap);
     // The footer
     footEl.replaceChildren();
     const i = stepIndex();

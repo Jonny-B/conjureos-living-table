@@ -14,6 +14,8 @@
  *     under the stage and the stage takes the page's width, so an upright tablet gets a full width board with the panel below it instead of a
  *     half width board beside a column; otherwise it sits beside it. On a very large page the column is scaled up (hudZoomAt) so its text and
  *     buttons keep pace with the board. The portrait rules live in stackCss(), injected once, keyed on data-lt-stack on the root.
+ *     (hudZoomAt is kept and tested but no longer applied: app.css zooms the WHOLE page in whole steps on a big screen, --lt-zoom, so the bar,
+ *     the footer, the column and every overlay grow together; the board then asks fitBoard for a canvas at the screen's own density.)
  *     When stacked, the dice tray (the roll prompt, the tumbling dice) moves OUT of the column into the stage as a layer over the board, above the
  *     DM's dock band, because the column is below the fold on a phone.
  *   - It also keeps `data-lt-hero-rect="x,y,w,h"` (the hero's square, in client pixels) on the viewport, for the checks that make sure the
@@ -97,17 +99,43 @@ export function stackCss(rootClass = "ltt-root"): string {
     `${R} .lt-game{padding:6px}`,
     `${R} .lt-stage-wrap{flex:none;width:100%}`,
     `${R} .lt-tray-col{flex:1 0 auto;width:100%;overflow:visible}`,
+    // On a phone the DM's dock band is only there while the box is (thinking, typing, waiting to fade); the board is width bound, so it never resizes.
+    // (A tablet held upright keeps the band reserved: its board is height bound, and the overlay picks 3 or 4 rows for the box from the stage's
+    // height, so a stage that grows and shrinks with the box would make the box republish its own dock from inside a ResizeObserver.)
+    `@media (max-width:${STACK_AT}px){`,
+    `${R}{padding:2px}`,
+    `${R} .lt-game{padding:3px}`,
+    `${R} .lt-stage-wrap{padding-bottom:0}`,
+    `${R} .lt-stage-wrap:has(.lto-dlg:not([hidden])){padding-bottom:var(--lto-dock,0px)}`,
+    // The dice tray rests on the board's foot until the box is up, then rides above it.
+    `${R} .lt-stage-wrap>.lt-dice-host.lt-dice-over{bottom:8px}`,
+    `${R} .lt-stage-wrap:has(.lto-dlg:not([hidden]))>.lt-dice-host.lt-dice-over{bottom:calc(var(--lto-dock,0px) + 8px)}`,
+    `}`,
   ].join(String.fromCharCode(10));
+}
+
+/**
+ * How many device pixels one CSS pixel of `el` is: the page's whole-step zoom (app.css --lt-zoom) seen from the element, rounded to a quarter
+ * (1, 1.5, 2, 3). 1 when nothing is zoomed, when the element has no size, or when the browser cannot say. Anything that mixes
+ * getBoundingClientRect (screen pixels) with style.left or top (the element's own pixels) divides by this.
+ */
+export function pageZoom(el: HTMLElement): number {
+  const w = el.offsetWidth;
+  if (!(w > 0)) return 1;
+  const z = el.getBoundingClientRect().width / w;
+  if (!Number.isFinite(z) || z <= 0) return 1;
+  return Math.min(4, Math.max(1, Math.round(z * 4) / 4));
 }
 
 const finite = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
 
 /** The largest whole scale at which a board still fits the room, at least 1 and not so large that the canvas passes MAX_CANVAS_W. */
-export function autoScale(space: FitSpace, board: FitBoard): number {
+export function autoScale(space: FitSpace, board: FitBoard, density = 1): number {
   const tileW = board.cols * board.artPx;
   const tileH = board.rows * board.artPx;
   if (tileW <= 0 || tileH <= 0) return 1;
-  const fits = Math.floor(Math.min(finite(space.availW) / tileW, finite(space.availH) / tileH));
+  const d = finite(density) || 1;
+  const fits = Math.floor(Math.min((finite(space.availW) * d) / tileW, (finite(space.availH) * d) / tileH));
   const cap = Math.max(1, Math.floor(MAX_CANVAS_W / tileW));
   return Math.max(1, Math.min(fits, cap));
 }
@@ -116,9 +144,12 @@ export function autoScale(space: FitSpace, board: FitBoard): number {
  * The board's fit for a room. `zoom` is the player's own choice (a whole number) or null for automatic; an explicit zoom is never above
  * what fits. The box is the largest of the board's shape that fits the room, to whole pixels (and at most the canvas's own size for an
  * explicit zoom, so a small zoom on a big screen is drawn one to one). An empty room answers a zero box, for the caller to leave alone.
+ * `density` is how many device pixels one CSS pixel of the board is when the page is zoomed (app.css --lt-zoom: 1, 1.5, 2 or 3; default 1):
+ * it multiplies the room only when the whole scale is chosen, so a page shown at 2x draws a canvas twice as dense; cssW and cssH stay in CSS pixels.
  */
-export function fitBoard(space: FitSpace, board: FitBoard, zoom: number | null): BoardFit {
-  const auto = autoScale(space, board);
+export function fitBoard(space: FitSpace, board: FitBoard, zoom: number | null, density = 1): BoardFit {
+  const d = finite(density) || 1;
+  const auto = autoScale(space, board, d);
   const scale = zoom === null || !Number.isFinite(zoom) ? auto : Math.max(1, Math.min(Math.round(zoom), auto));
   const canvasW = scale * board.cols * board.artPx;
   const canvasH = scale * board.rows * board.artPx;
@@ -128,8 +159,8 @@ export function fitBoard(space: FitSpace, board: FitBoard, zoom: number | null):
   let cssW = Math.min(w, Math.floor((h * board.cols) / board.rows));
   let cssH = Math.min(h, Math.floor((w * board.rows) / board.cols));
   if (zoom !== null) {
-    cssW = Math.min(cssW, canvasW);
-    cssH = Math.min(cssH, canvasH);
+    cssW = Math.min(cssW, Math.floor(canvasW / d));
+    cssH = Math.min(cssH, Math.floor(canvasH / d));
   }
   return { scale, canvasW, canvasH, cssW, cssH };
 }
@@ -174,8 +205,10 @@ export interface StageFit {
 
 /** Roughly how tall the tray is when it rolls (dice.ts keeps it between 160 and 200 pixels), plus the gap below it. */
 const DICE_ROOM = 216;
-/** About how tall the panel under the board is on an upright tablet (the status card and its three buttons), kept clear below the board. */
-const TABLET_PANEL_ROOM = 280;
+/** About how tall the panel under the board is on an upright tablet (the HUD laid out in two columns: status, the DM's options and the three buttons), kept clear below the board. */
+export const TABLET_PANEL_ROOM = 240;
+/** A page this short or shorter (a phone on its side) does not keep the DM's dock band for the board while it is idle. */
+const SHORT_PAGE = 500;
 /** How long the tray stays over the board after the dice settle, in ms. */
 const DICE_LINGER_MS = 2400;
 
@@ -193,8 +226,9 @@ export function createStageFit(o: StageFitOptions): StageFit {
   const query = typeof window.matchMedia === "function" ? window.matchMedia(STACK_QUERY) : null;
   const stacked = (): boolean => o.managed && (query ? query.matches : stackedAt(window.innerWidth, window.innerHeight));
   if (o.managed) injectStackStyle();
-  /** The tray column's current zoom, so an unchanged page writes nothing. */
-  let hudZoom = 1;
+
+  /** How many device pixels one CSS pixel of the board is (pageZoom). */
+  const density = (): number => pageZoom(root);
 
   /** The room the board may use, or null before the stage has a size. */
   function space(): (FitSpace & { padY: number; winH: number; fullH: number }) | null {
@@ -212,13 +246,17 @@ export function createStageFit(o: StageFitOptions): StageFit {
     if (stacked()) {
       // The stage is as tall as the board, so the room is what the scrolling window offers, less everything around the stage in it.
       const holder = root.parentElement;
-      winH = holder && holder.clientHeight > 0 ? holder.clientHeight : window.innerHeight;
+      winH = holder && holder.clientHeight > 0 ? holder.clientHeight : window.innerHeight / density();
       const rc = getComputedStyle(root);
       const ac = getComputedStyle(arena);
       availH = winH - num(rc.paddingTop) - num(rc.paddingBottom) - num(ac.paddingTop) - num(ac.paddingBottom) - padY - borderY;
       fullH = availH;
+      // The dock band is painted only while the DM's box is up (stackCss), but the board is sized as if it always were, so a board that is
+      // limited by the page's height (a tablet held upright, a phone on its side) never jumps when the DM talks. (Not on a short page,
+      // where the band is too dear: there the board gives way, and a jump is the lesser evil.) A phone is held by its width alone.
+      if (window.innerHeight > SHORT_PAGE) availH -= Math.max(0, num(wc.getPropertyValue("--lto-dock")) - num(wc.paddingBottom));
       // A tablet held upright is wider than a phone, so its board is limited by the page's height (not the width) only if the panel under it
-      // is left no room: keep a fixed amount for the panel, so the whole game is in view at once. (A phone is held by its width alone.)
+      // is left no room: keep a fixed amount for the panel, so the whole game is in view at once.
       if (window.innerWidth > STACK_AT) availH -= Math.min(TABLET_PANEL_ROOM, availH * 0.4);
     } else {
       availH = stageWrap.clientHeight - padY - borderY;
@@ -230,18 +268,15 @@ export function createStageFit(o: StageFitOptions): StageFit {
 
   const boardOf = (): FitBoard => ({ cols: o.cols, rows: o.rows, artPx: Math.max(1, o.artPx()) });
 
-  /** Mark the root stacked or not (the rules of stackCss key on it) and scale the tray column for a big page, before anything is measured. */
+  /**
+   * Mark the root stacked or not (the rules of stackCss key on it) before anything is measured. The tray column is no longer scaled here
+   * (hudZoomAt stays, tested, unused): a big page is zoomed whole by app.css, and the column's width follows --lt-zoom in tableStyle.
+   */
   function applyLayout(): void {
     const on = stacked();
     if (root.hasAttribute("data-lt-stack") !== on) {
       if (on) root.setAttribute("data-lt-stack", "");
       else root.removeAttribute("data-lt-stack");
-    }
-    const zoom = on ? 1 : hudZoomAt(window.innerWidth, window.innerHeight);
-    if (zoom !== hudZoom) {
-      hudZoom = zoom;
-      const col = root.querySelector<HTMLElement>(".lt-tray-col");
-      if (col) col.style.zoom = zoom === 1 ? "" : String(zoom);
     }
   }
 
@@ -252,22 +287,25 @@ export function createStageFit(o: StageFitOptions): StageFit {
     if (!o.managed) return;
     const room = space();
     if (!room) return;
-    const fit = fitBoard(room, boardOf(), o.zoom());
+    const dens = density();
+    const fit = fitBoard(room, boardOf(), o.zoom(), dens);
     if (fit.cssW <= 0 || fit.cssH <= 0) return;
     const vc = getComputedStyle(viewport);
     const borderX = num(vc.borderLeftWidth) + num(vc.borderRightWidth);
     const borderY = num(vc.borderTopWidth) + num(vc.borderBottomWidth);
-    // On a narrow page the stage is as tall as the board and the bands (the tray's dice need a little room too); with a screen up
-    // it fills the window so the screen has the whole page.
+    // On a narrow page the stage is as tall as the board and its bands by itself (no height is written, so the band under the board comes and goes
+    // with the DM's box in the same frame, never a frame late); the tray's dice need a little room too, but only while the tray is over the board;
+    // with a screen up it fills the window so the screen has the whole page.
     let stageH = "";
+    let stageMin = "";
     if (stacked()) {
       const wc = getComputedStyle(stageWrap);
       const padY = num(wc.paddingTop) + num(wc.paddingBottom);
-      const own = Math.max(fit.cssH + borderY, DICE_ROOM) + padY;
+      if (diceShowing()) stageMin = `${Math.round(DICE_ROOM + padY)}px`;
       const screens = arena.hasAttribute("data-screens") || arena.hasAttribute("data-menu-open");
-      stageH = `${Math.round(screens ? Math.max(own, room.fullH + borderY + room.padY) : own)}px`;
+      if (screens) stageH = `${Math.round(Math.max(Math.max(fit.cssH + borderY, diceShowing() ? DICE_ROOM : 0) + padY, room.fullH + borderY + room.padY))}px`;
     }
-    const key = [fit.scale, fit.cssW, fit.cssH, stageH].join("|");
+    const key = [fit.scale, fit.cssW, fit.cssH, stageH, stageMin].join("|");
     if (key !== applied) {
       applied = key;
       board.style.width = `${fit.cssW}px`;
@@ -275,6 +313,10 @@ export function createStageFit(o: StageFitOptions): StageFit {
       viewport.style.width = `${fit.cssW + borderX}px`;
       viewport.style.height = `${fit.cssH + borderY}px`;
       stageWrap.style.height = stageH;
+      if (stageMin) stageWrap.style.setProperty("min-height", stageMin, "important");
+      else stageWrap.style.removeProperty("min-height");
+      // The board's width with its borders, for the overlay's top and bottom bands (the DM box, the turn strip) to line up with its edges.
+      stageWrap.style.setProperty("--lto-board-w", `${fit.cssW + borderX}px`);
     }
     if (fit.scale !== o.scale()) {
       o.setScale(fit.scale);
@@ -313,6 +355,11 @@ export function createStageFit(o: StageFitOptions): StageFit {
     return o.trayHost.querySelector<HTMLElement>("[data-ltd-root]")?.dataset.state ?? "empty";
   }
 
+  /** Whether the tray is over the board and showing (the stage keeps room for it then). */
+  function diceShowing(): boolean {
+    return over && !o.trayHost.classList.contains("lt-dice-quiet");
+  }
+
   function diceVisibility(): void {
     if (!over) return;
     const state = diceState();
@@ -322,10 +369,14 @@ export function createStageFit(o: StageFitOptions): StageFit {
       o.trayHost.classList.remove("lt-dice-quiet");
     } else if (state === "settled") {
       o.trayHost.classList.remove("lt-dice-quiet");
-      linger = window.setTimeout(() => o.trayHost.classList.add("lt-dice-quiet"), DICE_LINGER_MS);
+      linger = window.setTimeout(() => {
+        o.trayHost.classList.add("lt-dice-quiet");
+        schedule();
+      }, DICE_LINGER_MS);
     } else {
       o.trayHost.classList.add("lt-dice-quiet");
     }
+    schedule();
   }
 
   function placeDice(): void {
@@ -393,6 +444,10 @@ export function createStageFit(o: StageFitOptions): StageFit {
     const dice = new MutationObserver(() => diceVisibility());
     dice.observe(o.trayHost, { attributes: true, attributeFilter: ["data-state"], subtree: true });
     observers.push(dice);
+    // The DM's box coming and going (its hidden attribute) brings back or takes away the dock band under the board on a stacked page.
+    const box = new MutationObserver(() => schedule());
+    box.observe(stageWrap, { attributes: true, attributeFilter: ["hidden"], subtree: true });
+    observers.push(box);
   }
   const onResize = (): void => schedule();
   window.addEventListener("resize", onResize);
@@ -407,7 +462,7 @@ export function createStageFit(o: StageFitOptions): StageFit {
     refresh,
     auto: () => {
       const room = space();
-      return room ? autoScale(room, boardOf()) : o.scale();
+      return room ? autoScale(room, boardOf(), density()) : o.scale();
     },
     dispose(): void {
       if (disposed) return;

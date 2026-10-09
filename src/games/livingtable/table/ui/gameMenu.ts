@@ -48,7 +48,8 @@ import type { HudJournal, HudLogLine, HudSave, HudSettings } from "./hudTypes";
 import { attachItemCard, attachTip, itemCardIsUp, type ItemCardContent, type TipContent } from "./tip";
 import { armorClassTip, buildSheetContent, damageTip, itemCount, itemTip, sheetItemKey, speedTip, toHitTip, type SheetContent, type SheetExtras } from "./sheet";
 import { createTextKit, journalView, logView, menuIcon, savesView, settingsView, type ViewKit } from "./menuViews";
-import { el, FRAMES, frameUrl } from "./domKit";
+import { el, FRAMES, frameUrl, deviceRatio } from "./domKit";
+import { fitScale, textWidth } from "./pixelFont";
 import type { FrameKey } from "./overlayTheme";
 import { PX } from "./overlayTheme";
 import { injectStyle } from "./overlayStyle";
@@ -70,6 +71,22 @@ export const MENU_TABS: readonly { id: MenuTab; label: string; key?: string; liv
 
 export function isMenuTab(v: unknown): v is MenuTab {
   return MENU_TABS.some((t) => t.id === v);
+}
+
+/** The room, in CSS px, a tab's label has beside its 20 px icon: the tab less the icon, the gap, the padding and the border. */
+export function tabLabelRoom(tabPx: number): number {
+  return Math.max(0, tabPx - 20 - 8 - 4 - 2);
+}
+
+/**
+ * The ONE pixel scale for the whole tab row: the smallest scale any label needs to fit its tab (so Log and Saves never draw bigger than
+ * Character and Inventory). 2 where the longest label fits at 2, else 1.
+ */
+export function menuTabScale(tabPx: number, dpr = 1, labels: readonly string[] = MENU_TABS.map((t) => t.label)): number {
+  const room = tabLabelRoom(tabPx);
+  let scale = 2;
+  for (const l of labels) scale = Math.min(scale, fitScale(textWidth(l, "bold"), room, 1, 2, dpr));
+  return scale;
 }
 
 /** Whether a tab can be used: the live ones need a game in play. */
@@ -293,6 +310,7 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
   let current: MenuTab = firstUsableTab(opts.tab, data.live);
   let lastSig = "";
   let lastWidth = 0;
+  let lastTabWidth = 0;
   let offs: Array<() => void> = [];
   let sheetContent: SheetContent | null = null;
 
@@ -352,7 +370,15 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
 
   // ---- the tab row
 
+  /** The width of one tab, from the row as laid out (or, before it is, from the menu's width). */
+  function tabWidth(): number {
+    const row = tabs.clientWidth || Math.min(900, Math.max(0, (root.clientWidth || 320) - 24));
+    return Math.max(44, (row - 5 * 6) / 6);
+  }
+
   function renderTabs(): void {
+    const labelScale = isPixel() ? menuTabScale(tabWidth(), deviceRatio()) : 2;
+    lastTabWidth = tabs.clientWidth;
     const at = document.activeElement;
     const hadFocus = at instanceof HTMLElement && tabs.contains(at);
     tabs.replaceChildren();
@@ -372,7 +398,7 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
       btn.append(menuIcon(t.id));
       const label = el("span", "lto-gm-tab-label");
       if (isPixel()) {
-        label.append(kit.px(t.label, { scale: 2, weight: "bold", color: on ? PX.gold : PX.ink, outline: PX.dark }), el("span", "lto-sr", t.label));
+        label.append(kit.px(t.label, { scale: labelScale, weight: "bold", color: on ? PX.gold : PX.ink, outline: PX.dark }), el("span", "lto-sr", t.label));
       } else {
         label.textContent = t.label;
       }
@@ -904,6 +930,8 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
           frame = requestAnimationFrame(() => {
             frame = 0;
             if (closed) return;
+            // The tab labels are drawn for one tab width: a new width draws them again.
+            if (tabs.clientWidth > 0 && tabs.clientWidth !== lastTabWidth && isPixel()) renderTabs();
             const w = body.clientWidth;
             if (w > 0 && w !== lastWidth) {
               lastWidth = w;

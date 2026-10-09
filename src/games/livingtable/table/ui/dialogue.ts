@@ -39,7 +39,8 @@ export function installDialogue(oc: OverlayCtx): void {
 
   /** The width the box's text has, in CSS px, measured from the box itself (shown unseen for a moment when it is hidden). */
   function dialogueRoom(): number {
-    const key = `${oc.root.clientWidth}|${oc.style}|${oc.tier}|${deviceRatio()}`;
+    // The box is as wide as the board when the stage publishes --lto-board-w, so that is part of what the width depends on.
+    const key = `${oc.root.clientWidth}|${getComputedStyle(oc.host).getPropertyValue("--lto-board-w")}|${oc.style}|${oc.tier}|${deviceRatio()}`;
     if (key === roomKey && roomPx > 0) return roomPx;
     const wasHidden = oc.dlg.hidden;
     if (wasHidden) {
@@ -60,7 +61,7 @@ export function installDialogue(oc: OverlayCtx): void {
 
   /** An entry's text as pages of lines that fit the box in the current text style and board width (see dialoguePages). */
   function dialogueLayout(text: string): string[][] {
-    const per = dialogueLines(oc.tier);
+    const per = dialogueLines(oc.tier, oc.root.clientHeight || Number.POSITIVE_INFINITY);
     const room = dialogueRoom();
     if (oc.isPixel()) {
       const ratio = deviceRatio();
@@ -113,7 +114,7 @@ export function installDialogue(oc: OverlayCtx): void {
     const chrome = probe.offsetHeight;
     probe.remove();
     if (chrome <= 0) return;
-    const px = dialogueBoxPx({ lines: dialogueLines(oc.tier), row: dialogueRowPx(), chrome }) + DOCK_BOTTOM_PX + DOCK_GAP_PX;
+    const px = dialogueBoxPx({ lines: dialogueLines(oc.tier, oc.root.clientHeight), row: dialogueRowPx(), chrome }) + DOCK_BOTTOM_PX + DOCK_GAP_PX;
     oc.host.style.setProperty("--lto-dock", `${px}px`);
   }
 

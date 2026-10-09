@@ -1,14 +1,13 @@
 /**
  * createHud: the dock beside the board (status, hit points, action buttons, and the drawer tabs the asset bench uses).
  */
-import { textWidth } from "./pixelFont";
 import type { TextStyle } from "./overlayTypes";
 import type { Hud, HudState, DrawerTab, PackSection } from "./hudTypes";
 import { injectStyle } from "./overlayStyle";
 import { HUD_STYLE_ID, HUD_CSS } from "./hudStyle";
 import { el, FRAMES, frameUrl } from "./domKit";
 import type { FrameKey } from "./overlayTheme";
-import { condensedHud, usableDrawerTab, journalObjectives, journalRecent, toggleDrawerTab, newPackItems } from "./hudHelpers";
+import { type HudLayout, hudLayout, cutToWidth, usableDrawerTab, journalObjectives, journalRecent, toggleDrawerTab, newPackItems } from "./hudHelpers";
 import type { HudCtx } from "./hudCtx";
 import { installHudPanel } from "./hudPanel";
 import { installDrawerViews } from "./drawerViews";
@@ -99,23 +98,33 @@ export function createHud(
   const packSig = (s: HudState): string => `${isPixel()}|${root.clientWidth}|${JSON.stringify(s.pack?.sections ?? null)}`;
   /** What a tip stays inside: the game window the HUD sits in, or the HUD itself. */
   const tipBoundary = (): HTMLElement => host.closest<HTMLElement>(".lt-game") ?? root;
-  /**
-   * A name that has to fit on one line of the pixel bar: cut with ".." when it would run into the meter
-   * (a made character's name can be 60 characters long). The screen reader text keeps the whole name.
-   */
-  const fitName = (words: string): string => {
-    const room = Math.max(60, (root.clientWidth || 300) - 44 - 128);
-    if (textWidth(words) * 2 <= room) return words;
-    let cut = words.length;
-    while (cut > 1 && textWidth(`${words.slice(0, cut).trimEnd()}..`) * 2 > room) cut--;
-    return `${words.slice(0, cut).trimEnd()}..`;
+  /** How the HUD lays out now (see HudLayout): a phone, an upright tablet or the wide column. */
+  const layout = (): HudLayout => hudLayout(root.clientWidth, (host.parentElement ?? host).clientWidth, !!hc.last?.condense, typeof window !== "undefined" && window.innerHeight > 0 && window.innerHeight <= 500);
+  /** The small-screen look: asked for by the state, narrower than CONDENSED_MAX_PX, and the dock fills its whole row (it sits under the board). */
+  const condensed = (): boolean => layout() === "condensed";
+  /** The column the status panel sits in: the whole HUD, or half of it in the two column layout (8 px between). */
+  const colWidth = (): number => {
+    const w = root.clientWidth || 300;
+    return layout() === "stacked" ? Math.floor((w - 8) / 2) : w;
   };
+  /** The room inside the status panel's frame (5 px a side thin, 10 thick) and padding (8 a side condensed, 10 otherwise). */
+  const panelInner = (): number => {
+    const pad = condensed() ? 16 : 20;
+    // As laid out now (its width does not depend on what is inside), else worked out from the column and the frame.
+    if (panel.clientWidth > 0) return panel.clientWidth - pad;
+    return condensed() ? colWidth() - 10 - pad : colWidth() - 20 - pad;
+  };
+  const coarse = (): boolean => typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  /**
+   * A name that has to fit on one line of the pixel bar: cut with ".." only when it is wider than the whole panel (a made character's name
+   * can be 60 characters long). A name that merely crowds its meter and numbers is not cut: the bar row wraps instead (hudPanel.ts).
+   * The screen reader text keeps the whole name.
+   */
+  const fitName = (words: string): string => cutToWidth(words, Math.max(30, Math.floor(panelInner() / 2)));
   /** The panel's text: bitmap in the pixel look (font pixels are 2 CSS px), plain in storybook; a name is cut with ".." to stay on its line. */
-  const tk = createTextKit({ style: () => style, width: () => (root.clientWidth || 300) - 44, name: fitName });
+  const tk = createTextKit({ style: () => style, width: () => colWidth() - 44, name: fitName });
   const text = tk.text;
   const kit: ViewKit = { style: () => style, text: tk.text, px: tk.px, onAction, width: () => root.clientWidth || 300 };
-  /** The small-screen look: asked for by the state, narrower than CONDENSED_MAX_PX, and the dock fills its whole row (it sits under the board). */
-  const condensed = (): boolean => !!hc.last?.condense && condensedHud(root.clientWidth, (host.parentElement ?? host).clientWidth);
 
   const has = (s: HudState | null): Record<DrawerTab, boolean> => ({ pack: !!s?.pack, journal: !!s?.journal, log: !!s?.log, saves: !!s?.saves, settings: !!s?.settings });
   /** The tab that really shows now. */
@@ -138,6 +147,11 @@ export function createHud(
   hc.text = text;
   hc.kit = kit;
   hc.condensed = condensed;
+  hc.layout = layout;
+  hc.colWidth = colWidth;
+  hc.panelInner = panelInner;
+  hc.coarse = coarse;
+  hc.barName = (words) => text(words, "name");
   hc.has = has;
   hc.openTab = openTab;
 
@@ -203,7 +217,10 @@ export function createHud(
           const w = root.clientWidth;
           if (w === seenWidth) return;
           seenWidth = w;
-          if (w > 0 && hc.last && (isPixel() || hc.last.condense) && !hc.destroyed) redraw();
+          // Drawn a frame later: the redraw changes the HUD's own height (its layout), and doing that from inside the observer raises the loop error.
+          requestAnimationFrame(() => {
+            if (w > 0 && hc.last && (isPixel() || hc.last.condense) && !hc.destroyed) redraw();
+          });
         })
       : null;
   ro?.observe(root);

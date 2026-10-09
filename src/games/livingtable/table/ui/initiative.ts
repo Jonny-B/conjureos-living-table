@@ -6,10 +6,32 @@ import { el, FRAMES, spriteCanvas, CARET_DOWN } from "./domKit";
 import { PX, TOP_PAD_PX, TOP_GAP_PX } from "./overlayTheme";
 import type { OverlayCtx } from "./overlayCtx";
 
+/**
+ * A chip's label cut to `max` characters: a trailing number is kept ("Giant Rat 2" at 6 is "Gi. 2", never "Giant."), since the number is
+ * what tells two of a kind apart. Whole when it fits.
+ */
+export function chipLabel(label: string, max: number): string {
+  if (label.length <= max) return label;
+  const num = /\s+\d+$/.exec(label);
+  if (num && num.index >= 2) {
+    const tail = num[0];
+    const head = label.slice(0, num.index).trimEnd();
+    const room = max - tail.length - 1;
+    if (room >= 2) return `${head.slice(0, room).trimEnd()}.${tail}`;
+  }
+  return `${label.slice(0, max - 1).trimEnd()}.`;
+}
+
+/** The longest chip label at a size tier: a phone's board is about 270 px wide, so its chips are short (a fight of a hero and three foes is one or two rows). */
+export function chipMax(tier: "s" | "m" | "l", pixel: boolean): number {
+  if (tier === "s") return pixel ? 6 : 8;
+  return pixel ? 10 : 14;
+}
+
 export function installInitiative(oc: OverlayCtx): void {
   // ---- initiative strip
 
-  const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}.` : s);
+  const clip = chipLabel;
 
   /**
    * Publish --lto-top-band (px) on the host: the room the turn strip and the slot for a banner take at the top, so the board keeps clear
@@ -56,7 +78,7 @@ export function installInitiative(oc: OverlayCtx): void {
         // A side colours the frame (blue hero, red enemy) and the active chip is marked by its ring and caret instead of a gold frame.
         oc.frame(chip, e.side === "hero" ? "blue" : e.side === "enemy" ? "red" : active ? "gold" : "win", true);
         chip.append(
-          oc.px(clip(e.label, 10), { scale: 2, color: active ? PX.gold : PX.ink, shadow: PX.shade }),
+          oc.px(clip(e.label, chipMax(oc.tier, true)), { scale: 2, color: active ? PX.gold : PX.ink, shadow: PX.shade }),
           oc.px(String(e.total), { scale: 2, weight: "bold", color: active ? PX.gold : PX.muted, shadow: PX.shade }),
         );
         if (active) {
@@ -66,14 +88,12 @@ export function installInitiative(oc: OverlayCtx): void {
         }
       } else {
         chip.classList.add("lto-plate");
-        chip.append(el("span", undefined, clip(e.label, 14)), el("span", "lto-badge", String(e.total)));
+        chip.append(el("span", undefined, clip(e.label, chipMax(oc.tier, false))), el("span", "lto-badge", String(e.total)));
         for (const child of Array.from(chip.children)) if (!child.classList.contains("lto-sr")) child.setAttribute("aria-hidden", "true");
       }
       oc.initEl.append(chip);
     }
-    const active = oc.initEl.querySelector<HTMLElement>('[data-active="true"]');
-    if (active) oc.initEl.scrollLeft = active.offsetLeft - (oc.initEl.clientWidth - active.offsetWidth) / 2;
-    else oc.initEl.scrollLeft = 0;
+    // The strip wraps (never scrolls sideways), so the Round tab and every chip, the hero's own included, are always in view.
     updateBands();
     oc.layoutLoot();
   }

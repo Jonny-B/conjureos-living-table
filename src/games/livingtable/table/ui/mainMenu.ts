@@ -117,6 +117,12 @@ const CSS = `
 .ltm[data-style="storybook"] .ltm-credits a{color:#ffd86b}
 .ltm-head{margin:0 0 4px;text-align:center;font-weight:800;font-size:clamp(18px,5.4vw,24px);color:#ffc72a;overflow-wrap:anywhere}
 .ltm[data-style="pixel"] .ltm-head{text-transform:uppercase;letter-spacing:.05em}
+.ltm-foot{position:sticky;bottom:-16px;z-index:2;margin:0 -12px -16px;padding:8px 12px 16px}
+.ltm[data-style="pixel"] .ltm-foot{background:#05061a}
+.ltm[data-style="storybook"] .ltm-foot{background:#21160e}
+.ltm{--cover:#05061a;--shade:rgb(150 166 240/.45)}
+.ltm[data-style="storybook"]{--cover:#21160e;--shade:rgb(255 214 120/.38)}
+.ltm[data-style]{background-image:linear-gradient(var(--cover) 30%,transparent),linear-gradient(transparent,var(--cover) 70%),radial-gradient(farthest-side at 50% 0,var(--shade),transparent),radial-gradient(farthest-side at 50% 100%,var(--shade),transparent);background-position:top,bottom,top,bottom;background-size:100% 26px,100% 26px,100% 10px,100% 10px;background-repeat:no-repeat;background-attachment:local,local,scroll,scroll}
 @media (prefers-reduced-motion:reduce){.ltm{animation:none}}
 `;
 
@@ -203,12 +209,15 @@ export function openMainMenu(host: HTMLElement, opts: MainMenuOptions): MainMenu
       body.append(p);
     }
     card.append(body);
+    // Back is on a footer that sticks to the bottom of the page, so a long licence text never pushes it under the fold.
+    const foot = node("div", "ltm-foot");
     const back = node("button", "ltm-btn is-pri");
     back.type = "button";
     back.dataset.ltmAct = "back";
     back.append(node("span", "ltm-label", "Back"));
     back.addEventListener("click", () => showMain());
-    card.append(back);
+    foot.append(back);
+    card.append(foot);
   }
 
   function focusFirst(preferred?: string): void {

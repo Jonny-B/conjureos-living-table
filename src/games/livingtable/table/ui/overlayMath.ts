@@ -2,6 +2,7 @@
  * Pure layout maths for floats, plates and the dialogue hold: float stacking, size tiers, verdict words.
  */
 import type { OverlayPoint, PlateReadout } from "./overlayTypes";
+import { wrapText, wrapWidth } from "./pixelFont";
 import { FLOAT_STACK_MS, FLOAT_GAP_PX, FLOAT_BASE_PX, STRIP_MAX_MS, STRIP_BASE_MS, STRIP_PER_CHAR_MS, STRIP_REDUCED_MAX_MS, STRIP_REDUCED_FACTOR } from "./overlayTheme";
 
 // ---- pure helpers (unit tested) --------------------------------------------
@@ -89,4 +90,14 @@ export function dialogueBoxPx(o: { lines: number; row: number; chrome: number })
 export function storyPerPage(availH: number, row: number, chrome: number): number {
   const fit = Math.floor((availH - chrome) / Math.max(1, row));
   return Math.max(3, Math.min(8, Number.isFinite(fit) ? fit : 3));
+}
+
+/**
+ * The scale (1 or 2) a small line of pixel text is drawn at: 2 when it fits `availCssPx` in at most `maxLines` lines at that size (it wraps
+ * to a second line rather than shrink), else 1. A plate's caption and sources, and the dice tray's prompt, are 8 px high at 1; 2 is 16.
+ */
+export function textScaleFor(text: string, availCssPx: number, ratio = 1, maxLines = 2): 1 | 2 {
+  if (!text) return 2;
+  const room = wrapWidth(Math.max(1, availCssPx), 2, ratio);
+  return wrapText(text, room).length <= Math.max(1, maxLines) ? 2 : 1;
 }

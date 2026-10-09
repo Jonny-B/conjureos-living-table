@@ -8,11 +8,14 @@ export const HUD_CSS = `
 .lto-hud-panel{display:flex;flex-direction:column;gap:6px;padding:8px 10px}
 .lto-hud-lines{display:flex;flex-direction:column;gap:3px}
 .lto-hud-bars{display:flex;flex-direction:column;gap:5px;margin-top:2px}
-.lto-hud-bar{display:grid;grid-template-columns:minmax(0,auto) minmax(40px,1fr) auto;align-items:center;gap:8px}
-.lto-hud-meter{position:relative;height:10px;overflow:hidden}
+.lto-hud-bar{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;min-width:0}
+.lto-hud-bar>.lto-hud-name{flex:0 1 auto;min-width:0}
+.lto-hud-bar>.lto-hud-num{flex:none;margin-left:auto}
+.lto-hud-bar[data-wrap="true"]>.lto-hud-name{flex:0 0 100%}
+.lto-hud-meter{position:relative;flex:1 1 24px;min-width:24px;height:10px;overflow:hidden}
 .lto-hud-meter>i{position:absolute;left:0;top:0;bottom:0;background:var(--hp)}
 .lto-hud-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
-.lto-hud-btn{appearance:none;font:inherit;color:inherit;margin:0;min-width:0;overflow:hidden;display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:6px 10px;cursor:pointer;text-align:left;touch-action:manipulation}
+.lto-hud-btn{appearance:none;font:inherit;color:inherit;margin:0;min-width:0;overflow:hidden;display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:44px;padding:6px 8px;cursor:pointer;text-align:left;touch-action:manipulation}
 .lto-hud-btn:disabled{cursor:default;opacity:.42}
 .lto-hud-btn:focus-visible{outline:2px solid var(--sb-focus);outline-offset:2px}
 .lto-hud-key{opacity:.75}
@@ -31,7 +34,10 @@ export const HUD_CSS = `
 @keyframes lto-hud-new{0%,35%{background:rgb(255 205 70/.55);box-shadow:inset 3px 0 0 #ffc72a}100%{background:rgb(255 205 70/0);box-shadow:inset 3px 0 0 rgb(255 199 42/0)}}
 @media (prefers-reduced-motion: reduce){.lto-hud-row.is-new{background:rgb(255 205 70/.28);box-shadow:inset 3px 0 0 #ffc72a}}
 .lto-hud-btn[data-new="true"]::after{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:#ffc72a;box-shadow:0 0 0 2px rgb(0 0 0/.5)}
-.lto-px .lto-hud-pack-list{scrollbar-color:#4d5da6 #05061a}
+.lto-px .lto-hud-pack-list{scrollbar-color:#4d5da6 #05061a;--cover:#141a3c;--shade:rgb(130 148 230/.5)}
+.lto-sb .lto-hud-pack-list{--cover:var(--sb-paper2);--shade:rgb(var(--sb-shade)/.4)}
+/* scroll shadows (Lea Verou's): a shade shows at an edge while more is hidden past it, and goes when the list is scrolled to that end */
+.lto-hud-pack-list{background:linear-gradient(var(--cover) 30%,transparent) top/100% 24px no-repeat local,linear-gradient(transparent,var(--cover) 70%) bottom/100% 24px no-repeat local,radial-gradient(farthest-side at 50% 0,var(--shade),transparent) top/100% 9px no-repeat scroll,radial-gradient(farthest-side at 50% 100%,var(--shade),transparent) bottom/100% 9px no-repeat scroll}
 .lto-px .lto-hud-seclabel canvas,.lto-px .lto-hud-item canvas{display:block}
 .lto-px .lto-hud-btn[data-new="true"]::after{border-radius:0}
 .lto-sb .lto-hud-pack-list{scrollbar-color:var(--sb-rule) transparent}
@@ -72,12 +78,34 @@ export const HUD_CSS = `
 .lto-hud-drawer{display:flex;flex-direction:column;gap:6px;padding:8px 10px;min-width:0}
 .lto-hud-notices{display:flex;flex-direction:column;gap:4px;align-items:flex-start;min-width:0}
 .lto-hud-notice{max-width:100%;min-width:0;padding:2px 10px;overflow-wrap:anywhere}
+
+/* ---- the phone's condensed look (hudPanel.ts sets data-layout on the root) ---- */
+.lto-root.lto-hud[data-layout="condensed"]{gap:6px}
+.lto-hud-panel[data-condensed="true"]{padding:3px 8px;gap:2px}
+.lto-hud-panel[data-condensed="true"] .lto-hud-bars{gap:2px;margin-top:0}
+.lto-hud-panel[data-condensed="true"] .lto-hud-lines{gap:1px}
+.lto-root.lto-hud[data-layout="condensed"] .lto-hud-meter{height:8px}
+.lto-root.lto-hud[data-layout="condensed"] .lto-hud-tab{min-height:44px}
+.lto-root.lto-hud[data-layout="condensed"] .lto-hud-btn{padding:4px 6px}
+@media (pointer: coarse){.lto-hud-tab{min-height:44px}}
+/* a pickup notice floats over the top row for its 3 s: nothing moves and it is never under the fold */
+.lto-root.lto-hud[data-layout="condensed"]>.lto-hud-notices{position:absolute;top:0;left:0;right:0;z-index:2;pointer-events:none;align-items:center}
+
+/* ---- an upright tablet: two columns, the status on the left, the DM's moves and the buttons on the right ---- */
+.lto-root.lto-hud[data-layout="stacked"]{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:start}
+.lto-root.lto-hud[data-layout="stacked"]>.lto-hud-panel{grid-column:1;grid-row:1/span 2;align-self:stretch}
+.lto-root.lto-hud[data-layout="stacked"]>.lto-hud-next{grid-column:2;grid-row:1}
+.lto-root.lto-hud[data-layout="stacked"]>.lto-hud-actions{grid-column:2;grid-row:2}
+.lto-root.lto-hud[data-layout="stacked"]:has(>.lto-hud-next[hidden])>.lto-hud-actions{grid-row:1}
+.lto-root.lto-hud[data-layout="stacked"]>.lto-hud-drawer-btns,.lto-root.lto-hud[data-layout="stacked"]>.lto-hud-notices,.lto-root.lto-hud[data-layout="stacked"]>.lto-hud-drawer,.lto-root.lto-hud[data-layout="stacked"]>.lt-dice-host{grid-column:1/-1}
 .lto-px .lto-hud-notice{padding:0 3px}
 .lto-px .lto-hud-notice canvas{display:block}
 .lto-sb .lto-hud-notice{border-radius:999px;box-shadow:0 0 0 1px rgb(var(--sb-shade)/.4),0 3px 8px rgb(0 0 0/.3),inset 0 0 0 1px var(--sb-gold)}
 .lto-hud-logrow{min-width:0;padding:1px 4px;overflow-wrap:anywhere}
 .lto-hud-logrow[data-tone="dm"]{padding-left:8px;box-shadow:inset 2px 0 0 #ffc72a}
 .lto-hud-save{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:2px 4px}
+.lto-hud-save[data-narrow="true"]{grid-template-columns:minmax(0,1fr);gap:6px}
+.lto-hud-save[data-narrow="true"] .lto-hud-load{width:100%}
 .lto-hud-save-info{display:flex;flex-direction:column;gap:2px;min-width:0}
 .lto-hud-load{min-height:34px;padding:4px 12px;justify-content:center}
 .lto-hud-row[data-lt-card]{cursor:pointer}
@@ -115,16 +143,16 @@ export const HUD_CSS = `
 export const MENU_STYLE_ID = "lto-menu-style";
 export const MENU_CSS = `
 .lto-root.lto-gm{--gm-bg:#efe3c4;--gm-panel:#f8f0da;--gm-ink:#2a2016;--gm-muted:#6a5a3f;--gm-edge:#7c5c1e;--gm-accent:#8a5208;--gm-good:#2a6a33;--gm-bad:#a5281c;--gm-soft:#e8d8b0;--gm-focus:#1d63e0;--gm-t1:#2a6a33;--gm-t2:#2a5db0;--gm-t3:#a8700c;
-  pointer-events:auto;z-index:45;display:flex;flex-direction:column;overflow:hidden;background:var(--gm-bg);color:var(--gm-ink);text-align:left;container-type:inline-size;container-name:gm;font:14px/1.4 var(--lto-serif)}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lto-root.lto-gm.lto-sb{--gm-bg:#181526;--gm-panel:#25203a;--gm-ink:#f3e9cf;--gm-muted:#b6ab90;--gm-edge:#c79d45;--gm-accent:#ffd27a;--gm-good:#86e096;--gm-bad:#ff8c7a;--gm-soft:#312b4d;--gm-focus:#8db7ff;--gm-t1:#86e096;--gm-t2:#7fb0ff;--gm-t3:#ffd27a}}
-:root[data-theme="dark"] .lto-root.lto-gm.lto-sb{--gm-bg:#181526;--gm-panel:#25203a;--gm-ink:#f3e9cf;--gm-muted:#b6ab90;--gm-edge:#c79d45;--gm-accent:#ffd27a;--gm-good:#86e096;--gm-bad:#ff8c7a;--gm-soft:#312b4d;--gm-focus:#8db7ff;--gm-t1:#86e096;--gm-t2:#7fb0ff;--gm-t3:#ffd27a}
-.lto-root.lto-gm.lto-px{--gm-bg:#0a0e2a;--gm-panel:#141a3c;--gm-ink:#f4ecd0;--gm-muted:#98a5d8;--gm-edge:#4d5da6;--gm-accent:#ffc72a;--gm-good:#59dd82;--gm-bad:#ff5a4a;--gm-soft:#1f2858;--gm-focus:#8db7ff;--gm-t1:#59dd82;--gm-t2:#59a8ff;--gm-t3:#ffc72a;
+  --gm-shade:rgb(60 40 10/.38);pointer-events:auto;z-index:45;display:flex;flex-direction:column;overflow:hidden;background:var(--gm-bg);color:var(--gm-ink);text-align:left;container-type:inline-size;container-name:gm;font:14px/1.4 var(--lto-serif)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lto-root.lto-gm.lto-sb{--gm-bg:#181526;--gm-panel:#25203a;--gm-ink:#f3e9cf;--gm-muted:#b6ab90;--gm-edge:#c79d45;--gm-accent:#ffd27a;--gm-good:#86e096;--gm-bad:#ff8c7a;--gm-soft:#312b4d;--gm-focus:#8db7ff;--gm-t1:#86e096;--gm-t2:#7fb0ff;--gm-t3:#ffd27a;--gm-shade:rgb(190 175 230/.34)}}
+:root[data-theme="dark"] .lto-root.lto-gm.lto-sb{--gm-bg:#181526;--gm-panel:#25203a;--gm-ink:#f3e9cf;--gm-muted:#b6ab90;--gm-edge:#c79d45;--gm-accent:#ffd27a;--gm-good:#86e096;--gm-bad:#ff8c7a;--gm-soft:#312b4d;--gm-focus:#8db7ff;--gm-t1:#86e096;--gm-t2:#7fb0ff;--gm-t3:#ffd27a;--gm-shade:rgb(190 175 230/.34)}
+.lto-root.lto-gm.lto-px{--gm-bg:#0a0e2a;--gm-panel:#141a3c;--gm-ink:#f4ecd0;--gm-muted:#98a5d8;--gm-edge:#4d5da6;--gm-accent:#ffc72a;--gm-good:#59dd82;--gm-bad:#ff5a4a;--gm-soft:#1f2858;--gm-focus:#8db7ff;--gm-t1:#59dd82;--gm-t2:#59a8ff;--gm-t3:#ffc72a;--gm-shade:rgb(130 148 230/.5);
   font:13.5px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .lto-gm :focus-visible{outline:2px solid var(--gm-focus);outline-offset:2px}
 .lto-gm-head{flex:none;display:flex;align-items:center;gap:8px;padding:8px 6px;background:var(--gm-bg);border-bottom:1px solid var(--gm-edge)}
 @container gm (min-width:400px){.lto-gm-head{padding:8px 10px}.lto-gm-tabs{gap:6px!important}}
 .lto-px .lto-gm-head{border-bottom-width:2px}
-.lto-gm-tabs{flex:1;min-width:0;max-width:900px;margin:0 auto;display:grid;grid-template-columns:repeat(6,minmax(44px,1fr));gap:2px}
+.lto-gm-tabs{flex:1;min-width:0;max-width:1100px;margin:0 auto;display:grid;grid-template-columns:repeat(6,minmax(44px,1fr));gap:2px}
 .lto-gm-tab{appearance:none;font:inherit;color:inherit;margin:0;min-width:44px;min-height:44px;padding:4px 2px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;touch-action:manipulation;
   background:var(--gm-soft);border:1px solid var(--gm-edge);border-radius:9px;font-weight:700}
 .lto-gm-tab:disabled{opacity:.42;cursor:default}
@@ -133,7 +161,8 @@ export const MENU_CSS = `
 .lto-px .lto-gm-tab[aria-selected="true"]{box-shadow:0 0 0 2px #05061a,0 0 0 4px var(--gm-accent)}
 .lto-gm-icon{flex:none;width:20px;height:20px;fill:currentColor}
 .lto-gm-tab-label{display:none;min-width:0}
-.lto-gm-tab-label canvas{display:block}
+.lto-gm-tab-label canvas{display:block;max-width:none}
+.lto-gm-tab-label{flex:none}
 @container gm (min-width:600px){.lto-gm-tab-label{display:inline}}
 .lto-gm-foot{flex:none;padding:8px 10px;border-top:1px solid var(--gm-edge);background:var(--gm-bg)}
 .lto-px .lto-gm-foot{border-top-width:2px}
@@ -146,10 +175,11 @@ export const MENU_CSS = `
   .lto-gm-close{position:absolute;top:8px;right:10px;width:44px}
   .lto-gm-close-label{display:none}
 }
-.lto-gm-body{flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:10px 12px 16px}
+.lto-gm-body{scroll-padding-block:4px;flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:10px 12px 16px;
+  background:linear-gradient(var(--gm-bg) 30%,transparent) top/100% 28px no-repeat local,linear-gradient(transparent,var(--gm-bg) 70%) bottom/100% 28px no-repeat local,radial-gradient(farthest-side at 50% 0,var(--gm-shade),transparent) top/100% 12px no-repeat scroll,radial-gradient(farthest-side at 50% 100%,var(--gm-shade),transparent) bottom/100% 12px no-repeat scroll}
 .lto-gm-body>*{max-width:900px;margin-left:auto;margin-right:auto}
 .lto-gm-note{padding:14px 4px;color:var(--gm-muted)}
-.lto-gm .lto-hud-pack-list{max-height:none;overflow:visible}
+.lto-gm .lto-hud-pack-list{max-height:none;overflow:visible;background:none}
 .lto-gm .lto-hud-btn{min-height:44px}
 .lto-gm .lto-hud-load{min-height:44px;padding:4px 14px}
 .lto-gm .lto-hud-choice{min-height:44px;padding:4px 12px}

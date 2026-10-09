@@ -114,6 +114,56 @@ export function TableScreen() {
     return () => document.removeEventListener("fullscreenchange", sync);
   }, []);
 
+  // The scroll cue: data-more on the stage while it scrolls, "down" while there is more under the fold (a fade is drawn from it, app.css). Set from the scroll position and
+  // from the sizes of the stage and what is in it, so it follows a menu opening, the DM's box coming and a turn of the phone.
+  useEffect(() => {
+    const el = stage.current;
+    if (!el) return;
+    const sync = (): void => {
+      // Present while the stage scrolls at all: "down" while there is more under the fold (the fade shows), "end" once it is all in view.
+      const scrolls = el.scrollHeight > el.clientHeight + 4;
+      const want = !scrolls ? null : el.scrollHeight > el.scrollTop + el.clientHeight + 8 ? "down" : "end";
+      if (want === null) {
+        if (el.hasAttribute("data-more")) el.removeAttribute("data-more");
+      } else if (el.getAttribute("data-more") !== want) {
+        el.setAttribute("data-more", want);
+      }
+    };
+    let raf = 0;
+    const later = (): void => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        sync();
+      });
+    };
+    el.addEventListener("scroll", later, { passive: true });
+    const seen = new Set<Element>();
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(later) : null;
+    const watch = (): void => {
+      if (!ro) return;
+      ro.observe(el);
+      for (const c of Array.from(el.children)) {
+        if (!seen.has(c)) {
+          seen.add(c);
+          ro.observe(c);
+        }
+      }
+    };
+    watch();
+    // The window draws its own children after the first paint and swaps them; look again when the child list changes.
+    const mo = typeof MutationObserver === "function" ? new MutationObserver(() => { watch(); later(); }) : null;
+    mo?.observe(el, { childList: true });
+    later();
+    return () => {
+      el.removeEventListener("scroll", later);
+      ro?.disconnect();
+      mo?.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+      el.removeAttribute("data-more");
+    };
+  }, []);
+
   const toggleFullscreen = useCallback(() => {
     setFullNote("");
     const done = (): void => setFullNote("Full screen is not available here.");
@@ -142,8 +192,17 @@ export function TableScreen() {
             Menu
           </button>
           {canFullscreen() ? (
-            <button type="button" className="cui-button cui-button--secondary lt-app-full" onClick={toggleFullscreen} aria-pressed={full}>
-              {full ? "Exit full screen" : "Fullscreen"}
+            <button
+              type="button"
+              className="cui-button cui-button--secondary lt-app-full"
+              onClick={toggleFullscreen}
+              aria-pressed={full}
+              aria-label={full ? "Exit full screen" : "Fullscreen"}
+            >
+              <span className="lt-app-long">{full ? "Exit full screen" : "Fullscreen"}</span>
+              <span className="lt-app-short" aria-hidden="true">
+                {full ? "Exit" : "Full"}
+              </span>
             </button>
           ) : null}
         </div>
@@ -151,6 +210,7 @@ export function TableScreen() {
 
       <div className="lt-app-window">
         <div ref={stage} className="lt-app-stage" />
+        <div className="lt-app-fade" aria-hidden="true" />
         {phase.kind === "failed" ? (
           <div className="lt-app-note" role="alert">
             <p>{phase.message}</p>

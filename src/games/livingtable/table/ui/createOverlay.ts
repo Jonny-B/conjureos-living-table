@@ -8,6 +8,7 @@ import { el, FRAMES, frameUrl, deviceRatio } from "./domKit";
 import { buildDefs } from "./numerals";
 import type { FrameKey } from "./overlayTheme";
 import { sizeTier } from "./overlayMath";
+import { dialogueLines } from "./dialogueQueue";
 import type { OverlayCtx } from "./overlayCtx";
 import { installFeedback } from "./feedback";
 import { installPlates } from "./plates";
@@ -180,7 +181,10 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     oc.width = root.clientWidth;
     const next = sizeTier(oc.width);
     root.dataset.size = next;
-    const changed = next !== oc.tier;
+    // The dialogue box holds 3 or 4 rows by the overlay's height (dialogueLines), so a change in rows republishes the dock like a new tier.
+    const rows = dialogueLines(next, root.clientHeight || Number.POSITIVE_INFINITY);
+    const changed = next !== oc.tier || rows !== lastRows;
+    lastRows = rows;
     oc.tier = next;
     // The bands the board keeps clear of (the DM box below, the turn strip above) follow the size tier and are published at once.
     if (changed || !bandsPublished) {
@@ -191,6 +195,7 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (changed || isPixel()) scheduleRelayout();
   }
   let bandsPublished = false;
+  let lastRows = 0;
   let relayoutQueued = false;
   // Pixel text is drawn for one width and one device pixel ratio, so a change in either redraws it.
   const layoutKey = (): string => `${oc.width}@${deviceRatio()}`;
@@ -212,7 +217,22 @@ export function createOverlay(host: HTMLElement, initialStyle: TextStyle): Overl
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
     else run();
   }
-  const ro = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+  // The observer only schedules: measure() republishes the dock, which can resize the very box this watches, and doing that from inside the
+  // callback raises "ResizeObserver loop completed with undelivered notifications" as a window error.
+  let measureQueued = false;
+  const ro =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+          if (measureQueued || oc.destroyed) return;
+          measureQueued = true;
+          const run = () => {
+            measureQueued = false;
+            if (!oc.destroyed) measure();
+          };
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+          else run();
+        })
+      : null;
   ro?.observe(root);
 
   function applyStyleClass(): void {

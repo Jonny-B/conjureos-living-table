@@ -1,18 +1,13 @@
-# 0.10.0
+# 0.10.1
 
-The whole game now fits your screen, and playing it is simpler.
+The game now fits every screen: phones, tablets and every desktop.
 
-- It fits phones, tablets and every desktop, full screen included. The board fills the room you have.
-- A loading screen while the table is set, then a main menu: Continue, New game, Load, Settings, and the licence page.
-- One Menu inside the game: Character, Inventory, Journal, Log, Saves and Settings. Inventory shows an equipment doll, and pointing at a piece shows what it would change.
-- Knight, Rogue and Mage. Swipe through the heroes to see their gear and starting numbers before you choose.
-- A new character starts with a name, then a class or a blank sheet.
-- Click or tap to walk. Right click, or press and hold on a touch screen, for everything else: look closer, talk, attack, search, harvest, or type anything you like to the Dungeon Master.
-- Talk and Look closer walk up to the thing first. Rats can be harvested for their pelts.
-- Story the Dungeon Master tells on its own, like a place you arrive in, gets a screen of its own. The world waits until you have read it.
-- Text from the Dungeon Master never covers your hero.
-- Changed your mind while the Dungeon Master is thinking? Cancel is beside the dots until the answer starts to type.
-- Fallen creatures stay on the board where they fell.
-- The pop-up strip across the top is gone. Everything it said is now said in the story.
-- Your turn ends by itself when you have nothing left to do. You can turn that off in Settings.
-- Clearer words in the actions menu.
+- On a phone the Dungeon Master's space under the board only takes room while it is talking, so the board is bigger.
+- The side panel is much smaller on a phone, and the creature names and the turn strip no longer get cut off.
+- The turn strip wraps instead of running off the screen, on narrow phones too.
+- On a landscape phone the board fills the height and the controls sit in a slim bar.
+- On very large screens the whole page scales up, so text and buttons stay a comfortable size and clicks land where you point.
+- The hero choice always shows the arrows and dots, the adventure list shows every adventure, and the Back button on the credits stays in view.
+- The character maker has numbered steps and Back, Next and Begin under the content.
+- Menus, the story screen and the actions menu show a shadow or arrow when there is more to scroll to.
+- The actions menu opens clear of your hero, and its buttons are finger sized.

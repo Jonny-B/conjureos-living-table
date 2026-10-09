@@ -5,7 +5,7 @@ import { fitScale, textWidth, wrapWidth, type PixelColor } from "./pixelFont";
 import type { OverlayPoint, PlateReadout } from "./overlayTypes";
 import { el, FRAMES, deviceRatio, clamp, signed, spriteCanvas, CARET_DOWN } from "./domKit";
 import { PX, FLOAT_GAP_PX, PLATE_TAIL_PIXEL_PX, PLATE_TAIL_PX, PLATE_CLEAR_MIN_PX, PLATE_IN_MS, PLATE_HOLD_QUEUED_MS, PLATE_HOLD_MS, PLATE_OUT_MS } from "./overlayTheme";
-import { verdictWords } from "./overlayMath";
+import { verdictWords, textScaleFor } from "./overlayMath";
 import type { OverlayCtx } from "./overlayCtx";
 import type { FloatInk } from "./feedback";
 
@@ -61,7 +61,9 @@ export function installPlates(oc: OverlayCtx): void {
     if (oc.isPixel()) {
       const ratio = deviceRatio();
       oc.frame(node, r.critical ? "gold" : "win");
-      if (r.caption) node.append(oc.px(r.caption, { scale: 1, color: PX.muted, maxWidth: wrapWidth(avail - 40, 1, ratio) }));
+      // The caption and the sources are drawn at 2 (16 px high) when they fit in two lines of the plate, and at 1 only when they do not.
+      const capScale = r.caption ? textScaleFor(r.caption, avail - 40, ratio) : 1;
+      if (r.caption) node.append(oc.px(r.caption, { scale: capScale, color: PX.muted, maxWidth: wrapWidth(avail - 40, capScale, ratio) }));
       const math = el("div", "lto-math");
       if (squeeze > 0) math.classList.add("is-tight");
       if (squeeze > 1) math.classList.add("is-wrap");
@@ -84,7 +86,10 @@ export function installPlates(oc: OverlayCtx): void {
       node.append(math);
       if (srcs.length) {
         const wrap = el("div", "lto-srcs");
-        for (const s of srcs) wrap.append(oc.px(s, { scale: 1, color: PX.muted, maxWidth: Math.max(30, wrapWidth(avail - 40, 1, ratio)) }));
+        for (const s of srcs) {
+          const sc = textScaleFor(s, avail - 40, ratio);
+          wrap.append(oc.px(s, { scale: sc, color: PX.muted, maxWidth: Math.max(30, wrapWidth(avail - 40, sc, ratio)) }));
+        }
         node.append(wrap);
       }
       const vColor: PixelColor = vClass === "hit" ? PX.good : vClass === "crit" ? PX.gold : PX.bad;

@@ -84,7 +84,10 @@ export interface ContextMenuEntry {
   reason?: string;
   /** A line can be a text field instead of a button: "Say something to Tobin Hale" with a Send. */
   kind?: "text";
+  /** The words a screen reader gets for the field ("Do something with the barrel"). */
   placeholder?: string;
+  /** The short words the empty field shows ("Do something else", 18 characters at most); the field is narrow, so `placeholder` would be cut. Default: `placeholder`. */
+  hint?: string;
   onSubmit?: (text: string) => void;
   /** A small gold line for what picking it costs before it happens ("Walks 15 ft first"). */
   note?: string;
@@ -266,7 +269,7 @@ export interface Overlay {
    * finger lifting after a long press never picks the first entry. Only one menu is up at a time (a new one replaces it). Returns the
    * function that closes it. onPick runs after the menu has closed.
    */
-  contextMenu(at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, opts?: { title?: string }): () => void;
+  contextMenu(at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, opts?: { title?: string; avoid?: { x: number; y: number; w: number; h: number } }): () => void;
   /**
    * A small panel at the top centre of the board that lists what can be taken, each with a Take button and hover help on its name,
    * plus Take all and Close. See LootWindowOptions. One at a time: a new window replaces the old one without calling its onClose.

@@ -13,6 +13,7 @@ import { el, deviceRatio, ctxWidth, spriteCanvas, FRAMES, CARET_DOWN, clamp } fr
 import { PX, SERIF, STORY_IN_MS } from "./overlayTheme";
 import { storyPerPage } from "./overlayMath";
 import { tidy } from "./screenHelpers";
+import { trackMore } from "./menuHelpers";
 import { createDialogueQueue, dialoguePages, sameStory, DEFAULT_TEXT_SPEED, textSpeedOf } from "./dialogueQueue";
 import type { DialogueView } from "./dialogueQueue";
 import type { OverlayCtx } from "./overlayCtx";
@@ -189,6 +190,8 @@ export function installStory(oc: OverlayCtx): void {
   const panel = el("div", "lto-story-panel");
   panel.tabIndex = 0;
   layer.append(panel);
+  // The panel scrolls when its page is taller than the board (a phone): it says so with data-more, and a shade at the edge.
+  const panelMore = trackMore(panel);
 
   let textSpeed: TextSpeed = DEFAULT_TEXT_SPEED;
   let drawnSig = "";
@@ -306,6 +309,7 @@ export function installStory(oc: OverlayCtx): void {
     drawnHint = "";
     panel.append(foot);
     layer.setAttribute("aria-label", cur.title || "Story");
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(panelMore.update);
   }
 
   /** Show the first `shown` characters of the page: the rows before are whole, the row being typed is part way, those after are not yet. */

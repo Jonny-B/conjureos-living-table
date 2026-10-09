@@ -13,6 +13,7 @@ import { adventureHero, benchAdventures } from "../adventureCatalog";
 import { doorOrChestUsable, restRefusal } from "../fightRules";
 import { advUseFor, adventureOf, currentLocation } from "../adventureRun";
 import { activeCreature, foeName, heroActionReady, heroesTurn } from "../sight";
+import { shortTurnTitle } from "../ui/hudHelpers";
 import type { TableCtx } from "../tableCtx";
 
 export function installHudWiring(tc: TableCtx): void {
@@ -87,6 +88,9 @@ export function installHudWiring(tc: TableCtx): void {
     else if (!p.round) title = adv ? (p.progress?.ended ? `${adv.title}: finished` : sceneName) : foesLeft ? "Exploring" : downTitle(p);
     else if (mine) title = `Round ${p.round.roundNumber}: your turn`;
     else title = `Round ${p.round.roundNumber}: ${foeTurn?.seen ? `${creatureName(p, foeTurn).toLowerCase()}'s turn` : "something moves"}`;
+    // On a phone the title is one short line ("Rd 1: rat 2"); the full one stays for the room beside the board.
+    let shortTitle: string | undefined;
+    if (p.round && !heroDown(p)) shortTitle = shortTurnTitle(p.round.roundNumber, mine ? "you" : foeTurn?.seen ? creatureName(p, foeTurn).toLowerCase() : null);
     if (mine && c) {
       lines.push(`Move: ${c.economy.movementRemaining} ft left`, `Action: ${c.economy.action ? "ready" : "used"}`);
     } else if (!p.round && !heroDown(p)) {
@@ -134,7 +138,7 @@ export function installHudWiring(tc: TableCtx): void {
     const options: HudOption[] = free && !tc.busy && !down ? p.options.map((o, i) => ({ id: `opt:${i}`, label: o.label, key: String(i + 1) })) : [];
     // On a phone the dock is cut to its title, the move left and the hit points; the other lines are for the room beside the board.
     const short = mine && c ? [`Move ${c.economy.movementRemaining} ft, action ${c.economy.action ? "ready" : "used"}`] : [];
-    tc.hud.render({ title, lines, short, condense: true, bars, actions, options });
+    tc.hud.render({ title, shortTitle, lines, short, condense: true, bars, actions, options });
     // The game menu follows the hero live (hit points, potions, anything the DM hands over, the log, the saves).
     tc.syncGameMenu();
     // The dock steps aside while a screen is up (the main menu, the adventure list, the hero choice, an ending): the screens style the mark.

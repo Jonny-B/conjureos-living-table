@@ -6,7 +6,7 @@ import { cardNavIndex } from "./tip";
 import type { OverlayPoint, ContextMenuEntry } from "./overlayTypes";
 import { el, deviceRatio, svgEl } from "./domKit";
 import { PX } from "./overlayTheme";
-import { MENU_MARGIN, menuPlacement, menuWidth, menuEntryName, MENU_GRACE_MS, menuEntries, boardRoomAboveKeyboard } from "./menuHelpers";
+import { MENU_MARGIN, menuPlacement, menuWidth, menuEntryName, MENU_GRACE_MS, MENU_NARROW_PX, menuEntries, trackMore, boardRoomAboveKeyboard, type MenuRect } from "./menuHelpers";
 import { injectMenuStyle } from "./contextMenuStyle";
 import type { OverlayCtx } from "./overlayCtx";
 
@@ -15,6 +15,10 @@ import type { OverlayCtx } from "./overlayCtx";
     entries: ContextMenuEntry[];
     onPick: (id: string) => void;
     title?: string;
+    /** A rectangle of the board the menu keeps off if it can (the hero's square). */
+    avoid?: MenuRect;
+    /** Keeps data-more on the menu while it scrolls (a phone: the rows do not all fit). */
+    more?: { update: () => void; off: () => void };
     node: HTMLElement;
     rows: HTMLElement[];
     focus: number;
@@ -85,10 +89,11 @@ export function installContextMenu(oc: OverlayCtx): void {
     n.style.left = "0px";
     n.style.top = "0px";
     n.style.maxHeight = `${Math.max(0, board.height - MENU_MARGIN * 2)}px`;
-    const p = menuPlacement(m.at, { width: n.offsetWidth, height: n.offsetHeight }, board);
+    const p = menuPlacement(m.at, { width: n.offsetWidth, height: n.offsetHeight }, board, MENU_MARGIN, m.avoid);
     n.style.left = `${Math.round(p.left)}px`;
     n.style.top = `${Math.round(p.top)}px`;
     n.style.maxHeight = `${p.maxHeight}px`;
+    m.more?.update();
     n.dataset.flipX = String(p.flipX);
     n.dataset.flipY = String(p.flipY);
     n.style.visibility = "";
@@ -120,6 +125,8 @@ export function installContextMenu(oc: OverlayCtx): void {
     else n.classList.add("lto-plate");
     const W = menuWidth(oc.root.clientWidth || oc.width);
     n.style.width = `${W}px`;
+    // Under 300 px the Send button goes under the text line, so the line keeps the whole width.
+    n.dataset.narrow = String(W < MENU_NARROW_PX);
     const room = Math.max(40, W - (pixel ? 10 : 2) - 6 - 16 - 26);
     const ratio = deviceRatio();
     const kids: HTMLElement[] = [];
@@ -150,7 +157,8 @@ export function installContextMenu(oc: OverlayCtx): void {
         input.type = "text";
         input.className = "lto-cm-input";
         input.dataset.ltoCmInput = "";
-        input.placeholder = e.placeholder ?? e.label;
+        // The field is narrow: what it shows empty is the short hint, and the screen reader keeps the whole words.
+        input.placeholder = e.hint ?? e.placeholder ?? e.label;
         input.setAttribute("aria-label", e.placeholder ? `${e.label}: ${e.placeholder}` : e.label);
         input.autocomplete = "off";
         input.maxLength = 300;
@@ -220,6 +228,7 @@ export function installContextMenu(oc: OverlayCtx): void {
     if (!m) return;
     oc.menu = null;
     m.off();
+    m.more?.off();
     m.node.remove();
     if (refocus && m.prevFocus instanceof HTMLElement && m.prevFocus.isConnected) m.prevFocus.focus({ preventScroll: true });
   }
@@ -239,7 +248,7 @@ export function installContextMenu(oc: OverlayCtx): void {
     pick(e.id);
   }
 
-  function contextMenu(at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, mopts: { title?: string } = {}): () => void {
+  function contextMenu(at: OverlayPoint, entries: readonly ContextMenuEntry[], onPick: (id: string) => void, mopts: { title?: string; avoid?: MenuRect } = {}): () => void {
     if (oc.destroyed) return () => {};
     closeMenu(false);
     const list = menuEntries(entries);
@@ -248,7 +257,7 @@ export function installContextMenu(oc: OverlayCtx): void {
     node.dataset.ltoMenu = "";
     node.setAttribute("role", "menu");
     node.setAttribute("aria-label", mopts.title ?? "Actions");
-    const m: MenuState = { at: { x: at.x, y: at.y }, entries: list, onPick, title: mopts.title, node, rows: [], focus: 0, openedAt: performance.now(), prevFocus: document.activeElement, off: () => {} };
+    const m: MenuState = { at: { x: at.x, y: at.y }, entries: list, onPick, title: mopts.title, avoid: mopts.avoid, node, rows: [], focus: 0, openedAt: performance.now(), prevFocus: document.activeElement, off: () => {} };
     // The board and the page must not act on what is done in the menu.
     for (const type of ["pointerdown", "mousedown", "click", "dblclick", "contextmenu", "wheel"]) {
       node.addEventListener(type, (ev) => {
@@ -318,6 +327,7 @@ export function installContextMenu(oc: OverlayCtx): void {
       vv?.removeEventListener("scroll", onViewport);
     };
     oc.menu = m;
+    m.more = trackMore(node);
     menuLayer.append(node);
     renderMenu(m);
     return () => {

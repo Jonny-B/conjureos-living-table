@@ -205,7 +205,7 @@ export const specs = [
       await rightClickTile(g.page, 4, 6);
       const input = g.page.locator("input[data-lto-cm-input]");
       assert.equal(await input.count(), 1, "the menu ends with a text line");
-      assert.equal(await input.getAttribute("placeholder"), "Do something here");
+      assert.equal(await input.getAttribute("placeholder"), "Do something else");
       assert.equal(await g.page.locator("button[data-lto-cm-send]").count(), 1, "with a Send button");
       // Typing: Space is a space and does not pick a line; the menu stays open.
       await input.click();
@@ -245,7 +245,7 @@ export const specs = [
       await intoWorkshop(g.page, d);
       await rightClickTile(g.page, 14, 6);
       const input = g.page.locator("input[data-lto-cm-input]");
-      assert.equal(await input.getAttribute("placeholder"), "Say something to Tobin Hale");
+      assert.equal(await input.getAttribute("placeholder"), "Say something");
       await input.fill("Should I take the job at the Kettle?");
       await g.page.locator("button[data-lto-cm-send]").click();
       await g.platform.waitForCalls(1);

@@ -24,6 +24,10 @@ import {
   type HudTone,
 } from "./hudHelpers";
 
+/** A menu narrower than this (CSS px) puts the Load button under the save's words and shortens the export buttons' words. */
+export const SAVES_NARROW_PX = 340;
+const SHORT_LABELS: Readonly<Record<string, string>> = { "Export adventure (debug)": "Export (debug)", "Copy adventure JSON": "Copy JSON" };
+
 export type TextKind = "title" | "line" | "name" | "num" | "seclabel" | "item";
 
 /** What a shared view needs from the surface it is drawn on. */
@@ -227,12 +231,15 @@ export function savesView(kit: ViewKit, saves: readonly HudSave[], prevScroll: n
     row.append(kit.text("No saves yet. Rest to save, and every scene start is a checkpoint.", "line", 18));
     list.append(row);
   }
+  // Under SAVES_NARROW_PX the Load button goes under the save's words (they would crowd it) and the words take the whole row.
+  const narrow = kit.width() < SAVES_NARROW_PX;
   for (const sv of saves) {
     const row = el("div", "lto-hud-save");
     row.dataset.saveRow = sv.id;
+    if (narrow) row.dataset.narrow = "true";
     const info = el("div", "lto-hud-save-info");
-    info.append(kit.text(sv.label, "item", 100));
-    if (sv.detail) info.append(kit.text(sv.detail, "line", 100));
+    info.append(kit.text(sv.label, "item", narrow ? 4 : 100));
+    if (sv.detail) info.append(kit.text(sv.detail, "line", narrow ? 4 : 100));
     const btn = el("button", "lto-hud-btn lto-hud-load");
     btn.type = "button";
     btn.dataset.save = sv.id;
@@ -259,12 +266,14 @@ export function savesView(kit: ViewKit, saves: readonly HudSave[], prevScroll: n
     btn.type = "button";
     btn.dataset[key] = "";
     btn.setAttribute("aria-label", label);
+    // The visible words are the short ones on a phone (two lines at most); the screen reader keeps the whole name.
+    const shown = kit.width() < SAVES_NARROW_PX ? SHORT_LABELS[label] ?? label : label;
     if (pixel) {
       btn.classList.add("lto-fr", "fs1", "fr-win");
       const room = Math.max(40, Math.floor((kit.width() - 76) / 2));
-      btn.append(kit.px(label, { scale: 2, weight: "bold", color: PX.ink, outline: PX.dark, maxWidth: room }));
+      btn.append(kit.px(shown, { scale: 2, weight: "bold", color: PX.ink, outline: PX.dark, maxWidth: room, align: "center" }));
     } else {
-      btn.append(el("span", undefined, label));
+      btn.append(el("span", undefined, shown));
     }
     btn.onclick = () => kit.onAction(id);
     return btn;

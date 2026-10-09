@@ -9,6 +9,7 @@ import { numeral } from "./numerals";
 import { FACES, PX, BANNER_FRAME } from "./overlayTheme";
 import { titleLines } from "./screenHelpers";
 import type { OverlayCtx } from "./overlayCtx";
+import { injectScreenStyle } from "./screenStyle";
 
   export interface TextSpec {
     /** The storybook class (it carries the font) and, with it, the hook the tests read. */
@@ -36,6 +37,8 @@ import type { OverlayCtx } from "./overlayCtx";
   }
 
 export function installScreenKit(oc: OverlayCtx): void {
+  // The screens' own extra rules, after the overlay's sheet (createOverlay injects that first).
+  injectScreenStyle();
   // ---- the adventure screens: start, hero, ending, and the arrival cards
 
   /** The width a text block has, in CSS px, for pixel wrapping: its own box when it is laid out, else the board less a margin. */

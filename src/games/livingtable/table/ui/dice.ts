@@ -2280,6 +2280,14 @@ export function pickScale(cssWidth: number, dpr: number): number {
   return best;
 }
 
+/**
+ * The scale the tray's waiting prompt is drawn at: 2 (twice the size, legible on a phone) when the prompt's bitmap, doubled, fits the
+ * felt's width on one line and the text band's height; else 1.
+ */
+export function promptScale(bitmapW: number, bitmapH: number, maxW: number, bandH: number): 1 | 2 {
+  return bitmapW * 2 <= maxW && bitmapH * 2 <= bandH ? 2 : 1;
+}
+
 /** Cut a line of text down to fit, with "..." where it was cut. */
 function fitLine(text: string, maxW: number, weight: "regular" | "bold" = "regular"): string {
   if (textWidth(text, weight) <= maxW) return text;
@@ -2590,7 +2598,10 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
       if (caption.label) centred(textBitmap(fitLine(caption.label, maxW), false, TEXT_INK), L.bandTop + 2);
       if (caption.detail) centred(textBitmap(fitLine(caption.detail, maxW), true, tone), L.bandTop + 2 + CELL_H + LINE_GAP);
     } else if (waiting && prompt && (still || tapped || now % 1300 < 1000)) {
-      centred(textBitmap(fitLine(prompt, maxW), true, TEXT_GOLD), L.bandTop + (TEXT_BAND - CELL_H) / 2);
+      const whole = textBitmap(prompt, true, TEXT_GOLD);
+      if (promptScale(whole.w, whole.h, maxW, TEXT_BAND) === 2) {
+        paintBitmap(c, whole, 2, Math.round((L.w - whole.w * 2) / 2), Math.round(L.bandTop + (TEXT_BAND - whole.h * 2) / 2));
+      } else centred(textBitmap(fitLine(prompt, maxW), true, TEXT_GOLD), L.bandTop + (TEXT_BAND - CELL_H) / 2);
     }
     // The look we just left fades out over the new one: about 150 ms, and never under reduced motion.
     if (fade) {

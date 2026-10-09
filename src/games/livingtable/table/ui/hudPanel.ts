@@ -8,11 +8,28 @@ import { textWidth, wrapWidth } from "./pixelFont";
 import type { HudState, DrawerTab } from "./hudTypes";
 import { el, deviceRatio } from "./domKit";
 import { PX } from "./overlayTheme";
-import { hpColour, optionsLayout, wrapClamp, DRAWER_TABS, drawerColumns } from "./hudHelpers";
+import { hpColour, optionsLayout, wrapClamp, DRAWER_TABS, drawerColumns, barLabelWraps, noticesFloat } from "./hudHelpers";
 import type { HudCtx } from "./hudCtx";
 import { journalView, logView, savesView, settingsView } from "./menuViews";
 
 export function installHudPanel(hc: HudCtx): void {
+  /**
+   * The panel's title. The condensed one is the short title; the words a screen reader (and a test) read stay the whole title.
+   */
+  function titleNode(s: HudState, small: boolean): HTMLElement {
+    if (!small || !s.shortTitle || s.shortTitle === s.title) return hc.text(s.title, "title", small ? -18 : 0);
+    const node = hc.text(s.shortTitle, "title", -18);
+    if (hc.isPixel()) {
+      const words = node.querySelector(".lto-sr");
+      if (words) words.textContent = s.title;
+    } else {
+      const seen = el("span", undefined, s.shortTitle);
+      seen.setAttribute("aria-hidden", "true");
+      node.replaceChildren(seen, el("span", "lto-sr", s.title));
+    }
+    return node;
+  }
+
   function draw(): void {
     const s = hc.last;
     if (!s) return;
@@ -33,24 +50,31 @@ export function installHudPanel(hc: HudCtx): void {
       for (const off of hc.tipOff) off();
       hc.tipOff = [];
     }
+    // The layout comes first: it picks the frame, the padding and the room every text below is cut or wrapped to.
+    const layout = hc.layout();
+    const small = layout === "condensed";
+    hc.root.dataset.layout = layout;
+    hc.noticeBox.dataset.float = String(noticesFloat(layout));
     hc.panel.className = "lto-hud-panel";
-    if (hc.isPixel()) hc.panel.classList.add("lto-fr", "fr-win");
+    // The thin frame on a phone: the thick one (10 px a side) would be a sixth of the status box's height.
+    if (hc.isPixel()) hc.panel.classList.add("lto-fr", "fr-win", ...(small ? ["fs1"] : []));
     else hc.panel.classList.add("lto-plate");
     hc.panel.replaceChildren();
-    const small = hc.condensed();
     if (small) hc.panel.dataset.condensed = "true";
     else delete hc.panel.dataset.condensed;
-    hc.panel.append(hc.text(s.title, "title"));
+    // The condensed panel keeps its title on ONE line: the short one, and a width that the thin frame and padding leave (18 px more).
+    hc.panel.append(titleNode(s, small));
     // The small-screen look keeps the title, the lines marked short and the bars: no location, hint or armour class line.
     const shown = small ? (s.short ?? []) : s.lines;
     if (shown.length) {
       const lines = el("div", "lto-hud-lines");
       lines.dataset.hudLines = "";
-      for (const l of shown) lines.append(hc.text(l, "line"));
+      for (const l of shown) lines.append(hc.text(l, "line", small ? -18 : 0));
       hc.panel.append(lines);
     }
     if (s.bars.length) {
       const bars = el("div", "lto-hud-bars");
+      const inner = hc.panelInner();
       for (const b of s.bars) {
         const row = el("div", "lto-hud-bar");
         row.dataset.side = b.side;
@@ -60,7 +84,10 @@ export function installHudPanel(hc: HudCtx): void {
         fill.style.width = `${b.max > 0 ? Math.max(0, Math.min(100, (b.hp / b.max) * 100)) : 0}%`;
         meter.append(fill);
         meter.setAttribute("aria-hidden", "true");
-        row.append(hc.text(b.label, "name"), meter, hc.text(b.down ? "DOWN" : `${b.hp}/${b.max}`, "num"));
+        const nums = b.down ? "DOWN" : `${b.hp}/${b.max}`;
+        // A label that would squeeze its meter (a group's "Giant Rats 2 left") takes a row to itself, with the meter and numbers under it.
+        if (hc.isPixel() && barLabelWraps(Math.min(textWidth(b.label) * 2, inner), textWidth(nums, "bold") * 2, inner)) row.dataset.wrap = "true";
+        row.append(hc.barName(b.label), meter, hc.text(nums, "num"));
         bars.append(row);
       }
       hc.panel.append(bars);
@@ -78,9 +105,12 @@ export function installHudPanel(hc: HudCtx): void {
 
   /** The width, in CSS px, a suggestion button's label has: the column, less the frame, the padding, the key and the gap. */
   function optionRoom(columns: 1 | 2, key: string): number {
-    const rootW = hc.root.clientWidth || 300;
+    const rootW = hc.layout() === "stacked" ? hc.colWidth() : hc.root.clientWidth || 300;
     const col = columns === 2 ? (rootW - 6) / 2 : rootW;
-    return Math.max(40, col - 30 - textWidth(key, "bold") * 2 - 8 - 2);
+    // A touch screen has no keyboard: the key's hint (and its gap) is not drawn, so the words get that room.
+    const keyRoom = hc.coarse() ? 0 : textWidth(key, "bold") * 2 + 8;
+    // The frame (5 px a side) and the padding (6 px a side on a phone, 10 otherwise).
+    return Math.max(40, col - (hc.condensed() ? 22 : 30) - keyRoom - 2);
   }
 
   function drawNext(s: HudState): void {
@@ -110,10 +140,12 @@ export function installHudPanel(hc: HudCtx): void {
         // Wrapped and cut to two lines here, since a canvas cannot wrap itself.
         const lines = wrapClamp(o.label, wrapWidth(optionRoom(columns, o.key), 2, deviceRatio()), 2);
         label.append(hc.px(lines.join("\n"), { scale: 2, color: PX.ink, outline: PX.dark }));
-        btn.append(hc.px(o.key, { scale: 2, weight: "bold", color: PX.gold, outline: PX.dark }), label);
+        if (!hc.coarse()) btn.append(hc.px(o.key, { scale: 2, weight: "bold", color: PX.gold, outline: PX.dark }));
+        btn.append(label);
       } else {
         label.textContent = o.label;
-        btn.append(el("span", "lto-hud-key", o.key), label);
+        if (!hc.coarse()) btn.append(el("span", "lto-hud-key", o.key));
+        btn.append(label);
       }
       btn.onclick = () => hc.onAction(o.id);
       hc.nextList.append(btn);
@@ -137,10 +169,10 @@ export function installHudPanel(hc: HudCtx): void {
       btn.setAttribute("aria-label", a.key ? `${a.label} (${a.key})` : a.label);
       if (hc.isPixel()) {
         btn.append(hc.px(a.label, { scale: 2, weight: "bold", color: a.emphasis ? PX.gold : PX.ink, outline: PX.dark }));
-        if (a.key) btn.append(hc.px(a.key, { scale: 2, color: PX.muted, outline: PX.dark }));
+        if (a.key && !hc.coarse()) btn.append(hc.px(a.key, { scale: 2, color: PX.muted, outline: PX.dark }));
       } else {
         btn.append(el("span", undefined, a.label));
-        if (a.key) btn.append(el("span", "lto-hud-key", a.key));
+        if (a.key && !hc.coarse()) btn.append(el("span", "lto-hud-key", a.key));
       }
       btn.onclick = () => hc.onAction(a.id);
       hc.actions.append(btn);
@@ -173,10 +205,10 @@ export function installHudPanel(hc: HudCtx): void {
       if (hc.isPixel()) {
         btn.classList.add("lto-fr", "fs1", open ? "fr-gold" : "fr-win");
         btn.append(hc.px(label, { scale: 2, weight: "bold", color: open ? PX.gold : PX.ink, outline: PX.dark }));
-        if (key) btn.append(hc.px(key, { scale: 2, color: PX.muted, outline: PX.dark }));
+        if (key && !hc.coarse()) btn.append(hc.px(key, { scale: 2, color: PX.muted, outline: PX.dark }));
       } else {
         btn.append(el("span", undefined, label));
-        if (key) btn.append(el("span", "lto-hud-key", key));
+        if (key && !hc.coarse()) btn.append(el("span", "lto-hud-key", key));
         if (open) btn.classList.add("is-open");
       }
       btn.onclick = () => hc.toggleTab(t);

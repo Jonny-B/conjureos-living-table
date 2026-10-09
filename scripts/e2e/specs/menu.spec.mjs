@@ -70,6 +70,7 @@ export const specs = [
       await d.quickStart();
       // The story screen holds the world: the Menu button waits until it has been read.
       const menuBtn = g.page.locator('[data-lto-hud] button[data-action="menu"]');
+      await g.page.locator("[data-lto-story]").waitFor({ timeout: T });
       assert.equal(await menuBtn.isDisabled(), true, "the Menu button is off while a story screen is up");
       await d.dismissDialogue();
       await d.settle(300);

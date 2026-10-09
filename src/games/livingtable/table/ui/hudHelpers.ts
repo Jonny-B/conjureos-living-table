@@ -93,8 +93,67 @@ export const CONDENSED_MAX_PX = 520;
  * Whether the dock draws its small-screen look: it is under CONDENSED_MAX_PX wide AND fills its row (so it sits under the board, not
  * beside it; a 320 px column on a desktop is narrow too, but it has the room of a whole column to itself). Widths of 0 (not laid out) never condense.
  */
-export function condensedHud(width: number, rowWidth: number): boolean {
-  return width > 0 && width < CONDENSED_MAX_PX && rowWidth - width < 24;
+export function condensedHud(width: number, rowWidth: number, short = false): boolean {
+  // `short`: the window is a phone on its side (500 px high or less). The column beside the board has no height to spare there, so it condenses too.
+  return width > 0 && width < CONDENSED_MAX_PX && (short || rowWidth - width < 24);
+}
+
+/** A HUD this wide or narrower, filling its row (a tablet held upright), lays out in two columns. */
+export const STACKED_MAX_PX = 760;
+
+/** The HUD's layout: "condensed" (a phone), "stacked" (two columns, an upright tablet) or "wide" (the column beside the board). */
+export type HudLayout = "condensed" | "stacked" | "wide";
+
+/**
+ * Whether the dock lays out in two columns: it is from CONDENSED_MAX_PX up to STACKED_MAX_PX wide and fills its row (it sits under the board).
+ * Under CONDENSED_MAX_PX is the phone's condensed look, and a column beside the board never fills its row.
+ */
+export function stackedHud(width: number, rowWidth: number): boolean {
+  return width >= CONDENSED_MAX_PX && width <= STACKED_MAX_PX && rowWidth - width < 24;
+}
+
+/** The layout for a HUD `width` wide in a row `rowWidth` wide, when the state asked for the small-screen looks (`condense`). */
+export function hudLayout(width: number, rowWidth: number, condense: boolean, short = false): HudLayout {
+  if (!condense) return "wide";
+  if (condensedHud(width, rowWidth, short)) return "condensed";
+  return stackedHud(width, rowWidth) ? "stacked" : "wide";
+}
+
+/** Notices float over the HUD's top row on a phone (nothing moves, nothing is pushed under the fold); everywhere else they sit in the flow. */
+export function noticesFloat(layout: HudLayout): boolean {
+  return layout === "condensed";
+}
+
+/**
+ * The title the condensed panel draws, one short line: "Your turn (rd 2)" or "Rd 2: rat 2" (whose turn it is, lower case, or "something" for an
+ * unseen creature). The full title is "Round 2: your turn" and "Round 2: rat 2's turn".
+ */
+export function shortTurnTitle(round: number, who: "you" | string | null): string {
+  if (who === "you") return `Your turn (rd ${round})`;
+  return `Rd ${round}: ${who ?? "something"}`;
+}
+
+/** A hit point bar's label sits on the same row as its meter and numbers while it leaves this much meter. */
+export const BAR_METER_MIN_PX = 24;
+/** The gap between a bar's label, meter and numbers, in CSS px. */
+export const BAR_GAP_PX = 8;
+/** A few px of slack, so a row that fits by a hair is wrapped on purpose and not left to the browser to break. */
+const BAR_SLACK_PX = 6;
+
+/**
+ * Whether a bar's label needs a row to itself (the meter and numbers wrap under it): the label, the numbers and BAR_METER_MIN_PX of
+ * meter, with the two gaps, are wider than `rowPx`. All widths are in CSS px.
+ */
+export function barLabelWraps(labelPx: number, numbersPx: number, rowPx: number): boolean {
+  return labelPx + numbersPx + BAR_METER_MIN_PX + 2 * BAR_GAP_PX + BAR_SLACK_PX > rowPx;
+}
+
+/** Pixel text cut with ".." to at most `maxFontPx` font pixels wide (a made character's name can be 60 characters long); whole when it fits. */
+export function cutToWidth(words: string, maxFontPx: number, weight: PixelWeight = "regular"): string {
+  if (textWidth(words, weight) <= maxFontPx) return words;
+  let cut = words.length;
+  while (cut > 1 && textWidth(`${words.slice(0, cut).trimEnd()}..`, weight) > maxFontPx) cut--;
+  return `${words.slice(0, cut).trimEnd()}..`;
 }
 
 /** The most suggested moves shown at once, and the longest label a button carries (longer ones are cut with "..", the full words stay in its name). */

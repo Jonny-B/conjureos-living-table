@@ -9,7 +9,12 @@ body {
   overscroll-behavior: none;
 }
 
+/* A big screen shows the whole page larger, in whole steps, so the bar, the footer, the tray column, every overlay and every menu grow together
+   (the board draws a denser canvas for it: table/stageFit.ts density). It lays out as a 1600 to 1920 px page. The one line switch is the
+   zoom declaration just below: make it "zoom: 1" and the page is as it was (the tray column then keeps its width, see tableStyle). */
 .lt-app {
+  --lt-zoom: 1;
+  zoom: var(--lt-zoom);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -22,6 +27,24 @@ body {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
+}
+
+@media (min-width: 2400px) and (min-height: 1300px) {
+  .lt-app {
+    --lt-zoom: 1.5;
+  }
+}
+
+@media (min-width: 3500px) and (min-height: 1900px) {
+  .lt-app {
+    --lt-zoom: 2;
+  }
+}
+
+@media (min-width: 5400px) and (min-height: 2900px) {
+  .lt-app {
+    --lt-zoom: 3;
+  }
 }
 
 /* Full screen gives the page the whole screen, not the top left quarter of it. */
@@ -90,7 +113,36 @@ body {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+}
+
+/* A mouse's scrollbar keeps its own lane so the board does not shift when it appears; a phone's overlay scrollbar takes no width, and the 15 px a
+   desktop emulation reserves is the board's. */
+@media (pointer: fine) and (min-width: 721px) {
+  .lt-app-stage {
+    scrollbar-gutter: stable;
+  }
+}
+
+/* The cue that the page scrolls: a fade at the foot of the window while there is more under the fold (set by TableScreen). */
+.lt-app-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: linear-gradient(to bottom, transparent, var(--cui-bg, #131319));
+  z-index: 40;
+}
+
+.lt-app-stage[data-more="down"] ~ .lt-app-fade {
+  opacity: 0.9;
+}
+
+.lt-app-short {
+  display: none;
 }
 
 .lt-app-note {
@@ -166,6 +218,29 @@ body {
   .lt-app-credits summary {
     min-height: 44px;
     line-height: 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .lt-app-long {
+    display: none;
+  }
+  .lt-app-short {
+    display: inline;
+  }
+}
+
+/* A phone on its side: the bar is one 44 px row and the footer line goes, so the board has the height. */
+@media (max-height: 500px) {
+  .lt-app-bar {
+    padding: 0 12px;
+    min-height: 44px;
+  }
+  .lt-app-title {
+    font-size: 0.95rem;
+  }
+  .lt-app-foot {
+    display: none;
   }
 }
 

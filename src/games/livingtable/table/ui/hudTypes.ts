@@ -95,6 +95,8 @@ export interface HudState {
    * every line is drawn.
    */
   condense?: boolean;
+  /** The title for the small-screen look, short enough to stay on one line at 320 px ("Rd 1: rat 2"). Without it the full `title` is drawn there too. */
+  shortTitle?: string;
   /** The lines the small-screen look keeps (the move and action left in a fight). The other `lines` are left out there. */
   short?: readonly string[];
   /** The hero's things. With it the HUD has a "Pack (I)" button that shows or hides them in the drawer. */

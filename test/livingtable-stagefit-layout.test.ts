@@ -7,7 +7,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { PORTRAIT_STACK_RATIO, STACK_AT, STACK_QUERY, hudZoomAt, stackCss, stackedAt } from "../src/games/livingtable/table/stageFit";
+import { PORTRAIT_STACK_RATIO, STACK_AT, STACK_QUERY, TABLET_PANEL_ROOM, hudZoomAt, stackCss, stackedAt } from "../src/games/livingtable/table/stageFit";
+import { tableStyleCss } from "../src/games/livingtable/table/tableStyle";
 
 test("a phone stacks, as before, whatever its height", () => {
   for (const [w, h] of [[320, 640], [390, 844], [720, 400], [700, 300], [720, 1]] as const) assert.equal(stackedAt(w, h), true, `${w}x${h}`);
@@ -61,4 +62,39 @@ test("the window part keys the stacked layout on the attribute and the media que
   assert.match(src, /setAttribute\("data-lt-stack", ""\)/);
   assert.match(src, /removeAttribute\("data-lt-stack"\)/);
   assert.match(src, /style\.zoom/);
+});
+
+test("a phone paints the DM's dock band only while the box is up, and the dice tray follows; a tablet keeps it reserved", () => {
+  const css = stackCss("ltt-root");
+  const R = ".ltt-root[data-fit][data-lt-stack]";
+  const phone = css.slice(css.indexOf("@media (max-width:720px){"));
+  assert.ok(phone.includes(`${R} .lt-stage-wrap{padding-bottom:0}`), "idle: no band");
+  assert.ok(phone.includes(`${R} .lt-stage-wrap:has(.lto-dlg:not([hidden])){padding-bottom:var(--lto-dock,0px)}`), "box up: the band returns");
+  assert.match(phone, /\.lt-dice-host\.lt-dice-over\{bottom:8px\}/);
+  assert.match(phone, /:has\(\.lto-dlg:not\(\[hidden\]\)\)>\.lt-dice-host\.lt-dice-over\{bottom:calc\(var\(--lto-dock,0px\) \+ 8px\)\}/);
+  assert.ok(phone.includes(`${R}{padding:2px}`) && phone.includes(`${R} .lt-game{padding:3px}`), "a phone gives up its gutters");
+  assert.equal(css.slice(0, css.indexOf("@media")).includes("padding-bottom:0"), false, "outside the phone block the band stays reserved (tablet)");
+  const page = tableStyleCss();
+  assert.match(page, /@media \(max-width:720px\)\{[\s\S]*\.lt-stage-wrap\{flex:none;width:100%;padding-bottom:0\}[\s\S]*:has\(\.lto-dlg:not\(\[hidden\]\)\)\{padding-bottom:var\(--lto-dock,0px\)\}/);
+  assert.match(page, /@media \(max-height:500px\)\{[\s\S]*padding-bottom:0\}/, "a phone on its side drops the idle band too");
+  assert.match(page, /\.lt-stage-wrap\{[^}]*padding-bottom:var\(--lto-dock,0px\)/, "a wide page still reserves it so the board never jumps");
+});
+
+test("the tray column's width follows the page zoom, and the tablet keeps a fixed room for its panel", () => {
+  assert.match(tableStyleCss(), /clamp\(320px,calc\(16vw \/ var\(--lt-zoom,1\)\),440px\)/);
+  assert.equal(TABLET_PANEL_ROOM, 240);
+  assert.ok(TABLET_PANEL_ROOM <= 300);
+});
+
+test("the window part publishes the board's width, measures the page zoom, and no longer scales the column itself", () => {
+  const src = readFileSync(new URL("../src/games/livingtable/table/stageFit.ts", import.meta.url), "utf8");
+  assert.match(src, /setProperty\("--lto-board-w"/);
+  assert.match(src, /getBoundingClientRect\(\)\.width \/ w/);
+  assert.doesNotMatch(src, /hudZoomAt\(window/, "hudZoomAt is exported but not called");
+  const app = readFileSync(new URL("../src/app.css", import.meta.url), "utf8");
+  for (const z of ["1.5", "2", "3"]) assert.match(app, new RegExp(`--lt-zoom: ${z};`));
+  assert.match(app, /min-width: 2400px\) and \(min-height: 1300px/);
+  assert.match(app, /min-width: 3500px\) and \(min-height: 1900px/);
+  assert.match(app, /min-width: 5400px\) and \(min-height: 2900px/);
+  assert.match(app, /@media \(pointer: fine\) and \(min-width: 721px\) \{\s*\.lt-app-stage \{\s*scrollbar-gutter: stable/);
 });

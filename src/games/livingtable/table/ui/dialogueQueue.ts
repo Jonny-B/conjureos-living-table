@@ -23,9 +23,16 @@ export function typedChars(elapsedMs: number, speed: TextSpeed): number {
   return Math.max(0, Math.floor((Math.max(0, elapsedMs) / 1000) * cps));
 }
 
-/** The text rows the dialogue box holds: 3 on a phone-width board, 4 elsewhere. It never holds more, and it never scrolls. */
-export function dialogueLines(size: "s" | "m" | "l"): number {
-  return size === "s" ? 3 : 4;
+/** An overlay shorter than this (CSS px) holds three rows in its dialogue box, not four: the dock would eat a fifth of the board. */
+export const DIALOGUE_TALL_PX = 640;
+
+/**
+ * The text rows the dialogue box holds: 3 on a phone-width board, and 3 where the overlay is shorter than DIALOGUE_TALL_PX (`height`, left
+ * out when it is not known); 4 elsewhere. It never holds more, and it never scrolls.
+ */
+export function dialogueLines(size: "s" | "m" | "l", height = Number.POSITIVE_INFINITY): number {
+  if (size === "s") return 3;
+  return height < DIALOGUE_TALL_PX ? 3 : 4;
 }
 
 /**

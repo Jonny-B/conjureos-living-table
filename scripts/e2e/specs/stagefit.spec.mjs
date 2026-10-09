@@ -26,7 +26,7 @@ function measure() {
   const stageApp = q(".lt-app-stage");
   return {
     stacked: root ? root.hasAttribute("data-lt-stack") : null,
-    zoom: col ? col.style.zoom : null,
+    zoom: (() => { const a = q(".lt-app"); return a ? String(getComputedStyle(a).zoom) : null; })(),
     innerW: innerWidth,
     innerH: innerHeight,
     wrap: r(q(".lt-stage-wrap")),
@@ -79,9 +79,9 @@ export const specs = [
         }
         if (width === 768) assert.ok(m.board.w >= 640, `${at}: the board is ${Math.round(m.board.w)} wide`);
         if (width === 3840) {
-          assert.equal(m.zoom, "2", `${at}: the panel zoom is ${m.zoom}`);
-          assert.ok(m.hud.w >= 700, `${at}: the panel is ${Math.round(m.hud.w)} wide`);
-        } else assert.equal(m.zoom, "", `${at}: the panel should not be scaled (${m.zoom})`);
+          assert.equal(m.zoom, "2", `${at}: the page zoom is ${m.zoom}`);
+          assert.ok(m.hud.w >= 640, `${at}: the panel is ${Math.round(m.hud.w)} wide (a 320 px column at zoom 2)`);
+        } else assert.equal(m.zoom, "1", `${at}: the page should not be scaled (${m.zoom})`);
         await g.close();
       }
     },

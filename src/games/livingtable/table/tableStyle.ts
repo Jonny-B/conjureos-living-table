@@ -63,6 +63,8 @@ const tokenBlock = (pick: "light" | "dark"): string => TOKENS.map((k) => `--ltt-
  * stage and the page scrolls; the dice tray rises over the stage as a layer above the DM's dock band.
  */
 function fitCss(): string {
+  // The max-height block at the end is for a phone on its side: every pixel of height is the board's, so the gutters shrink and the DM's dock band
+  // is painted only while the box is up (the board gives way for it then; at that height a jump is the lesser evil).
   return `
 ${R}[data-fit]{display:flex;flex-direction:column;height:100%;min-height:0;padding:6px}
 ${R}[data-fit] .lt-arena{flex:1 1 0;min-height:0;margin:0;flex-wrap:nowrap;align-items:stretch;gap:12px}
@@ -70,16 +72,31 @@ ${R}[data-fit] .lt-stage-wrap{flex:1 1 0;min-width:0;min-height:0!important;widt
 ${R}[data-fit] .lt-viewport{flex:none;max-width:none;max-height:none;overflow:hidden}
 ${R}[data-fit] .lt-board{width:100%;height:100%}
 ${R}[data-fit] .lt-board>canvas{width:100%!important;height:100%!important}
-${R}[data-fit] .lt-tray-col{flex:0 0 clamp(320px,16vw,440px);width:clamp(320px,16vw,440px);min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
+${R}[data-fit] .lt-tray-col{flex:0 0 clamp(320px,calc(16vw / var(--lt-zoom,1)),440px);width:clamp(320px,calc(16vw / var(--lt-zoom,1)),440px);min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
+${R}[data-fit] .lt-tray-col[data-more=down]{-webkit-mask-image:linear-gradient(#000 calc(100% - 28px),transparent);mask-image:linear-gradient(#000 calc(100% - 28px),transparent)}
+${R}[data-fit] .lt-tray-col[data-more=up]{-webkit-mask-image:linear-gradient(transparent,#000 28px);mask-image:linear-gradient(transparent,#000 28px)}
+${R}[data-fit] .lt-tray-col[data-more=both]{-webkit-mask-image:linear-gradient(transparent,#000 28px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(transparent,#000 28px,#000 calc(100% - 28px),transparent)}
 ${R}[data-fit] .lt-stage-wrap>.lt-dice-host.lt-dice-over{position:absolute;left:50%;bottom:calc(var(--lto-dock,0px) + 8px);width:min(360px,calc(100% - 16px));transform:translateX(-50%);z-index:30;pointer-events:auto}
 ${R}[data-fit] .lt-stage-wrap>.lt-dice-host.lt-dice-over.lt-dice-quiet{visibility:hidden;pointer-events:none}
 @media (max-width:720px){
 ${R} .lt-arena[data-menu-open] .lt-tray-col{display:none}
-${R}[data-fit]{height:auto;min-height:100%;padding:4px}
+${R}[data-fit]{height:auto;min-height:100%;padding:2px}
 ${R}[data-fit] .lt-arena{flex:1 0 auto;flex-direction:column;gap:8px}
-${R}[data-fit] .lt-game{padding:6px}
-${R}[data-fit] .lt-stage-wrap{flex:none;width:100%}
+${R}[data-fit] .lt-game{padding:3px}
+${R}[data-fit] .lt-stage-wrap{flex:none;width:100%;padding-bottom:0}
+${R}[data-fit] .lt-stage-wrap:has(.lto-dlg:not([hidden])){padding-bottom:var(--lto-dock,0px)}
+${R}[data-fit] .lt-stage-wrap>.lt-dice-host.lt-dice-over{bottom:8px}
+${R}[data-fit] .lt-stage-wrap:has(.lto-dlg:not([hidden]))>.lt-dice-host.lt-dice-over{bottom:calc(var(--lto-dock,0px) + 8px)}
 ${R}[data-fit] .lt-tray-col{flex:1 0 auto;width:100%;overflow:visible}
+}
+@media (max-height:500px){
+${R}[data-fit]{padding:2px}
+${R}[data-fit] .lt-arena{gap:6px}
+${R}[data-fit] .lt-game{padding:3px}
+${R}[data-fit] .lt-stage-wrap{padding-bottom:0}
+${R}[data-fit] .lt-stage-wrap:has(.lto-dlg:not([hidden])){padding-bottom:var(--lto-dock,0px)}
+${R}[data-fit] .lt-stage-wrap>.lt-dice-host.lt-dice-over{bottom:8px}
+${R}[data-fit] .lt-stage-wrap:has(.lto-dlg:not([hidden]))>.lt-dice-host.lt-dice-over{bottom:calc(var(--lto-dock,0px) + 8px)}
 }`;
 }
 

@@ -119,6 +119,32 @@ test("an explicit zoom stays whole, is never above what fits, and is drawn one t
       }
 });
 
+test("density: a zoomed page draws a denser canvas, but the box stays in CSS pixels", () => {
+  const room = { availW: 1280, availH: 720 };
+  const plain = fitBoard(room, BOARD16, null);
+  const dense = fitBoard(room, BOARD16, null, 2);
+  assert.equal(plain.scale, 3, "1280 by 720 holds a 3x board of 16 px art (960 by 720)");
+  assert.equal(dense.scale, 6, "at density 2 the same CSS room holds twice the pixels: 6x");
+  assert.equal(dense.cssW, plain.cssW, "the CSS box is the same");
+  assert.equal(dense.cssH, plain.cssH);
+  assert.equal(dense.canvasW, dense.scale * 320);
+  assert.equal(fitBoard(room, BOARD16, null, 1).scale, fitBoard(room, BOARD16, null).scale, "density 1 is the default");
+  assert.equal(autoScale(room, BOARD16, 2), dense.scale);
+  assert.equal(autoScale(room, BOARD16), plain.scale);
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(fitBoard(room, BOARD16, null, bad).scale, plain.scale, `density ${bad} falls back to 1`);
+  // never more than the cap, and an explicit zoom is one canvas pixel to one device pixel
+  assert.ok(fitBoard({ availW: 5000, availH: 4000 }, BOARD16, null, 3).canvasW <= MAX_CANVAS_W);
+  const z = fitBoard({ availW: 3000, availH: 2000 }, BOARD32, 1, 2);
+  assert.equal(z.scale, 1);
+  assert.equal(z.cssW, 320, "a 640 px canvas on a 2x page is 320 CSS px");
+  for (const d of [1, 1.25, 1.5, 2, 3])
+    for (const [w, h] of [[300, 700], [1280, 900], [1920, 1080]] as const) {
+      const f = fitBoard({ availW: w, availH: h }, BOARD32, null, d);
+      assert.ok(f.cssW <= w && f.cssH <= h, `${w}x${h} density ${d} overflows`);
+      assert.ok(f.scale >= 1);
+    }
+});
+
 test("an empty stage (not laid out yet) is answered with a zero board, not a bad scale", () => {
   const f = fitBoard({ availW: 0, availH: 500 }, BOARD32, null);
   assert.equal(f.cssW, 0);
