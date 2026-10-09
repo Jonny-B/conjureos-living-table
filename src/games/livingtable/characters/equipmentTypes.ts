@@ -251,7 +251,7 @@ export interface SlotDefinition {
  * so two reskins of one class are equally strong.
  *
  * The Knight's set is the owner's own example, given verbatim (sword, shield,
- * armour), and the Fireball Person's is their wizard example (staff, hat,
+ * armour), and the Mage's is their wizard example (staff, hat,
  * cloak). The other six follow that spirit off each archetype's real
  * `startingInventory` in templates.ts.
  *
@@ -546,7 +546,7 @@ export const GEAR_ASSET_ID_PREFIX = "gear_";
  * Spaced by 10 so a future band can be inserted without renumbering anything.
  * A slot's band is DATA on the slot (`SlotDefinition.layer`), never derived
  * from its role and never derived from its position in a list, which is what
- * lets the Knight's shield sit in front of him while the Shadow's cloak sits
+ * lets the Knight's shield sit in front of him while the Rogue's cloak sits
  * behind her even though both are the `outer` role.
  */
 export type EquipmentLayer = 0 | 10 | 20 | 25 | 30 | 35 | 40 | 50;
@@ -1066,6 +1066,32 @@ export const STARTING_LOADOUT: Equipment = Object.freeze({
   crown: Object.freeze({ slot: "crown", tier: "common" }),
   boots: Object.freeze({ slot: "boots", tier: "common" }),
 });
+
+/**
+ * WHETHER A HERO WEARS THEIR CLASS'S ARMOUR, as one word on the sheet.
+ *
+ *   "class"  the armour line the class is issued (chain mail, leather, and so
+ *            on; `ARMOR_BY_CHASSIS` in creation.ts). The only state every
+ *            sheet stored before this field existed can be in, so ABSENT
+ *            READS AS "class".
+ *   "none"   no armour and no shield: SRD 5.1 unarmored AC, 10 plus the
+ *            Dexterity modifier. Written by createCharacter for a starting
+ *            kit with `armor: "none"`, and by `withArmor` when a hero takes
+ *            their armour off.
+ *
+ * It is a state of the SHEET and not an empty gear slot, on purpose: the gear
+ * contract above says the four drawn roles are never empty after
+ * normalisation (normalizeEquipment refills them on every load, and that
+ * function sees no sheet). So the storage is unchanged and the READERS
+ * (`tierInSlot`, `equipmentStatus`, `renderPlanFor`, `gearView`) treat an
+ * armour-kind slot whose piece is only the plain common one as bare when the
+ * sheet says "none". A magic armour-kind piece worn on a bare sheet is a real
+ * piece and pays out as ever.
+ */
+export type ArmorState = "class" | "none";
+
+/** What the armour line reads on a hero who wears none. Says the real number's formula, per the honesty rule. */
+export const UNARMORED_LABEL = "No armor (10 + DEX)";
 
 /**
  * Bound on stacked AC from equipment, and the honest reason for it.

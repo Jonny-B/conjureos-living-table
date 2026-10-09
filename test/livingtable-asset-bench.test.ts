@@ -7,10 +7,10 @@
  *
  *   1. No asset or panel id starts with "EXAMPLE_": the template's own
  *      placeholder prefix never belongs in a real registry.
- *   2. Every sprite id in BOTH scripts/assets/fantasy.ts's and
- *      scripts/assets/scifi.ts's SPRITES arrays appears on the bench (as
- *      "<template>:<assetId>"), so a new sprite can never be silently
- *      missing from the bench.
+ *   2. Every in-play fantasy sprite (all of scripts/assets/fantasy.ts's
+ *      SPRITES but the Healer's, who is out of play) is on the bench's Pieces
+ *      tab, so a new sprite can never be silently missing from the bench.
+ *      Sci-fi is paused and the bench no longer has a sprite library.
  *   3. The built bench's output path (package.json's "bench" script) is
  *      under .cache/, not under src/ or public/, and IS matched by
  *      .gitignore: a bench inlines a full copy of every asset it shows, so
@@ -31,7 +31,6 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SPRITES as FANTASY_SPRITES } from "../scripts/assets/fantasy";
-import { SPRITES as SCIFI_SPRITES } from "../scripts/assets/scifi";
 
 const ASSETS_MODULE = new URL("../scripts/asset-bench/assets.ts", import.meta.url);
 const BUILT_BENCH_OUT = ".cache/asset-bench/living-table-bench.html"; // repo-root-relative; matches package.json's "bench" script
@@ -57,31 +56,23 @@ test("registry has no EXAMPLE_ ids left", async () => {
   );
 });
 
-test("every fantasy SPRITES id appears on the bench as fantasy:<assetId>", async () => {
-  const bench = await loadBench();
-  const benchIds = new Set(bench.assets.map((a: { id: string }) => a.id));
-  const missing = FANTASY_SPRITES.map((s) => `fantasy:${s.assetId}`).filter((id) => !benchIds.has(id));
-  assert.deepEqual(missing, [], `sprite id(s) missing from the bench: ${missing.join(", ")}`);
+async function loadPieces(): Promise<readonly string[]> {
+  const mod = await import(ASSETS_MODULE.href);
+  return mod.PIECES_ASSET_IDS;
+}
+
+test("every in-play fantasy SPRITES id is on the Pieces tab", async () => {
+  const pieces = new Set(await loadPieces());
+  const missing = FANTASY_SPRITES.filter((s) => !/healer/.test(s.assetId))
+    .map((s) => s.assetId)
+    .filter((id) => !pieces.has(id));
+  assert.deepEqual(missing, [], `sprite id(s) missing from the Pieces tab: ${missing.join(", ")}`);
 });
 
-test("every scifi SPRITES id appears on the bench as scifi:<assetId>", async () => {
-  const bench = await loadBench();
-  const benchIds = new Set(bench.assets.map((a: { id: string }) => a.id));
-  const missing = SCIFI_SPRITES.map((s) => `scifi:${s.assetId}`).filter((id) => !benchIds.has(id));
-  assert.deepEqual(missing, [], `sprite id(s) missing from the bench: ${missing.join(", ")}`);
-});
-
-test("the bench carries no more asset ids than both SPRITES arrays combined", async () => {
-  // Catches the opposite mistake: an id on the bench that traces to neither
-  // template's SPRITES array (a typo'd prefix, a leftover example, a sprite
-  // duplicated under two ids).
-  const bench = await loadBench();
-  const expected = new Set([
-    ...FANTASY_SPRITES.map((s) => `fantasy:${s.assetId}`),
-    ...SCIFI_SPRITES.map((s) => `scifi:${s.assetId}`),
-  ]);
-  const extra = bench.assets.map((a: { id: string }) => a.id).filter((id: string) => !expected.has(id));
-  assert.deepEqual(extra, [], `bench asset id(s) with no matching SPRITES entry: ${extra.join(", ")}`);
+test("the Pieces tab carries no id that is not a fantasy sprite", async () => {
+  const known = new Set(FANTASY_SPRITES.map((s) => s.assetId));
+  const extra = (await loadPieces()).filter((id) => !known.has(id));
+  assert.deepEqual(extra, [], `Pieces id(s) with no matching SPRITES entry: ${extra.join(", ")}`);
 });
 
 test("built bench output is not under src/ or public/", () => {

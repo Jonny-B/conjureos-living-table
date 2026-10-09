@@ -27,7 +27,7 @@
  * and the engine's would drift apart, which is exactly the class of bug
  * DESIGN.md's "the engine decides legality" rule exists to prevent.
  *
- * RUN ORDER. This is the SECOND of two display passes. tileVariants.ts runs
+ * RUN ORDER. This is the SECOND of the display passes. tileVariants.ts runs
  * first and scatters a base material across its interchangeable field tiles;
  * this one then overwrites the boundary cells with transitions. The order is
  * not interchangeable: an edge tile is chosen from its neighbours, and letting
@@ -35,10 +35,22 @@
  * plain field tile. `applyDisplayTiles` at the bottom of this file is the
  * composed entry point that guarantees the order, and it is what the renderer
  * calls.
+ *
+ * A THIRD pass, wallProfiles.ts, runs after both, and only when the caller
+ * hands `applyDisplayTiles` the layout's props (its fourth argument). It draws
+ * each wall cell as the strip it is seen from above, from the cell's own four
+ * neighbours. Walls are never the `over` or the `under` of an edge rule, so this
+ * pass and the edge pass touch disjoint cells and their relative order does not
+ * change a pixel; it runs last anyway, and reads the STORED grid rather than
+ * the one the earlier passes produced, so a wall edge rule added here later
+ * cannot change what a wall's neighbours look like to it. Without the fourth
+ * argument the output is exactly the two-pass result, which is what the bench's
+ * Terrain panel and every caller that has no props to give still gets.
  */
 import { CELL_HEIGHT, CELL_WIDTH } from "../world/coordinates";
 import type { TileId } from "../world/cell";
 import { applyTileVariants, VARIANT_SETS } from "./tileVariants";
+import { applyWallProfiles, type WallPassInput } from "./wallProfiles";
 
 /** The four tile-local sides a boundary can run along. */
 export type EdgeSide = "n" | "s" | "e" | "w";
@@ -483,9 +495,9 @@ export function applyTerrainEdges(
 }
 
 /**
- * Both display passes, in the only order that is correct: scatter a base
+ * The display passes, in the only order that is correct: scatter a base
  * material across its field variants, THEN pick boundary transitions from the
- * result.
+ * result, THEN (when `walls` is given) draw the walls as strips.
  *
  * This is what the renderer calls, and the reason it exists as one function is
  * that the order is a correctness property rather than a call-site
@@ -495,12 +507,22 @@ export function applyTerrainEdges(
  * edge id to a variant set the boundary would quietly dissolve. Composing them
  * here means there is no call site left to get it wrong.
  *
+ * `walls` is the wall pass's input (the layout's props, and the manifest's own
+ * prop membership test, because the jamb overlay and the door leaves are props).
+ * Omitting it gives the two-pass result unchanged. Passing it gives the same
+ * grid with each wall cell replaced by its join, and only when the manifest
+ * carries the whole set (see wallProfiles.ts), so a manifest without it still
+ * draws what it always drew. The wall pass reads `tiles`, the stored grid, for
+ * its neighbours, not the scattered one.
+ *
  * Still display only: a copy in, a copy out, `tiles` untouched.
  */
 export function applyDisplayTiles(
   tiles: readonly (readonly TileId[])[],
   hasAsset: (assetId: TileId) => boolean,
   seed = 0,
+  walls?: WallPassInput,
 ): TileId[][] {
-  return applyTerrainEdges(applyTileVariants(tiles, hasAsset, seed), hasAsset);
+  const shown = applyTerrainEdges(applyTileVariants(tiles, hasAsset, seed), hasAsset);
+  return walls ? applyWallProfiles(shown, tiles, hasAsset, walls, seed) : shown;
 }

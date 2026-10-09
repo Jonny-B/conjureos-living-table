@@ -1,0 +1,269 @@
+/*
+ * The page around the table window: a bar above, a line below, the window filling what is left.
+ * Everything is under .lt-app, so nothing here reaches the window's own styles (they sit under .ltt-root).
+ * Tokens are the --cui-* set from conjureos-ui.css; each has a fallback so the page reads without it.
+ */
+/* A game page, not a document: the page itself never rubber-bands or pulls to refresh. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+/* A big screen shows the whole page larger, in whole steps, so the bar, the footer, the tray column, every overlay and every menu grow together
+   (the board draws a denser canvas for it: table/stageFit.ts density). It lays out as a 1600 to 1920 px page. The one line switch is the
+   zoom declaration just below: make it "zoom: 1" and the page is as it was (the tray column then keeps its width, see tableStyle). */
+.lt-app {
+  --lt-zoom: 1;
+  zoom: var(--lt-zoom);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--cui-bg, #131319);
+  color: var(--cui-fg, #eceaf5);
+  /* A double tap is the game's, not the browser's zoom, and a drag or a long press selects nothing (pinch zoom is kept). */
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (min-width: 2400px) and (min-height: 1300px) {
+  .lt-app {
+    --lt-zoom: 1.5;
+  }
+}
+
+@media (min-width: 3500px) and (min-height: 1900px) {
+  .lt-app {
+    --lt-zoom: 2;
+  }
+}
+
+@media (min-width: 5400px) and (min-height: 2900px) {
+  .lt-app {
+    --lt-zoom: 3;
+  }
+}
+
+/* Full screen gives the page the whole screen, not the top left quarter of it. */
+.lt-app:fullscreen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+
+.lt-app:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+
+.lt-app input,
+.lt-app textarea,
+.lt-app select,
+.lt-app [contenteditable],
+.lt-app [data-lt-copy] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.lt-app-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--cui-border, #31313d);
+}
+
+.lt-app-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lt-app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The window is the box between the bar and the line. The table fills it (the board is sized from this box by table/stageFit.ts);
+   on a narrow page the table is taller than the box and scrolls inside .lt-app-stage, never the page around it, and never sideways. */
+.lt-app-window {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.lt-app-stage {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* A mouse's scrollbar keeps its own lane so the board does not shift when it appears; a phone's overlay scrollbar takes no width, and the 15 px a
+   desktop emulation reserves is the board's. */
+@media (pointer: fine) and (min-width: 721px) {
+  .lt-app-stage {
+    scrollbar-gutter: stable;
+  }
+}
+
+/* The cue that the page scrolls: a fade at the foot of the window while there is more under the fold (set by TableScreen). */
+.lt-app-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: linear-gradient(to bottom, transparent, var(--cui-bg, #131319));
+  z-index: 40;
+}
+
+.lt-app-stage[data-more="down"] ~ .lt-app-fade {
+  opacity: 0.9;
+}
+
+.lt-app-short {
+  display: none;
+}
+
+.lt-app-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0;
+  padding: 16px;
+  text-align: center;
+  color: var(--cui-fg-dim, #9c98ad);
+}
+
+.lt-app-foot {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  border-top: 1px solid var(--cui-border, #31313d);
+  font-size: 0.78rem;
+  color: var(--cui-fg-mute, #9c98ad);
+}
+
+.lt-app-save {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lt-app-version {
+  flex: none;
+}
+
+.lt-app-credits summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lt-app-credits-body {
+  user-select: text;
+  -webkit-user-select: text;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 12px 16px 4px;
+  background: var(--cui-bg-2, #1a1f2b);
+  border-top: 1px solid var(--cui-border, #31313d);
+  color: var(--cui-fg-mute, #9ca3af);
+  z-index: 5;
+}
+
+.lt-app-credits-body p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+/* Fingertip-sized buttons and links on a touch screen or a narrow page. */
+@media (max-width: 900px), (pointer: coarse) {
+  .lt-app-bar .cui-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .lt-app-credits summary {
+    min-height: 44px;
+    line-height: 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .lt-app-long {
+    display: none;
+  }
+  .lt-app-short {
+    display: inline;
+  }
+}
+
+/* A phone on its side: the bar is one 44 px row and the footer line goes, so the board has the height. */
+@media (max-height: 500px) {
+  .lt-app-bar {
+    padding: 0 12px;
+    min-height: 44px;
+  }
+  .lt-app-title {
+    font-size: 0.95rem;
+  }
+  .lt-app-foot {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .lt-app-bar {
+    padding: 6px 12px;
+    gap: 8px;
+  }
+  /* The title gives way (it ellipsizes); the buttons stay on one row, however narrow the phone. */
+  .lt-app-title {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .lt-app-actions {
+    flex: none;
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+  .lt-app-bar .cui-button {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .lt-app-foot {
+    padding: 6px 12px;
+  }
+}

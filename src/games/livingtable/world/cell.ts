@@ -101,7 +101,15 @@ export interface CellLayout {
  * satisfied by anything with at least this shape.
  */
 export interface AssetManifest {
-  tiles: Record<TileId, { walkable: boolean }>;
+  /**
+   * `opaque` is the SIGHT flag (world/visibility.ts), deliberately separate
+   * from walking: a chest stops a foot and not an eye, water stops a foot and
+   * not an eye, a closed door stops both. Optional because a manifest that
+   * predates it says nothing; sightBlockers then decides from the asset id
+   * (`isOpaqueAssetId`), and for a tile with no verdict at all, from "not
+   * walkable". `adaptManifest` stamps it, so the running game always has it.
+   */
+  tiles: Record<TileId, { walkable: boolean; opaque?: boolean }>;
   tokens: Record<TileId, Record<string, unknown>>;
   /**
    * `blocks` is what makes a door a door rather than a sprite swap:
@@ -112,5 +120,5 @@ export interface AssetManifest {
    * Optional and defaulting to false, because most props (a torch, a rug)
    * really are decorative.
    */
-  props: Record<TileId, { blocks?: boolean }>;
+  props: Record<TileId, { blocks?: boolean; opaque?: boolean }>;
 }

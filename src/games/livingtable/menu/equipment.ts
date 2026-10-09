@@ -36,15 +36,17 @@
  * path. If a number on this screen is ever wrong again, it is wrong in the
  * engine and it is wrong in the dice too, which is the whole point.
  */
-import { ARMOR_INCLUDES_SHIELD, type CharacterSheet } from "../characters/creation";
+import { ARMOR_INCLUDES_SHIELD, classArmorFor, type CharacterSheet } from "../characters/creation";
 import { loadoutInventoryFor } from "../characters/templates";
 import {
   accessoryStatus,
   equipmentAttackBonus,
   equipmentOf,
   equipmentSaveBonus,
+  isUnarmored,
   itemNameFor,
   normalizeEquipment,
+  slotIsBare,
   slotIsWornArmor,
   slotsForArchetype,
   tierInSlot,
@@ -70,6 +72,7 @@ import {
   RECOLOUR_BY_TIER,
   SLOT_ROLES,
   TIER_NAME_INDEX,
+  UNARMORED_LABEL,
   attunedCounter as attunedCounterCopy,
   accessoryEffect,
   bodySpriteId,
@@ -302,12 +305,15 @@ export function sheetWithGear(sheet: CharacterSheet, role: GearRole, tier: Equip
  * tier and two surfaces naming the same object differently is the defect this
  * function exists to end.
  *
- * An archetype whose armour is not in a gear slot at all (a Shadow's leather,
+ * An archetype whose armour is not in a gear slot at all (a Rogue's leather,
  * a wizard standing in their own clothes) keeps the chassis label, because
  * there is nothing on the panel for it to agree with and inventing an
  * agreement would be worse.
  */
 export function armorDisplayLabel(sheet: CharacterSheet): string {
+  // No armour on the body: the AC line says so in the formula's own words,
+  // whatever the gear row's plain pieces are called.
+  if (isUnarmored(sheet)) return UNARMORED_LABEL;
   const slots = slotsFor(sheet);
   const worn = slots ? SLOT_ROLES.map((role) => slots[role]).find((slot) => slotIsWornArmor(slot)) : undefined;
   if (!worn) return sheet.armorLabel;
@@ -337,7 +343,17 @@ export function armorDisplayLabel(sheet: CharacterSheet): string {
  */
 export function packItems(sheet: CharacterSheet): readonly string[] {
   const loadout = loadoutInventoryFor(sheet.archetypeId);
-  return sheet.inventory.filter((item) => !loadout.includes(item));
+  // The class's armour is worn or it is in the pack. Worn, it is the armour
+  // line and never a pack item; taken off (or never put on), the same string
+  // is a pack item you can wear again, whatever the loadout list says.
+  // An archetype this table has never heard of hides nothing (see below).
+  const armorItem = slotsForArchetype(sheet.archetypeId) ? classArmorFor(sheet.chassis)?.itemName.toLowerCase() : undefined;
+  if (armorItem === undefined) return sheet.inventory.filter((item) => !loadout.includes(item));
+  const unarmored = isUnarmored(sheet);
+  return sheet.inventory.filter((item) => {
+    if (item.toLowerCase() === armorItem) return unarmored;
+    return !loadout.includes(item);
+  });
 }
 
 // ── what the renderer draws ─────────────────────────────────────────────
@@ -355,7 +371,7 @@ export function packItems(sheet: CharacterSheet): readonly string[] {
  * Every layer is the same 16-wide sprite drawn at the body's own origin, so
  * there is no per-layer offset arithmetic anywhere; the draw order is the
  * `layer` integer on the slot, which is what lets a Knight's shield sit in
- * front of him while a Shadow's cloak sits behind her even though both are
+ * front of him while a Rogue's cloak sits behind her even though both are
  * the same `outer` role. A missing sprite id skips its layer, so a gap in the
  * manifest reads as a missing hat during play rather than as a broken screen.
  */
@@ -376,7 +392,9 @@ export function renderPlanFor(sheet: CharacterSheet): TokenRenderPlan | null {
   const slots = slotsFor(sheet);
   if (!slots || !isArchetypeId(sheet.archetypeId)) return null;
   const archetypeId = sheet.archetypeId;
-  const layers: EquipmentLayerPlan[] = SLOT_ROLES.map((role) => {
+  // An unarmored hero is not drawn in the plain shield, cloak or armour they
+  // are not wearing (`slotIsBare`); a magic piece in one of those slots is.
+  const layers: EquipmentLayerPlan[] = SLOT_ROLES.filter((role) => !slotIsBare(sheet, role)).map((role) => {
     const tier = tierOf(sheet, role);
     return {
       spriteId: equipmentSpriteId(archetypeId, role, tierArtVariant(tier)),
@@ -441,7 +459,7 @@ export const RARITY_WORD: Readonly<Record<EquipmentTier, string>> = Object.freez
  * This label used to be one string per ROLE, and the `crown` string was
  * "Armour or headwear". That is a lie for six of the eight archetypes: the
  * crown slot is bonusKind "armor" only for the Knight's Plate Harness and the
- * Trooper's Carapace Vest. On the Shadow, Healer, Fireball Person,
+ * Trooper's Carapace Vest. On the Rogue, Healer, Mage,
  * Infiltrator, Medic and Psion it is bonusKind "save", which
  * `equipmentSaveBonus` routes into `saveModifierFor` and which never touches
  * AC at all. A first-time player reads the label, not the paragraph, and
@@ -578,6 +596,8 @@ export interface GearSlotView {
   plain: string;
   /** The SRD shape behind it, for the row's tooltip. */
   technical: string;
+  /** True for an armour-kind slot an unarmored hero has nothing worn in: `itemName` is then "Nothing worn", `tier` is "common" and `bonus` is 0. */
+  empty: boolean;
 }
 
 /**
@@ -670,6 +690,9 @@ export function accessoryCopy(role: AccessoryRole, tier: EquipmentTier, baseSpee
  * Everything the character sheet needs to draw the three slots, derived fresh
  * from the tier on the sheet every time it is read.
  */
+/** What a bare armour-kind row calls itself. */
+export const BARE_SLOT_NAME = "Nothing worn";
+
 export function gearView(sheet: CharacterSheet): GearView | null {
   const definitions = slotsFor(sheet);
   if (!definitions || !isArchetypeId(sheet.archetypeId)) return null;
@@ -692,6 +715,21 @@ export function gearView(sheet: CharacterSheet): GearView | null {
     const def = definitions[role];
     const tier = tierOf(sheet, role);
     const bonus = BONUS_BY_TIER[tier];
+    if (slotIsBare(sheet, role)) {
+      return {
+        role,
+        slotLabel: slotLabelFor(def),
+        itemName: BARE_SLOT_NAME,
+        tier,
+        bonusKind: def.bonusKind,
+        bonus: 0,
+        active: false,
+        reason: "You wear no armour, so nothing is worn here.",
+        plain: "Nothing worn here. You wear no armour, so this adds nothing to your armour class: you are 10 plus your Dexterity modifier.",
+        technical: "SRD 5.1 unarmored: AC is 10 + the Dexterity modifier. A shield or armour you find and wear adds to it.",
+        empty: true,
+      };
+    }
     const resolved = status.find((s) => s.role === role);
     const active = resolved ? resolved.active : true;
     const reason = (active ? null : resolved?.reason) ?? null;
@@ -719,6 +757,7 @@ export function gearView(sheet: CharacterSheet): GearView | null {
       reason,
       plain: copy.plain,
       technical: copy.technical,
+      empty: false,
     };
   });
 

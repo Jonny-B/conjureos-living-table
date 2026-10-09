@@ -299,7 +299,7 @@ export function equipmentContextFor(sheet: CharacterSheet): EquipmentContext {
 // spell it identically. For the other two, plus any archetype whose fighting
 // style selects its alternate weapon, they are genuinely two, and pretending
 // otherwise printed sentences that were simply false: a legendary Sunstroke on
-// a Fireball Person logged "Sunstroke: 4 fire damage" against an attack the
+// a Mage logged "Sunstroke: 4 fire damage" against an attack the
 // engine had resolved as a Fire Bolt, and an Archery Knight's +1 was labelled
 // "Keen Longsword" on a thrown handaxe. Naming both is the only honest answer,
 // and it is one function so no readout can invent a sixth way to phrase it.
@@ -409,7 +409,10 @@ export function effectiveSpeedFt(sheet: CharacterSheet): number {
  * instead would double-count a pair that is already worn (60 becomes 120).
  */
 export function speedBeforeBootsFt(sheet: CharacterSheet): number {
-  return Math.max(0, DEFAULT_SPEED_FT - armorSpeedPenaltyFt(sheet));
+  // An ancestry's own base speed (25 for a dwarf, halfling or gnome) when the
+  // sheet carries one; the armour penalty then applies on top of it as ever.
+  const base = typeof sheet.speedFt === "number" && Number.isFinite(sheet.speedFt) && sheet.speedFt > 0 ? sheet.speedFt : DEFAULT_SPEED_FT;
+  return Math.max(0, base - armorSpeedPenaltyFt(sheet));
 }
 
 /** A legendary weapon's extra damage, rolled and typed, or null when the weapon slot is not legendary. */
@@ -438,7 +441,7 @@ export function legendaryRiderDamageFor(sheet: CharacterSheet, rng: () => number
   return {
     roll: resolveMagicWeaponRider(rider.bonusDamage, rng, critical),
     damageType: rider.damageType,
-    // `weaponIdentityFor().label`, not the item name alone. A Fireball Person
+    // `weaponIdentityFor().label`, not the item name alone. A Mage
     // with a legendary staff resolves their attack as a Fire Bolt, and a dice
     // log reading "Sunstroke: 4 fire damage" beside an attack line reading
     // "Fire Bolt" names a weapon that was never swung. The label names the
@@ -504,7 +507,8 @@ export function saveBonusSourcesFor(sheet: CharacterSheet, ability: keyof Abilit
 // token_drone) promised four creatures in the fiction and delivered one
 // creature four times in the mechanics. DESIGN.md's cut list says "more than
 // a handful of monster statblocks" is out of scope for launch, which means a
-// handful is IN scope; this is that handful.
+// handful is IN scope; this is that handful (the rats joined with the first
+// adventure, "The Rat Cellar").
 //
 // Licensing, because it constrains what may go in this table: the fantasy
 // pair are SRD 5.1 creatures used directly under the existing CC-BY-4.0
@@ -538,6 +542,39 @@ export interface MonsterStatblock {
  * carries (world/cell.ts's PlacedToken is {id, assetId, x, y, kind}).
  */
 export const MONSTER_STATBLOCKS: Record<string, MonsterStatblock> = {
+  // SRD 5.1, Rat (CR 0): AC 10, 1 hp (1d4 - 1), STR 2, DEX 11, CON 9,
+  // INT 2, WIS 10, CHA 4. Bite: +0 to hit, 1 piercing damage (a flat 1, no
+  // die). The SRD's Keen Smell is flavour the engine does not apply. A rat
+  // is hit by anything and dies to anything: the point of a cellar full of
+  // them is the count, not the one.
+  //
+  // FLAT DAMAGE: the SRD prints a flat 1, written here as "1" (the same text
+  // rules/bestiary.ts's rat carries, which test/livingtable-bestiary.test.ts
+  // matches character for character). rules/dice.ts `parseDiceNotation`
+  // accepts only "NdS" with at least one die of at least two sides, so it
+  // throws on "1" and on "1d1" alike; until it learns a bare integer, a rat
+  // bite rolled through `resolveDamage` throws (see the todo test in
+  // test/livingtable-armor-optional.test.ts).
+  token_rat: {
+    name: "Rat",
+    armorClass: 10,
+    maxHp: 1,
+    attackBonus: 0,
+    damageNotation: "1",
+    abilityModifiers: { str: -4, dex: 0, con: -1, int: -4, wis: 0, cha: -3 },
+  },
+  // SRD 5.1, Giant Rat (CR 1/8): AC 12, 7 hp (2d6), STR 7, DEX 15, CON 11,
+  // INT 2, WIS 10, CHA 4. Bite: +4 to hit, 1d4+2 piercing. The SRD's Keen
+  // Smell and Pack Tactics (advantage while an ally is next to the target)
+  // are traits the engine does not apply; the Bestiary lists them for the DM.
+  token_giant_rat: {
+    name: "Giant Rat",
+    armorClass: 12,
+    maxHp: 7,
+    attackBonus: 4,
+    damageNotation: "1d4+2",
+    abilityModifiers: { str: -2, dex: 2, con: 0, int: -4, wis: 0, cha: -3 },
+  },
   // SRD 5.1, Goblin (CR 1/4): AC 15 (leather armor, shield), 7 hp (2d6),
   // STR 8, DEX 14, CON 10, INT 10, WIS 8, CHA 8. Scimitar: +4 to hit,
   // 1d6+2 slashing. Fragile and quick: it dies to one good hit and it is

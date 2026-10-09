@@ -89,6 +89,7 @@ import {
   type AccessoryEffect,
   type AccessoryRole,
   type ArchetypeId,
+  type ArmorState,
   type BonusKind,
   type BonusSource,
   type Equipment,
@@ -114,6 +115,8 @@ export interface EquippedSheet {
   chassis: Chassis;
   abilities: AbilityScores;
   equipment?: Equipment;
+  /** "none" when the hero wears no armour and no shield. Absent reads as "class" (see `ArmorState`). */
+  armor?: ArmorState;
 }
 
 // ── reading what is equipped ───────────────────────────────────────────
@@ -172,14 +175,35 @@ export function equipmentOf(sheet: EquippedSheet): Equipment {
   return sheet.equipment ?? STARTING_LOADOUT;
 }
 
+/** True when this hero wears no armour and no shield (`sheet.armor` is "none"). Absent, or any other value, is the class's own armour. */
+export function isUnarmored(sheet: Pick<EquippedSheet, "armor">): boolean {
+  return sheet.armor === "none";
+}
+
+/**
+ * True when `role` is an armour-kind slot (the Knight's shield and plate, a
+ * Rogue's or wizard's cloak) that holds only the plain common piece AND the
+ * hero wears no armour: nothing is worn there. A magic piece in such a slot is
+ * a real worn item and makes this false. See `ArmorState` for why this is a
+ * reading of the sheet and not an empty storage slot.
+ */
+export function slotIsBare(sheet: EquippedSheet, role: GearRole): boolean {
+  if (!isUnarmored(sheet) || !isSlotRole(role)) return false;
+  if (slotDefinition(sheet, role)?.bonusKind !== "armor") return false;
+  const item = equipmentOf(sheet)[role];
+  return !item || !isEquipmentTier(item.tier) || item.tier === "common";
+}
+
 /**
  * The tier in one of the six gear roles, or `null` for an empty ring or
- * amulet slot -- the only two roles `equipmentOf` can ever leave unset. A
- * drawn role (weapon, outer, crown, boots) that is absent or holds something
- * this engine does not recognise reads as "common" (the +0 starting kit),
- * never as empty: the token is always drawn wearing something there.
+ * amulet slot, or for an armour-kind slot a hero with no armour has nothing
+ * worn in (`slotIsBare`). A drawn role (weapon, outer, crown, boots) that is
+ * absent or holds something this engine does not recognise reads as "common"
+ * (the +0 starting kit), never as empty: the token is always drawn wearing
+ * something there, except for the bare armour slots of an unarmored hero.
  */
 export function tierInSlot(sheet: EquippedSheet, role: GearRole): EquipmentTier | null {
+  if (slotIsBare(sheet, role)) return null;
   const item = equipmentOf(sheet)[role];
   if (item && isEquipmentTier(item.tier)) return item.tier;
   return isSheetOnlyRole(role) ? null : "common";
@@ -317,6 +341,8 @@ export const ARMOR_STRENGTH_BY_CHASSIS: Readonly<Record<Chassis, number>> = Obje
  * `session/combat.ts`'s `effectiveSpeedFt`, never a second source of it.
  */
 export function armorSpeedPenaltyFt(sheet: EquippedSheet): number {
+  // No armour on the body, no armour Strength requirement to miss.
+  if (isUnarmored(sheet)) return 0;
   const slots = slotsForArchetype(sheet.archetypeId);
   if (!slots) return 0;
   const wearsArmor = SLOT_ROLES.some((role) => slotIsWornArmor(slots[role]));
@@ -343,6 +369,8 @@ export interface SlotStatus {
   /** False when SRD 5.1 says this item's bonus does not apply right now (no hand for it) or contract v2's attunement cap says it doesn't (not one of the character's three). `reason` says which. */
   active: boolean;
   reason?: string;
+  /** True for an armour-kind slot with nothing worn in it (an unarmored hero's bare shield or armour slot). `name` is then the plain piece's name and is not worn; `bonus` is 0. */
+  empty?: boolean;
 }
 
 /** An equipped item whose bonus SRD 5.1 (or the attunement cap) is currently refusing. Exactly the subset of `equipmentStatus` a UI should surface, so a player is told rather than silently shorted. */
@@ -372,6 +400,19 @@ export function equipmentStatus(sheet: EquippedSheet, ctx: EquipmentContext): re
 
   return SLOT_ROLES.map((role) => {
     const definition = slots[role];
+    if (slotIsBare(sheet, role)) {
+      return {
+        role,
+        tier: "common",
+        definition,
+        name: definition.nameByTier[TIER_NAME_INDEX.common],
+        bonus: 0,
+        bonusKind: definition.bonusKind,
+        active: false,
+        reason: "You wear no armour, so nothing is worn here.",
+        empty: true,
+      } satisfies SlotStatus;
+    }
     const tier = tierInSlot(sheet, role) ?? "common";
     const bonus = BONUS_BY_TIER[tier];
     const name = definition.nameByTier[TIER_NAME_INDEX[tier]];

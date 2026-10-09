@@ -10,6 +10,7 @@
  * Run: npx tsx --test test/livingtable-loot.test.ts
  */
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { lootFor, lootDmNote, eligibleRolesFor } from "../src/games/livingtable/rules/loot";
 import {
@@ -183,4 +184,16 @@ test("lootDmNote: the pinned fact line, verbatim, for a find and for nothing", (
     lootDmNote(nothingRoll!, null, "the chest"),
     "the engine rolled loot from the chest and nothing magical turned up. Describe ordinary odds and ends if you like, never a magic item.",
   );
+});
+
+// ── searching a body from a distance: the hero walks up first ───────────
+
+test("the search of a body or pile from further than a square walks the hero up and searches on arrival, once, and never refuses at a distance", () => {
+  const src = readFileSync(new URL("../src/games/livingtable/table/flows/loot.ts", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("function openLootAt"), src.indexOf("/** A Take button of the open window"));
+  assert.match(fn, /walked = false/, "a second call after the walk cannot walk again");
+  assert.match(fn, /tc\.approachCost\(tile\)\.reachable/);
+  assert.match(fn, /tc\.walkThen\(tile, \(\) => openLootAt\(tile, true\)\)/);
+  assert.doesNotMatch(fn, /if \(tileDistance\(p\.heroAt, tile\) > 1\) return tc\.refuse\("Too far away\. Step next to it\."\);/, "no flat refusal at a distance any more");
+  assert.doesNotMatch(src, /\bbench\b/);
 });

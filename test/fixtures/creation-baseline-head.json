@@ -1,0 +1,2552 @@
+{
+ "knight|{\"fightingStyle\":\"defense\"}": {
+  "archetypeId": "knight",
+  "template": "fantasy",
+  "chassis": "fighter",
+  "displayName": "The Knight",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "str": 15,
+   "con": 14,
+   "dex": 13,
+   "wis": 12,
+   "cha": 10,
+   "int": 8
+  },
+  "modifiers": {
+   "str": 2,
+   "dex": 1,
+   "con": 2,
+   "int": -1,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 17,
+  "armorLabel": "chain mail",
+  "maxHp": 12,
+  "currentHp": 12,
+  "hitDieSides": 10,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Athletics",
+    "ability": "str",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Intimidation",
+    "ability": "cha",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "str",
+    "bonus": 4
+   },
+   {
+    "ability": "con",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Longsword",
+   "Shield",
+   "Chain mail",
+   "Handaxe x2",
+   "Explorer's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "fightingStyle": "defense"
+  },
+  "appliedEffects": [
+   {
+    "technical": "+1 AC while wearing armor.",
+    "plain": "+1 armour class, so an attack that needed 16 to hit you now needs 17. Every fight, all the time."
+   }
+  ],
+  "kitDescription": "Wade in, take the hits, swing hard. The most hit points and the best armour in the game, so you are the one who can afford to be wrong about a fight."
+ },
+ "knight|{\"fightingStyle\":\"dueling\"}": {
+  "archetypeId": "knight",
+  "template": "fantasy",
+  "chassis": "fighter",
+  "displayName": "The Knight",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "str": 15,
+   "con": 14,
+   "dex": 13,
+   "wis": 12,
+   "cha": 10,
+   "int": 8
+  },
+  "modifiers": {
+   "str": 2,
+   "dex": 1,
+   "con": 2,
+   "int": -1,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 16,
+  "armorLabel": "chain mail",
+  "maxHp": 12,
+  "currentHp": 12,
+  "hitDieSides": 10,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Athletics",
+    "ability": "str",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Intimidation",
+    "ability": "cha",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "str",
+    "bonus": 4
+   },
+   {
+    "ability": "con",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Longsword",
+   "Shield",
+   "Chain mail",
+   "Handaxe x2",
+   "Explorer's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "fightingStyle": "dueling"
+  },
+  "appliedEffects": [
+   {
+    "technical": "+2 damage on melee attacks with a one-handed weapon when no other weapon is in your other hand.",
+    "plain": "+2 damage on every hit with a one-handed weapon and nothing but a shield in your other hand."
+   }
+  ],
+  "kitDescription": "Wade in, take the hits, swing hard. The most hit points and the best armour in the game, so you are the one who can afford to be wrong about a fight."
+ },
+ "knight|{\"fightingStyle\":\"archery\"}": {
+  "archetypeId": "knight",
+  "template": "fantasy",
+  "chassis": "fighter",
+  "displayName": "The Knight",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "str": 15,
+   "con": 14,
+   "dex": 13,
+   "wis": 12,
+   "cha": 10,
+   "int": 8
+  },
+  "modifiers": {
+   "str": 2,
+   "dex": 1,
+   "con": 2,
+   "int": -1,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 16,
+  "armorLabel": "chain mail",
+  "maxHp": 12,
+  "currentHp": 12,
+  "hitDieSides": 10,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Athletics",
+    "ability": "str",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Intimidation",
+    "ability": "cha",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "str",
+    "bonus": 4
+   },
+   {
+    "ability": "con",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Longsword",
+   "Shield",
+   "Chain mail",
+   "Handaxe x2",
+   "Explorer's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "fightingStyle": "archery"
+  },
+  "appliedEffects": [
+   {
+    "technical": "+2 to attack rolls made with ranged weapons.",
+    "plain": "+2 to hit with a ranged weapon, which is two more shots landing in every ten, and you lead with the ranged one in your kit."
+   }
+  ],
+  "kitDescription": "Wade in, take the hits, swing hard. The most hit points and the best armour in the game, so you are the one who can afford to be wrong about a fight."
+ },
+ "knight|default": {
+  "archetypeId": "knight",
+  "template": "fantasy",
+  "chassis": "fighter",
+  "displayName": "The Knight",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "str": 15,
+   "con": 14,
+   "dex": 13,
+   "wis": 12,
+   "cha": 10,
+   "int": 8
+  },
+  "modifiers": {
+   "str": 2,
+   "dex": 1,
+   "con": 2,
+   "int": -1,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 17,
+  "armorLabel": "chain mail",
+  "maxHp": 12,
+  "currentHp": 12,
+  "hitDieSides": 10,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Athletics",
+    "ability": "str",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Intimidation",
+    "ability": "cha",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "str",
+    "bonus": 4
+   },
+   {
+    "ability": "con",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Longsword",
+   "Shield",
+   "Chain mail",
+   "Handaxe x2",
+   "Explorer's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "fightingStyle": "defense"
+  },
+  "appliedEffects": [
+   {
+    "technical": "+1 AC while wearing armor.",
+    "plain": "+1 armour class, so an attack that needed 16 to hit you now needs 17. Every fight, all the time."
+   }
+  ],
+  "kitDescription": "Wade in, take the hits, swing hard. The most hit points and the best armour in the game, so you are the one who can afford to be wrong about a fight."
+ },
+ "trooper|{\"fightingStyle\":\"defense\"}": {
+  "archetypeId": "trooper",
+  "template": "scifi",
+  "chassis": "fighter",
+  "displayName": "The Trooper",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "str": 14,
+   "dex": 15,
+   "con": 13,
+   "wis": 10,
+   "int": 12,
+   "cha": 8
+  },
+  "modifiers": {
+   "str": 2,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 0,
+   "cha": -1
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 17,
+  "armorLabel": "chain mail",
+  "maxHp": 11,
+  "currentHp": 11,
+  "hitDieSides": 10,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Athletics",
+    "ability": "str",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Perception",
+    "ability": "wis",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "str",
+    "bonus": 4
+   },
+   {
+    "ability": "con",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Plasma rifle",
+   "Combat vest",
+   "Frag grenade x2",
+   "Field kit"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "fightingStyle": "defense"
+  },
+  "appliedEffects": [
+   {
+    "technical": "+1 AC while wearing armor.",
+    "plain": "+1 armour class, so an attack that needed 16 to hit you now needs 17. Every fight, all the time."
+   }
+  ],
+  "kitDescription": "Shoot it before it reaches you, and hold up when it does. Rifle range plus armour: the same toughness as the Knight, spent from further away."
+ },
+ "trooper|{\"fightingStyle\":\"archery\"}": {
+  "archetypeId": "trooper",
+  "template": "scifi",
+  "chassis": "fighter",
+  "displayName": "The Trooper",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "str": 14,
+   "dex": 15,
+   "con": 13,
+   "wis": 10,
+   "int": 12,
+   "cha": 8
+  },
+  "modifiers": {
+   "str": 2,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 0,
+   "cha": -1
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 16,
+  "armorLabel": "chain mail",
+  "maxHp": 11,
+  "currentHp": 11,
+  "hitDieSides": 10,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Athletics",
+    "ability": "str",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Perception",
+    "ability": "wis",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "str",
+    "bonus": 4
+   },
+   {
+    "ability": "con",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Plasma rifle",
+   "Combat vest",
+   "Frag grenade x2",
+   "Field kit"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "fightingStyle": "archery"
+  },
+  "appliedEffects": [
+   {
+    "technical": "+2 to attack rolls made with ranged weapons.",
+    "plain": "+2 to hit with a ranged weapon, which is two more shots landing in every ten, and you lead with the ranged one in your kit."
+   }
+  ],
+  "kitDescription": "Shoot it before it reaches you, and hold up when it does. Rifle range plus armour: the same toughness as the Knight, spent from further away."
+ },
+ "trooper|default": {
+  "archetypeId": "trooper",
+  "template": "scifi",
+  "chassis": "fighter",
+  "displayName": "The Trooper",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "str": 14,
+   "dex": 15,
+   "con": 13,
+   "wis": 10,
+   "int": 12,
+   "cha": 8
+  },
+  "modifiers": {
+   "str": 2,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 0,
+   "cha": -1
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 17,
+  "armorLabel": "chain mail",
+  "maxHp": 11,
+  "currentHp": 11,
+  "hitDieSides": 10,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Athletics",
+    "ability": "str",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Perception",
+    "ability": "wis",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "str",
+    "bonus": 4
+   },
+   {
+    "ability": "con",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Plasma rifle",
+   "Combat vest",
+   "Frag grenade x2",
+   "Field kit"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "fightingStyle": "defense"
+  },
+  "appliedEffects": [
+   {
+    "technical": "+1 AC while wearing armor.",
+    "plain": "+1 armour class, so an attack that needed 16 to hit you now needs 17. Every fight, all the time."
+   }
+  ],
+  "kitDescription": "Shoot it before it reaches you, and hold up when it does. Rifle range plus armour: the same toughness as the Knight, spent from further away."
+ },
+ "shadow|{\"expertiseSkill\":\"Stealth\"}": {
+  "archetypeId": "shadow",
+  "template": "fantasy",
+  "chassis": "rogue",
+  "displayName": "The Rogue",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "int": 14,
+   "con": 13,
+   "wis": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 2,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 6,
+    "expertise": true
+   },
+   {
+    "skill": "Sleight of Hand",
+    "ability": "dex",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Shortsword",
+   "Shortbow, 20 arrows",
+   "Thieves' tools",
+   "Dark cloak",
+   "Burglar's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Stealth"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Stealth: your proficiency bonus counts twice on Stealth checks.",
+    "plain": "+2 on Stealth checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Get in, get the thing, get out before anything knows you were there. You pick one skill to be genuinely exceptional at, and fights are what happen when the plan didn't."
+ },
+ "shadow|{\"expertiseSkill\":\"Sleight of Hand\"}": {
+  "archetypeId": "shadow",
+  "template": "fantasy",
+  "chassis": "rogue",
+  "displayName": "The Rogue",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "int": 14,
+   "con": 13,
+   "wis": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 2,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Sleight of Hand",
+    "ability": "dex",
+    "bonus": 6,
+    "expertise": true
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Shortsword",
+   "Shortbow, 20 arrows",
+   "Thieves' tools",
+   "Dark cloak",
+   "Burglar's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Sleight of Hand"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Sleight of Hand: your proficiency bonus counts twice on Sleight of Hand checks.",
+    "plain": "+2 on Sleight of Hand checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Get in, get the thing, get out before anything knows you were there. You pick one skill to be genuinely exceptional at, and fights are what happen when the plan didn't."
+ },
+ "shadow|{\"expertiseSkill\":\"Deception\"}": {
+  "archetypeId": "shadow",
+  "template": "fantasy",
+  "chassis": "rogue",
+  "displayName": "The Rogue",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "int": 14,
+   "con": 13,
+   "wis": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 2,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Sleight of Hand",
+    "ability": "dex",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 4,
+    "expertise": true
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Shortsword",
+   "Shortbow, 20 arrows",
+   "Thieves' tools",
+   "Dark cloak",
+   "Burglar's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Deception"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Deception: your proficiency bonus counts twice on Deception checks.",
+    "plain": "+2 on Deception checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Get in, get the thing, get out before anything knows you were there. You pick one skill to be genuinely exceptional at, and fights are what happen when the plan didn't."
+ },
+ "shadow|default": {
+  "archetypeId": "shadow",
+  "template": "fantasy",
+  "chassis": "rogue",
+  "displayName": "The Rogue",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "int": 14,
+   "con": 13,
+   "wis": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 2,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 6,
+    "expertise": true
+   },
+   {
+    "skill": "Sleight of Hand",
+    "ability": "dex",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 2,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Shortsword",
+   "Shortbow, 20 arrows",
+   "Thieves' tools",
+   "Dark cloak",
+   "Burglar's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Stealth"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Stealth: your proficiency bonus counts twice on Stealth checks.",
+    "plain": "+2 on Stealth checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Get in, get the thing, get out before anything knows you were there. You pick one skill to be genuinely exceptional at, and fights are what happen when the plan didn't."
+ },
+ "infiltrator|{\"expertiseSkill\":\"Stealth\"}": {
+  "archetypeId": "infiltrator",
+  "template": "scifi",
+  "chassis": "rogue",
+  "displayName": "The Infiltrator",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "cha": 14,
+   "con": 13,
+   "int": 12,
+   "wis": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 0,
+   "cha": 2
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 6,
+    "expertise": true
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Investigation",
+    "ability": "int",
+    "bonus": 3,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Sidearm (suppressed)",
+   "Hacking rig",
+   "Holo-disguise kit",
+   "Grapnel line"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Stealth"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Stealth: your proficiency bonus counts twice on Stealth checks.",
+    "plain": "+2 on Stealth checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Talk your way past the guard you didn't need to fight. You pick one skill to be genuinely exceptional at, and you are most dangerous in the thirty seconds nothing has noticed you yet."
+ },
+ "infiltrator|{\"expertiseSkill\":\"Deception\"}": {
+  "archetypeId": "infiltrator",
+  "template": "scifi",
+  "chassis": "rogue",
+  "displayName": "The Infiltrator",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "cha": 14,
+   "con": 13,
+   "int": 12,
+   "wis": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 0,
+   "cha": 2
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 6,
+    "expertise": true
+   },
+   {
+    "skill": "Investigation",
+    "ability": "int",
+    "bonus": 3,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Sidearm (suppressed)",
+   "Hacking rig",
+   "Holo-disguise kit",
+   "Grapnel line"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Deception"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Deception: your proficiency bonus counts twice on Deception checks.",
+    "plain": "+2 on Deception checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Talk your way past the guard you didn't need to fight. You pick one skill to be genuinely exceptional at, and you are most dangerous in the thirty seconds nothing has noticed you yet."
+ },
+ "infiltrator|{\"expertiseSkill\":\"Investigation\"}": {
+  "archetypeId": "infiltrator",
+  "template": "scifi",
+  "chassis": "rogue",
+  "displayName": "The Infiltrator",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "cha": 14,
+   "con": 13,
+   "int": 12,
+   "wis": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 0,
+   "cha": 2
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Investigation",
+    "ability": "int",
+    "bonus": 5,
+    "expertise": true
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Sidearm (suppressed)",
+   "Hacking rig",
+   "Holo-disguise kit",
+   "Grapnel line"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Investigation"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Investigation: your proficiency bonus counts twice on Investigation checks.",
+    "plain": "+2 on Investigation checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Talk your way past the guard you didn't need to fight. You pick one skill to be genuinely exceptional at, and you are most dangerous in the thirty seconds nothing has noticed you yet."
+ },
+ "infiltrator|default": {
+  "archetypeId": "infiltrator",
+  "template": "scifi",
+  "chassis": "rogue",
+  "displayName": "The Infiltrator",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "dex": 15,
+   "cha": 14,
+   "con": 13,
+   "int": 12,
+   "wis": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 0,
+   "cha": 2
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 13,
+  "armorLabel": "leather armor",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Stealth",
+    "ability": "dex",
+    "bonus": 6,
+    "expertise": true
+   },
+   {
+    "skill": "Deception",
+    "ability": "cha",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Investigation",
+    "ability": "int",
+    "bonus": 3,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "dex",
+    "bonus": 4
+   },
+   {
+    "ability": "int",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Sidearm (suppressed)",
+   "Hacking rig",
+   "Holo-disguise kit",
+   "Grapnel line"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": null,
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {
+   "expertiseSkill": "Stealth"
+  },
+  "appliedEffects": [
+   {
+    "technical": "Expertise in Stealth: your proficiency bonus counts twice on Stealth checks.",
+    "plain": "+2 on Stealth checks on top of your training, and it doubles again every time your training grows."
+   }
+  ],
+  "kitDescription": "Talk your way past the guard you didn't need to fight. You pick one skill to be genuinely exceptional at, and you are most dangerous in the thirty seconds nothing has noticed you yet."
+ },
+ "healer|{}": {
+  "archetypeId": "healer",
+  "template": "fantasy",
+  "chassis": "cleric",
+  "displayName": "The Healer",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "wis": 15,
+   "con": 14,
+   "str": 13,
+   "cha": 12,
+   "dex": 10,
+   "int": 8
+  },
+  "modifiers": {
+   "str": 1,
+   "dex": 0,
+   "con": 2,
+   "int": -1,
+   "wis": 2,
+   "cha": 1
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 15,
+  "armorLabel": "chain shirt and shield",
+  "maxHp": 10,
+  "currentHp": 10,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Medicine",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Religion",
+    "ability": "int",
+    "bonus": 1,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "wis",
+    "bonus": 4
+   },
+   {
+    "ability": "cha",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Mace",
+   "Scale mail",
+   "Shield",
+   "Holy symbol",
+   "Priest's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   },
+   {
+    "name": "Healer's kit",
+    "uses": 3,
+    "effect": "heal",
+    "description": "Bandages, a needle and a steady hand: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "The hardest character here to actually put down: five uses of healing in your pack, more than double what any other archetype starts with, plus a mace and a shield for when they run out."
+ },
+ "healer|default": {
+  "archetypeId": "healer",
+  "template": "fantasy",
+  "chassis": "cleric",
+  "displayName": "The Healer",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "wis": 15,
+   "con": 14,
+   "str": 13,
+   "cha": 12,
+   "dex": 10,
+   "int": 8
+  },
+  "modifiers": {
+   "str": 1,
+   "dex": 0,
+   "con": 2,
+   "int": -1,
+   "wis": 2,
+   "cha": 1
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 15,
+  "armorLabel": "chain shirt and shield",
+  "maxHp": 10,
+  "currentHp": 10,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Medicine",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Religion",
+    "ability": "int",
+    "bonus": 1,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "wis",
+    "bonus": 4
+   },
+   {
+    "ability": "cha",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Mace",
+   "Scale mail",
+   "Shield",
+   "Holy symbol",
+   "Priest's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   },
+   {
+    "name": "Healer's kit",
+    "uses": 3,
+    "effect": "heal",
+    "description": "Bandages, a needle and a steady hand: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "The hardest character here to actually put down: five uses of healing in your pack, more than double what any other archetype starts with, plus a mace and a shield for when they run out."
+ },
+ "medic|{}": {
+  "archetypeId": "medic",
+  "template": "scifi",
+  "chassis": "cleric",
+  "displayName": "The Medic",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "wis": 15,
+   "dex": 14,
+   "con": 13,
+   "int": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 2,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 17,
+  "armorLabel": "chain shirt and shield",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Medicine",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Insight",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "wis",
+    "bonus": 4
+   },
+   {
+    "ability": "cha",
+    "bonus": 2
+   }
+  ],
+  "inventory": [
+   "Stun baton",
+   "Ceramic-plate vest",
+   "Trauma kit",
+   "Diagnostic scanner"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   },
+   {
+    "name": "Trauma kit",
+    "uses": 3,
+    "effect": "heal",
+    "description": "Clamps, sealant and a steady hand: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "You do not stay down. Five uses of field medicine in your kit, more than double what any other archetype starts with, and you read a wound or a lie with the same look."
+ },
+ "medic|default": {
+  "archetypeId": "medic",
+  "template": "scifi",
+  "chassis": "cleric",
+  "displayName": "The Medic",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "wis": 15,
+   "dex": 14,
+   "con": 13,
+   "int": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 2,
+   "con": 1,
+   "int": 1,
+   "wis": 2,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 17,
+  "armorLabel": "chain shirt and shield",
+  "maxHp": 9,
+  "currentHp": 9,
+  "hitDieSides": 8,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Medicine",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Insight",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "wis",
+    "bonus": 4
+   },
+   {
+    "ability": "cha",
+    "bonus": 2
+   }
+  ],
+  "inventory": [
+   "Stun baton",
+   "Ceramic-plate vest",
+   "Trauma kit",
+   "Diagnostic scanner"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   },
+   {
+    "name": "Trauma kit",
+    "uses": 3,
+    "effect": "heal",
+    "description": "Clamps, sealant and a steady hand: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "You do not stay down. Five uses of field medicine in your kit, more than double what any other archetype starts with, and you read a wound or a lie with the same look."
+ },
+ "fireball-person|{}": {
+  "archetypeId": "fireball-person",
+  "template": "fantasy",
+  "chassis": "wizard",
+  "displayName": "The Mage",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "int": 15,
+   "con": 14,
+   "dex": 13,
+   "wis": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 1,
+   "con": 2,
+   "int": 2,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 11,
+  "armorLabel": "unarmored",
+  "maxHp": 8,
+  "currentHp": 8,
+  "hitDieSides": 6,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Arcana",
+    "ability": "int",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Investigation",
+    "ability": "int",
+    "bonus": 4,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "int",
+    "bonus": 4
+   },
+   {
+    "ability": "wis",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Quarterstaff",
+   "Spellbook",
+   "Component pouch",
+   "Scholar's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "You end a fight early or you lose it. The hardest-hitting attack in the game and the fewest hit points to survive being wrong, so pick your ground and make the first one count."
+ },
+ "fireball-person|default": {
+  "archetypeId": "fireball-person",
+  "template": "fantasy",
+  "chassis": "wizard",
+  "displayName": "The Mage",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "int": 15,
+   "con": 14,
+   "dex": 13,
+   "wis": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 1,
+   "con": 2,
+   "int": 2,
+   "wis": 1,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 11,
+  "armorLabel": "unarmored",
+  "maxHp": 8,
+  "currentHp": 8,
+  "hitDieSides": 6,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Arcana",
+    "ability": "int",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Investigation",
+    "ability": "int",
+    "bonus": 4,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "int",
+    "bonus": 4
+   },
+   {
+    "ability": "wis",
+    "bonus": 3
+   }
+  ],
+  "inventory": [
+   "Quarterstaff",
+   "Spellbook",
+   "Component pouch",
+   "Scholar's pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Potion of healing",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Drink it and some of the damage stops mattering: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "You end a fight early or you lose it. The hardest-hitting attack in the game and the fewest hit points to survive being wrong, so pick your ground and make the first one count."
+ },
+ "psion|{}": {
+  "archetypeId": "psion",
+  "template": "scifi",
+  "chassis": "wizard",
+  "displayName": "The Psion",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "int": 15,
+   "wis": 14,
+   "con": 13,
+   "dex": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 1,
+   "con": 1,
+   "int": 2,
+   "wis": 2,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 11,
+  "armorLabel": "unarmored",
+  "maxHp": 7,
+  "currentHp": 7,
+  "hitDieSides": 6,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Arcana",
+    "ability": "int",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Insight",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "int",
+    "bonus": 4
+   },
+   {
+    "ability": "wis",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Neural focus",
+   "Light shield generator",
+   "Data slate",
+   "Ration pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "You never want anything within arm's reach, and you have the range not to need it. The hardest-hitting attack in the game and the fewest hit points behind it."
+ },
+ "psion|default": {
+  "archetypeId": "psion",
+  "template": "scifi",
+  "chassis": "wizard",
+  "displayName": "The Psion",
+  "name": "Test Hero",
+  "appearanceAssetId": "sprite-01",
+  "level": 1,
+  "abilities": {
+   "int": 15,
+   "wis": 14,
+   "con": 13,
+   "dex": 12,
+   "cha": 10,
+   "str": 8
+  },
+  "modifiers": {
+   "str": -1,
+   "dex": 1,
+   "con": 1,
+   "int": 2,
+   "wis": 2,
+   "cha": 0
+  },
+  "proficiencyBonus": 2,
+  "armorClass": 11,
+  "armorLabel": "unarmored",
+  "maxHp": 7,
+  "currentHp": 7,
+  "hitDieSides": 6,
+  "hitDiceRemaining": 1,
+  "skills": [
+   {
+    "skill": "Arcana",
+    "ability": "int",
+    "bonus": 4,
+    "expertise": false
+   },
+   {
+    "skill": "Insight",
+    "ability": "wis",
+    "bonus": 4,
+    "expertise": false
+   }
+  ],
+  "saves": [
+   {
+    "ability": "int",
+    "bonus": 4
+   },
+   {
+    "ability": "wis",
+    "bonus": 4
+   }
+  ],
+  "inventory": [
+   "Neural focus",
+   "Light shield generator",
+   "Data slate",
+   "Ration pack"
+  ],
+  "equipment": {
+   "weapon": {
+    "slot": "weapon",
+    "tier": "common"
+   },
+   "outer": {
+    "slot": "outer",
+    "tier": "common"
+   },
+   "crown": {
+    "slot": "crown",
+    "tier": "common"
+   },
+   "boots": {
+    "slot": "boots",
+    "tier": "common"
+   }
+  },
+  "consumables": [
+   {
+    "name": "Medfoam injector",
+    "uses": 2,
+    "effect": "heal",
+    "description": "Punch it against your leg and the wound seals: 2d4+2 hit points back."
+   }
+  ],
+  "spellSlots": {
+   "1": {
+    "max": 2,
+    "used": 0
+   }
+  },
+  "downed": false,
+  "stable": false,
+  "dead": false,
+  "deathSaves": {
+   "successes": 0,
+   "failures": 0
+  },
+  "longRestUsed": false,
+  "milestones": 0,
+  "choices": {},
+  "appliedEffects": [],
+  "kitDescription": "You never want anything within arm's reach, and you have the range not to need it. The hardest-hitting attack in the game and the fewest hit points behind it."
+ }
+}

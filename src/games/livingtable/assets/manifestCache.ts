@@ -24,7 +24,16 @@ import * as api from "../../../bridge/gamesApi";
 import type { LtAssetWire, LtTemplate } from "../../../bridge/gamesApi";
 import type { AssetManifest } from "../world/cell";
 import type { RenderManifest, SpriteAsset } from "../render/canvasRenderer";
-import type { AvailableAssetIds } from "../dm/promptBuilder";
+import { isUsableSpriteSize } from "../render/spritePixels";
+import { isRenderOnlyAssetId } from "../render/wallProfiles";
+import { isOpaqueAssetId } from "../world/visibility";
+
+/** Every tile, token and prop id a library has, as flat lists (the ids a written adventure or the DM may name). */
+export interface AvailableAssetIds {
+  tiles: string[];
+  tokens: string[];
+  props: string[];
+}
 
 export interface LoadedManifest {
   template: LtTemplate;
@@ -32,7 +41,7 @@ export interface LoadedManifest {
   world: AssetManifest;
   /** Feeds render/canvasRenderer.ts's renderCell. */
   render: RenderManifest;
-  /** Feeds dm/promptBuilder.ts's DmPromptArgs.availableAssetIds directly. */
+  /** The flat id lists the DM is offered. */
   availableAssetIds: AvailableAssetIds;
 }
 
@@ -40,6 +49,14 @@ interface WireManifest {
   template: LtTemplate;
   palette: unknown;
   assets: LtAssetWire[];
+  /**
+   * Source pixels per tile edge, when the library is drawn at something other
+   * than 16 (a 32 means 32x32 tiles and 32x48 tokens). Absent on every
+   * manifest served before the field existed, which therefore still reads as
+   * 16. Typed `unknown` because nothing shares a type with games-db across the
+   * wire; `adaptManifest` keeps it only when it is a usable size.
+   */
+  spriteSize?: unknown;
 }
 
 const memoryCache = new Map<LtTemplate, LoadedManifest>();
@@ -54,6 +71,11 @@ const memoryCache = new Map<LtTemplate, LoadedManifest>();
 // an already-cached v2 manifest would ever pick up on its own, so a
 // returning player would keep the pre-loot art generation until the cache
 // happened to expire, which reads exactly like this feature never shipped.
+// NOT bumped for the source-resolution field: `adaptManifest` reads an
+// optional `spriteSize` off the wire, and a cached manifest without one is a
+// self-consistent 16 px library. Bump this (v3 -> v4) in the same release that
+// starts serving a 32 px library, or returning players keep the cached 16 px
+// art and it reads exactly like the new art never shipped.
 const STORAGE_PREFIX = "livingtable:manifest:v3:";
 
 /** "#rrggbb" from an [r,g,b] byte triple, each channel clamped so a stray out-of-range value can't produce invalid CSS. */
@@ -88,18 +110,39 @@ export function adaptPalette(wirePalette: unknown): string[] {
  * Turn `ltAssetManifest`'s flat `assets` array (one entry per sprite,
  * `kind` telling tile/token/prop apart) plus its palette into the three
  * things the rest of the game actually consumes: the two manifest shapes
- * above, and the flat id lists dm/promptBuilder.ts's AvailableAssetIds
+ * above, and the flat id lists (AvailableAssetIds) the DM
  * needs (the DM is only allowed to reference an id that's actually here).
  */
 export function adaptManifest(wire: WireManifest): LoadedManifest {
   const world: AssetManifest = { tiles: {}, tokens: {}, props: {} };
   const render: RenderManifest = { palette: adaptPalette(wire.palette), tiles: {}, tokens: {}, props: {} };
+  // The resolution rides on the wire manifest, not on any one asset (a sprite's
+  // own pixel grid is its size; how many source pixels make a TILE is a
+  // property of the whole library). Left OFF when absent or unusable rather than
+  // written as 16, so a manifest from before the field existed adapts to exactly
+  // the object it always did.
+  if (isUsableSpriteSize(wire.spriteSize)) render.spriteSize = wire.spriteSize;
   const availableAssetIds: AvailableAssetIds = { tiles: [], tokens: [], props: [] };
 
   for (const asset of wire.assets) {
     const sprite: SpriteAsset = { pixels: asset.pixels };
+    // The wall-profile art is the renderer's and nobody else's: the joins, the
+    // jamb overlay and the side-on door leaves go into `render` and NOWHERE
+    // ELSE. Left out of `world`, naming one is rejected as an unknown asset
+    // (validateLayout, setDoorState, placeProp); left out of
+    // `availableAssetIds`, the prompt never lists one. That closes the hole at
+    // both ends, the same way the gear sprites are kept out of what the DM may
+    // place. They only ever arrive as tiles or props; any other kind is dropped.
+    if (isRenderOnlyAssetId(asset.assetId)) {
+      if (asset.kind === "tile") render.tiles[asset.assetId] = sprite;
+      else if (asset.kind === "prop") render.props[asset.assetId] = sprite;
+      continue;
+    }
     if (asset.kind === "tile") {
-      world.tiles[asset.assetId] = { walkable: asset.walkable };
+      // `opaque` is the sight flag, apart from walking (world/visibility.ts):
+      // the backend does not send one yet, so it is stamped from the asset id,
+      // which is why water is see-through here and a wall is not.
+      world.tiles[asset.assetId] = { walkable: asset.walkable, opaque: isOpaqueAssetId("tile", asset.assetId, asset.walkable) };
       render.tiles[asset.assetId] = sprite;
       availableAssetIds.tiles.push(asset.assetId);
     } else if (asset.kind === "token") {
@@ -121,7 +164,9 @@ export function adaptManifest(wire: WireManifest): LoadedManifest {
       // door_closed, tree and chest walkable:false, door_open and torch
       // true); without this line the flag was never set in the running game
       // and `setDoorState` changed a picture and nothing else.
-      world.props[asset.assetId] = { blocks: asset.walkable === false };
+      // `opaque` is separate from `blocks`: a chest blocks walking, not sight;
+      // a closed door blocks both.
+      world.props[asset.assetId] = { blocks: asset.walkable === false, opaque: isOpaqueAssetId("prop", asset.assetId, asset.walkable) };
       render.props[asset.assetId] = sprite;
       availableAssetIds.props.push(asset.assetId);
     }
