@@ -50,6 +50,19 @@ export interface CharacterState {
    * to the full pool for their level and subclass.
    */
   superiorityDice?: number;
+  /**
+   * A written campaign's story state (campaign/types.ts's StoryState), kept
+   * here as the app's own prior write and coerced against the module by
+   * campaign/engine.ts's `coerceStoryState` whenever it is read.
+   *
+   * It is campaign state, not character state, and it lives here for the
+   * reason `position` does: it shares this blob's persistence path, and
+   * games-db stores what the client computed without a second table. A new
+   * character rolled into the same campaign inherits it (LivingTable.tsx's
+   * PlayScreen picks it up from the campaign's other characters), so a death
+   * never rewinds the story. Absent on a campaign the AI planned.
+   */
+  story?: unknown;
 }
 
 const DEFAULT_POSITION: Position = { cx: 0, cy: 0 };
@@ -67,7 +80,7 @@ export function characterStateFromStats(stats: unknown): CharacterState {
   // the same way `position` already is: everything left over is cast to the
   // sheet, so a field that is NOT a sheet field must be named here or it ends
   // up masquerading as one.
-  const { position, conditions, superiorityDice, ...sheetFields } = rec;
+  const { position, conditions, superiorityDice, story, ...sheetFields } = rec;
   // `equipment`, `bag`, `itemCharges` and `lootLedger` are all sheet fields,
   // so they stay in `sheetFields` and ride back out through
   // `statsFromCharacterState` with everything else. What they need here is
@@ -95,6 +108,7 @@ export function characterStateFromStats(stats: unknown): CharacterState {
   if (typeof superiorityDice === "number" && Number.isFinite(superiorityDice)) {
     state.superiorityDice = Math.max(0, Math.floor(superiorityDice));
   }
+  if (story && typeof story === "object") state.story = story;
   return state;
 }
 
@@ -106,6 +120,7 @@ export function statsFromCharacterState(state: CharacterState): Record<string, u
     conditions: state.conditions ?? [],
   };
   if (state.superiorityDice !== undefined) stats.superiorityDice = state.superiorityDice;
+  if (state.story !== undefined) stats.story = state.story;
   return stats;
 }
 

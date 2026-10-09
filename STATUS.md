@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-30, repo set up; the game still also lives inside Conjure Games.
+Last updated: 2026-10-09, written campaigns (0.2.0); the game still also lives inside Conjure Games.
 
 ## Where the move stands
 
@@ -15,8 +15,15 @@ The Living Table is leaving Conjure Games for this repo. Owner decisions,
 6. The game stays inside Conjure Games until this app is live on the prod store; then the hub card points here.
 7. All rights reserved (not MIT).
 
+## Recently shipped
+
+- **Written campaigns (0.2.0).** Campaign, Acts, Arcs, Scenes, Encounters plus State, run by the DM rather than recited: truths with known/discoverable/secret gates, beats, outcomes, a villain clock the engine fires on scene count, act changes and endings, all reported by id in an optional `story` field on the DM turn and checked by `campaign/engine.ts`. First campaign: *The Quiet Under Blackstone* (fantasy, three acts, levels 1 to 3). Free to start. Authoring guide: `CAMPAIGN_TEMPLATE.md`.
+
 ## Next
 
 - Publishing: add the five Actions secrets (see the publish workflow's header), then the first publish per project.
 - The KayKit 3D-to-pixel trial is on the asset bench; the owner is judging whether it looks good enough to pursue.
 - Art hosting in Supabase Storage.
+- Written campaigns, not yet seen by a person: play Blackstone end to end on dev and watch whether the DM reports `story` ids reliably and whether the brief (20 to 30 KB a turn) is worth its size.
+- Written campaigns, next steps if it plays well: a player-facing journal (what they know, open problems), the AI planner producing this format instead of the four-line plan, and a second campaign (sci-fi).
+- Story state lives on the player character's `stats` blob (like `position`); a `game_campaigns` column would be its proper home once the backend is touched for something else.

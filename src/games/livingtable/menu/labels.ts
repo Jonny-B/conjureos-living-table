@@ -63,7 +63,13 @@ export const GAME_TAGLINE = "Real dice and the real SRD 5.1 tabletop rules, run 
  * D&D word, so they were the two nouns the game never explained.
  */
 export const NEW_CAMPAIGN_BLURB =
-  "Two credits to get playing: one for the DM to plan the story, one for it to build and open your first scene. Everything after that, moving and fighting and searching, is free.";
+  "Two credits to get playing: one for the DM to plan the story, one for it to build and open your first scene. A written campaign needs no planning, so it takes one. Everything after that, moving and fighting and searching, is free.";
+
+/** The heading over the written campaigns on the new-campaign screen (campaign/library.ts). */
+export const WRITTEN_CAMPAIGNS_HEADING = "Or start a written campaign";
+
+/** The busy line while a written campaign is being opened. No planning happens, so it must not say it does. */
+export const WRITTEN_CAMPAIGN_BUSY_LABEL = "Opening the campaign...";
 
 /** The sub-line under the planning spinner. Same no-jargon rule as the blurb above. */
 export const CAMPAIGN_PLANNING_SUB = "A story, the places it runs through, and someone worth meeting.";
@@ -87,6 +93,8 @@ export const CREDIT_BUYS = {
   buildRoom:
     "1 credit: the DM builds the room on the other side of this wall. Walking back into a room it has already built is free, forever.",
   talk: "1 credit: the DM reads what you typed and the world answers.",
+  startWritten:
+    "No credit to start: this story is already written, its places and its people waiting. Opening your first scene is 1 credit.",
 } as const;
 
 /**

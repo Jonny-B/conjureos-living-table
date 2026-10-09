@@ -91,6 +91,10 @@ import {
   DEATH_SAVE_DC,
 } from "./characters/health";
 import { generateCampaignArc } from "./campaignGenerator";
+import { findCampaignModule, writtenCampaignsFor } from "./campaign/library";
+import { arcOutlineFor, coerceStoryState, inheritStory, moduleRegionHints, stepStory } from "./campaign/engine";
+import { renderCampaignBrief } from "./campaign/brief";
+import type { CampaignModule } from "./campaign/types";
 import { loadManifest, type LoadedManifest } from "./assets/manifestCache";
 import { coerceRegionSketch, regionHints, type ArcOutline, type CampaignDetail, type CampaignSummary } from "./types";
 import {
@@ -193,6 +197,8 @@ import {
   GLOSSARY,
   NEW_CAMPAIGN_BLURB,
   SRD_ATTRIBUTION,
+  WRITTEN_CAMPAIGN_BUSY_LABEL,
+  WRITTEN_CAMPAIGNS_HEADING,
   attackLine,
   checkLine,
   explain,
@@ -408,11 +414,19 @@ function coerceArcOutline(v: unknown): ArcOutline {
   // planned cells with one line each on what is there. Carrying it through
   // here is what lets an unbuilt neighbour read as something the DM already
   // committed to rather than the literal word "unexplored" four times.
+  // `module` marks a written campaign (campaign/library.ts). Only the
+  // pointer is stored; the module itself ships in the app.
+  const moduleRec = rec.module && typeof rec.module === "object" ? (rec.module as Record<string, unknown>) : null;
+  const module =
+    moduleRec && typeof moduleRec.id === "string"
+      ? { id: moduleRec.id, version: typeof moduleRec.version === "number" ? moduleRec.version : 1 }
+      : undefined;
   return {
     throughline: typeof rec.throughline === "string" ? rec.throughline : "",
     beats,
     npcs,
     regionSketch: coerceRegionSketch(rec.regionSketch),
+    ...(module ? { module } : {}),
   };
 }
 
@@ -659,11 +673,12 @@ function CampaignListScreen({
 function NewCampaignScreen({ onExit, onCreated }: { onExit: () => void; onCreated: (id: string) => void }) {
   const [template, setTemplate] = useState<TemplateGenre>("fantasy");
   const [theme, setTheme] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<null | "planning" | "opening">(null);
   const [error, setError] = useState<string | null>(null);
+  const written = writtenCampaignsFor(template);
 
   const generate = async () => {
-    setBusy(true);
+    setBusy("planning");
     setError(null);
     try {
       const made = await generateCampaignArc(template, theme.trim() || undefined);
@@ -671,12 +686,30 @@ function NewCampaignScreen({ onExit, onCreated }: { onExit: () => void; onCreate
       onCreated(res.campaign.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
+      setBusy(null);
     }
   };
 
-  if (busy) {
+  // A written campaign needs no model call to start: the row stores a
+  // pointer to the module (campaign/engine.ts's arcOutlineFor) and the first
+  // paid turn is the same "Begin the scene" every campaign has.
+  const startWritten = async (module: CampaignModule) => {
+    setBusy("opening");
+    setError(null);
+    try {
+      const res = await api.ltCampaignCreate(module.template, module.premise.title, arcOutlineFor(module));
+      onCreated(res.campaign.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  };
+
+  if (busy === "planning") {
     return <Busy label="Planning the campaign..." sub={CAMPAIGN_PLANNING_SUB} />;
+  }
+  if (busy === "opening") {
+    return <Busy label={WRITTEN_CAMPAIGN_BUSY_LABEL} />;
   }
 
   return (
@@ -742,6 +775,26 @@ function NewCampaignScreen({ onExit, onCreated }: { onExit: () => void; onCreate
         Plan this campaign <CostBadge n={1} />
       </button>
       <p className="cui-muted lt-price-note">{CREDIT_BUYS.planCampaign}</p>
+      {written.length > 0 && (
+        <section className="lt-written">
+          <h3 className="cui-subheading">{WRITTEN_CAMPAIGNS_HEADING}</h3>
+          {written.map((m) => (
+            <div key={m.id} className="cui-card lt-written-card">
+              <strong>{m.premise.title}</strong>
+              <p className="cui-muted">{m.premise.hook}</p>
+              <button
+                type="button"
+                className="cui-button cui-button--secondary"
+                onClick={() => void startWritten(m)}
+                title={CREDIT_BUYS.startWritten}
+              >
+                Start this campaign
+              </button>
+              <p className="cui-muted lt-price-note">{CREDIT_BUYS.startWritten}</p>
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   );
 }
@@ -935,6 +988,11 @@ function PlayScreen({
         const row = campaignRes.characters.find((c) => c.id === characterId);
         if (!row) throw new Error("That character could not be found in this campaign.");
         const loaded = characterStateFromStats(row.stats);
+        // A written campaign's story is campaign state kept on a character,
+        // so a character rolled in after a death picks it up from the one
+        // before (campaign/engine.ts's inheritStory) instead of rewinding.
+        const storyState = inheritStory(row.id, campaignRes.characters.filter((c) => c.kind === "player"));
+        if (storyState !== undefined) loaded.story = storyState;
         // A campaign started before death saves, hit dice or milestones
         // existed comes back missing those fields; normalizeSheet fills them
         // rather than letting a tracker render against undefined.
@@ -1851,7 +1909,23 @@ export function PlaySession({
     () => getPlayspace(world, currentCell.cx, currentCell.cy, manifest.world),
     [world, currentCell, manifest.world],
   );
-  const hints = useMemo(() => regionHints(campaign.arcOutline), [campaign.arcOutline]);
+  // A written campaign (campaign/library.ts) runs from its module: the
+  // geography comes from its locations and the DM reads its brief instead of
+  // the four-line plan. A pointer to a module this build does not ship falls
+  // back to the stored outline, which arcOutlineFor filled in for exactly
+  // that case.
+  const campaignModule: CampaignModule | undefined = useMemo(
+    () => findCampaignModule(campaign.arcOutline.module?.id),
+    [campaign.arcOutline.module?.id],
+  );
+  const storyState = useMemo(
+    () => (campaignModule ? coerceStoryState(campaignModule, character.story) : undefined),
+    [campaignModule, character.story],
+  );
+  const hints = useMemo(
+    () => (campaignModule ? moduleRegionHints(campaignModule) : regionHints(campaign.arcOutline)),
+    [campaignModule, campaign.arcOutline],
+  );
   const offscreen: OffscreenCells | undefined = useMemo(
     () => getOffscreenCells(world, currentCell.cx, currentCell.cy, hints),
     [world, currentCell, hints],
@@ -2176,6 +2250,10 @@ export function PlaySession({
           template: campaign.template,
           campaignTitle: campaign.title,
           arcOutline: renderArcOutline(campaign.arcOutline),
+          campaignBrief:
+            campaignModule && storyState
+              ? renderCampaignBrief(campaignModule, storyState, { scene: sceneSeq, cx: currentCell.cx, cy: currentCell.cy })
+              : undefined,
           memoryContextBlock: buildDmContextBlock(workingMemory),
           playspace: space,
           currentCell: { cx: currentCell.cx, cy: currentCell.cy },
@@ -2275,7 +2353,22 @@ export function PlaySession({
         for (const refusal of rolls.refusals) noteToDm(refusal);
 
         if (builtNew) workingSheet = earnMilestone(workingSheet, "You have somewhere new to be.");
-        if (workingSheet !== sheet) updateCharacter({ ...character, sheet: workingSheet });
+
+        // A written campaign's state: what the DM reported this turn, checked
+        // against the module, then the world moving on by itself (the
+        // villain's clock, the act, an ending). Everything the engine did or
+        // refused goes to the next turn as an engine note, the same channel
+        // the combat and loot notes use. It rides the same character write as
+        // the sheet, so one turn is one save.
+        let nextStory: unknown = character.story;
+        if (campaignModule && storyState) {
+          const step = stepStory(campaignModule, storyState, turn.story, sceneSeq);
+          for (const line of step.notes) noteToDm(line);
+          if (JSON.stringify(step.state) !== JSON.stringify(storyState)) nextStory = step.state;
+        }
+        if (workingSheet !== sheet || nextStory !== character.story) {
+          updateCharacter({ ...character, sheet: workingSheet, story: nextStory });
+        }
 
         // Working memory: append this scene verbatim, persist it, then
         // condense the oldest scene once the tier threshold is exceeded.
@@ -2366,6 +2459,8 @@ export function PlaySession({
       ensurePlayerTokenPresent,
       sceneSeq,
       hints,
+      campaignModule,
+      storyState,
       namer,
       round,
       noteToDm,

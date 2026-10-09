@@ -342,6 +342,22 @@ body {
 .lt-new-card {
   border-style: dashed;
 }
+.lt-written {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-3);
+  margin-top: var(--cui-space-4);
+}
+.lt-written-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cui-space-2);
+  padding: var(--cui-space-4);
+}
+.lt-written-card p {
+  margin: 0;
+}
 
 .lt-choice {
   display: flex;

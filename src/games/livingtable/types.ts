@@ -33,6 +33,15 @@ export interface ArcOutline {
    * generic hint rather than break the campaign.
    */
   regionSketch?: RegionHint[];
+  /**
+   * Set only on a written campaign: which module from campaign/library.ts it
+   * runs. The module ships in the app rather than in this row (a whole
+   * campaign does not fit the row's size cap, and its ids are permanent, so
+   * a text fix reaches every saved campaign). Everything above is still
+   * filled in, so a campaign whose module is ever missing degrades to an
+   * ordinary planned one instead of failing to open.
+   */
+  module?: { id: string; version: number };
 }
 
 /** One planned cell: where it is, and one line on what is there. */

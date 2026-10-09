@@ -294,6 +294,8 @@ Extends the repo's existing rule (credits buy "more" and "mine", never
 - **Plan a campaign**, 1 credit, once per campaign. Not free like the daily:
   a campaign is personal, not a shared-globally puzzle, so there's no "first
   player of the day" to amortise it across.
+- **Start a written campaign**: free. Nothing is generated; the first paid
+  turn is the same "Begin the scene" every campaign has.
 - **A new scene the DM builds** (`assembleCell` on a stub), 1 credit.
   Re-entering an already-built cell is free, forever.
 - **A message you send the DM** (Talk / free text), 1 credit, same shape as
@@ -302,6 +304,44 @@ Extends the repo's existing rule (credits buy "more" and "mine", never
   layer is what makes this not read as a toll booth wearing a dice icon.
 - **Never charge for losing.** A character going down doesn't cost anything
   and doesn't end the campaign; SRD death saves apply.
+
+## Written campaigns: run, not recited
+
+Alongside the one-credit AI plan, a campaign can be written by hand
+(`src/games/livingtable/campaign/`, authoring guide in `CAMPAIGN_TEMPLATE.md`,
+worked example `modules/blackstone.ts`). The shape is
+Campaign, Acts, Arcs, Scenes, Encounters, plus State, and the rule is that a
+campaign is written as facts, situations and possible outcomes, never as a
+story:
+
+- **Truths** say what is true and who may know it: known, discoverable
+  (through listed routes), or secret (behind a gate the engine enforces).
+- **Beats** are things that must happen eventually; the DM chooses how, from
+  what the player is doing, once the beat's gate opens.
+- **Arcs** are problems with several **outcomes**, each setting flags and
+  shifting attitudes.
+- **The villain's clock** moves the world while the player is busy: steps
+  fire on scene count (DM turns) unless the player has stopped them first.
+
+The loop is Truth, Situation, Player Action, Resolution, State Change, and
+the split is the same as the dice: the DM narrates and reports what happened
+by id in an optional `story` field on its turn; `campaign/engine.ts` checks
+each id against the module and its gate, keeps the state, fires the clock,
+ends acts and reaches endings, and tells the DM what it did (or refused) as
+engine notes on the next turn. No extra model call and no extra charge.
+
+What the DM reads is `campaign/brief.ts`: every truth with its gate, the
+villain and what his clock does next, the factions, and only the current act
+in full. Detail follows the player: the people and scenes where they stand
+are printed in full, everything else in one line, which keeps the brief to
+roughly 20 to 30 KB a turn.
+
+Storage: the campaign row stores a pointer (`arcOutline.module`) plus an
+ordinary plan as a fallback; the module ships in the app, so its ids are
+permanent once played. Story state rides the player character's `stats` blob
+like `position` does, and a character rolled in after a death inherits it.
+`test/livingtable-campaign.test.ts` validates every module (references,
+unreachable gates, dashes) and plays Blackstone through to each ending.
 
 ## Assets: a code-defined library, not painted files
 

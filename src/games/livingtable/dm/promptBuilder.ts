@@ -115,6 +115,14 @@ export interface DmPromptArgs {
   campaignTitle: string;
   /** The private campaign/arc plan (DESIGN.md: game_campaigns.arcOutline). Guides pacing and what's around the corner; it's a plan to steer by, not a script to read aloud. */
   arcOutline: string;
+  /**
+   * A written campaign's brief (campaign/brief.ts): its truths, people,
+   * places, current act and live state. When present it takes the place of
+   * `arcOutline`, and the reply gains a "story" field the engine keeps the
+   * campaign's state from. Absent on a campaign the AI planned, which then
+   * reads exactly as it did before written campaigns existed.
+   */
+  campaignBrief?: string;
   /** Built by memory/contextBuilder.ts from the three working-memory tiers: tier 3 in full, tier 2 as a compact digest, tier 1 verbatim. Embedded as-is -- this module doesn't know or care how it was assembled, only that it's the DM's entire durable memory of the campaign. */
   memoryContextBlock: string;
   /**
@@ -482,6 +490,15 @@ function layoutConventions(template: GenreTemplate): string {
 }
 
 /**
+ * How a written campaign's state moves, taught only when there is one. The
+ * two closing rules are the same discipline the roll rules already teach: a
+ * clue behind a pending check has not been found yet, and a player's correct
+ * guess is not a secret coming out. The engine enforces the gates; it cannot
+ * enforce timing, so that half is said here.
+ */
+const STORY_RULES = `"story" is how this written campaign's state moves, and it rides this turn at no extra cost. Report, by id from the brief above, what happened THIS turn and nothing else: {"beats":["beat ids that just happened"],"clues":["clue ids the player just found"],"learned":["truth ids the player just learned, from someone's mouth or from evidence in their hands"],"outcomes":["outcome ids an arc just reached"],"attitudes":[{"id":"npc or faction id","attitude":"hostile|unfriendly|wary|neutral|friendly|allied"}],"dead":["npc ids of anyone who died this turn"]}. Leave out any list with nothing in it, and leave "story" out entirely on a turn where nothing moved. The engine keeps the state and moves the world by itself: it fires the villain's clock, ends acts and reaches endings, and it refuses a beat, truth or outcome whose gate has not opened, and tells you why on your next turn. Two rules it cannot check for you: something behind a pending roll has not happened yet, so report it on the turn the roll comes back a success, never on the turn you ask for it; and a secret the player has guessed is not learned until someone or something in the world confirms it.`;
+
+/**
  * Build the full system prompt for one DM turn. Every field in `args` gets
  * embedded; nothing here is invented or assumed. The caller (dmTurn.ts)
  * rebuilds this fresh before every `completeJson` call, so it always
@@ -492,6 +509,7 @@ export function buildDmSystemPrompt(args: DmPromptArgs): string {
     template,
     campaignTitle,
     arcOutline,
+    campaignBrief,
     memoryContextBlock,
     playspace,
     currentCell,
@@ -507,8 +525,11 @@ export function buildDmSystemPrompt(args: DmPromptArgs): string {
 You are the dungeon master for one ongoing tabletop campaign, run entirely through JSON turns. ${TEMPLATE_VOICE[template]}
 
 Campaign: "${campaignTitle}"
-Your private plan for this campaign (guide your pacing and what's around the corner with it -- never read it aloud, never let a player see it):
-${arcOutline}
+${
+  campaignBrief
+    ? `This is a WRITTEN campaign, and below is everything you need to run it. It is private: never read any of it aloud, never let the player see it.\n${campaignBrief}`
+    : `Your private plan for this campaign (guide your pacing and what's around the corner with it -- never read it aloud, never let a player see it):\n${arcOutline}`
+}
 
 WHAT YOU CONTROL, AND WHAT YOU DON'T:
 You narrate the world and decide what NPCs and monsters do. You do NOT decide whether an attack hits, whether a save succeeds, whether a check clears its DC, or how much damage lands -- those are dice, and the dice belong to the engine, never to you. When an outcome depends on a roll, request the roll via "rollRequests" and stop there for that outcome; do not narrate a hit, a miss, a success, or a failure yourself, not even provisionally, not even as flavor. The resolved result will be told to you as established fact at the start of your NEXT turn, and only then may you narrate its consequences. You also never invent an effect outside the action vocabulary below -- if it isn't one of these six action types, it doesn't happen in the world model, no matter how the narration reads.
@@ -520,7 +541,7 @@ ${NARRATION_RULES}
 COMBAT OUTCOMES MUST CITE THE ROLL THAT DECIDED THEM: a "moveToken" or "removeToken" whose reason is "combat" -- a killing blow, a knockout, a forced retreat, anything a fight actually decided -- must carry a "resolvedRollId" naming one of the ids under RESOLVED ROLLS below. That is enforced, not just requested, and checked four ways: (1) the id must actually be there, never the "id" of a roll you are ONLY NOW requesting in this same turn's "rollRequests" -- that roll has no result yet, so it cannot decide anything yet; (2) each resolved roll may be cited ONCE per turn -- one roll decides one outcome, not several tokens' fates; (3) the roll must have decided this direction of outcome -- an attack only justifies acting on a hit (a miss decides nothing), a save's bad effect only justifies acting on a FAILED save (a successful save resists it), and a check's attempted action only justifies acting on a SUCCESSFUL check; (4) the roll must concern the token you're moving or removing -- an attack's target is its "against" token (always named -- an attack roll is never untargeted), a save or check's subject is whoever rolled it, its "by" token. If the roll that would justify a combat move or removal hasn't resolved, or resolved the wrong way, request it (or a fresh one) and stop: narrate the swing, not its outcome, and leave that token where it is until next turn tells you what actually happened. Moving or removing a token for any OTHER reason -- an NPC stepping aside, someone walking toward a door, a companion following along -- is reason "staging" and needs no roll at all. Reason "staging" is not a way around the citation rule: if a token you are moving or removing is the "by" or "against" of a roll under RESOLVED ROLLS below that decided an outcome, that IS a combat outcome and must be tagged reason "combat" with that roll cited, even if you would rather call it something else.
 
 REPLY WITH ONLY THIS JSON, no prose, no markdown fence, no text before or after it:
-{"narration":"what happens, in second person, addressed to the player","actions":[...world actions, in the order they should apply, can be empty...],"rollRequests":[...only if a roll is actually needed this turn...],"menuHint":["Move","Attack",...only the command-menu entries that make sense right now...],"memoryFacts":[...only what must survive the rest of the campaign, can be omitted...]}
+{"narration":"what happens, in second person, addressed to the player","actions":[...world actions, in the order they should apply, can be empty...],"rollRequests":[...only if a roll is actually needed this turn...],"menuHint":["Move","Attack",...only the command-menu entries that make sense right now...],"memoryFacts":[...only what must survive the rest of the campaign, can be omitted...]${campaignBrief ? `,"story":{...only what moved in the written campaign this turn, can be omitted...}` : ""}}
 
 Each entry in "actions" must be exactly one of these six shapes:
 ${ACTION_SHAPES}
@@ -540,7 +561,7 @@ Five rules on rollRequests the engine enforces, so write to them rather than aro
 ${ROLL_RULES}
 
 "memoryFacts" is optional and rides this turn at no extra cost: it is how the permanent campaign record gets written by the one thing that actually knows what just happened, instead of being guessed at later from your prose. Add an entry only for something that must still matter ten scenes from now, at most 6 per turn, each {"category":"npc|promise|item|event|thread","key":"the entity's name, written EXACTLY as it appears in PERMANENT CAMPAIGN FACTS below if it is already listed there, otherwise its plain name","fact":"one line, or a small object","status":"the real current state"}. Every key already on record is printed below, one per line, as a dash then the key then its status in square brackets, so read the key off that list rather than inventing a slug for something already named there. "status" carries state, not bookkeeping: {"category":"promise","key":"Maren","fact":"The party swore to bring Maren the chart back.","status":"outstanding, due the new moon"} or {"category":"npc","key":"Harrow","fact":"Harrow the ferryman.","status":"dead, killed by the party at the bridge"}. Reuse the same "key" when a fact changes and it updates in place.
-${renderCharacter(character)}
+${campaignBrief ? `\n${STORY_RULES}\n` : ""}${renderCharacter(character)}
 
 WHAT YOU REMEMBER ABOUT THIS CAMPAIGN:
 ${memoryContextBlock}
