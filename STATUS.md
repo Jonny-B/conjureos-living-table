@@ -1,6 +1,21 @@
 # Status
 
-Last updated: 2026-10-03, the real game window is ported into `src/` and the app runs it as a sealed standalone game (0.9.0, branch `port/table-window`).
+Last updated: 2026-10-08, the bug bash is built and checked: 0.10.0 on branch `bugbash/13`, waiting for the owner's go to deploy.
+
+## 0.10.0, the bug bash (issue #13, branch `bugbash/13`)
+
+The owner's thirty items from playing 0.9.0 are built (item 7, the 3D art, is out of scope). What a player gets is in `CHANGELOG_NEXT.md`; the calls behind it are in DECISIONS.md (2026-10-08).
+
+- **Layout and fit** (1, 2, 3, 26, 27): `table/stageFit.ts`; the board fills the stage at every size from 320 px to 4K and in full screen; the dice tray floats over the stage at 720 px and under; no text selection, no browser menu, no ResizeObserver window errors.
+- **Menus and actions** (8 to 11, 14, 20, 21, 23, 28): left click walks, right click or long press opens the actions menu with a text line; Talk and Look closer walk first; rats can be harvested; one game Menu with six tabs and a stat preview; End turn automatically in Settings.
+- **Text and story** (12, 13, 17, 18, 19, 30): a story screen for unrequested story, a standoff band for the DM box, no pop-up strip, Cancel while the DM thinks.
+- **Way in** (4, 5, 6, 24, 25, 29): splash, main menu, Knight Rogue Mage and a swipeable hero choice, name first in the maker, test rooms on dev builds only (`src/buildTarget.ts`).
+- **Board** (15, 16, 22): one thing, one name; no hints; open exits ringed; slain creatures drawn.
+- **Code**: `mountTable.ts` (347 lines) and the overlay and HUD are split into `table/flows/`, `table/ui/` modules; `TableCtx` (`table/tableCtx.ts`) is the shared context. The module map is in the header of each file.
+- **Checks**: `npm test` all pass, `npm run typecheck` clean, `npm run adventures:check` ok, `npm run build` writes `dist/living-table.html`, `node scripts/e2e/run.mjs` all specs pass (new: layout, menu-actions, board, text, hero, start, menu, integration), and `node scripts/e2e/walk.mjs` tours the game at eight window sizes with a screenshot of every screen (`.cache/bench-shots/bb-<step>-<size>.png`).
+- **Not part of the e2e**: the bench play scripts in `.cache/*.cjs` that drive the removed ask box, the Sheet button or click-to-act no longer apply; the e2e specs replace them (see the integration notes on issue #13).
+
+Owner steps for 0.10.0: approve, then the orchestrator commits, pushes `dev` (the publish workflow stamps the dev target, so the test rooms show on the dev store) and later `main` (prod, no test rooms). Check on the dev store: Fullscreen, a long press on a real phone, and the splash.
 
 ## The port (branch `port/table-window`, 0.9.0)
 

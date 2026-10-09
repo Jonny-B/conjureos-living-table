@@ -2,6 +2,37 @@
 
 Cross-cutting calls, newest first. Terse: what, why, what it touches. STATUS.md says where the project is; this says why it is that way.
 
+## 2026-10-08 (bug bash, issue #13, 0.10.0)
+
+The owner played 0.9.0 from the dev store and left thirty items (issue #13). Owner calls first, then the defaults taken where the owner left a question open. Every one touches the files named; the per-item story is on the issue.
+
+### Left click walks, right click or a long press opens the actions menu (items 21, 28, 10, 20)
+A left click or a tap selects and walks, to the square or beside the thing on it, and never acts. Everything else (attack, talk, look closer, use, loot, search, harvest, free text) starts from the menu a right click or a 500 ms press opens. The menu's last line is a text box (Space types, Enter sends) and a send names the clicked thing to the DM. Talk and Look closer walk up first ("Walks 15 ft first"); the old ask box, Attack, Use, Potion, Go/Search and Cancel buttons are gone from the side panel. A turn ends by itself when nothing is left to do (Settings, on by default). Touches: `flows/input.ts`, `flows/board.ts`, `flows/menuFlow.ts`, `ui/contextMenu.ts`, `session/contextActions.ts`, `turnEnd.ts`.
+
+### One in-game menu, and the main menu in front of it (items 14, 24, 29)
+Menu has six tabs inside the stage: Character (was Sheet), Inventory (a paper doll of the equipped slots, an 18 place bag, and a stat preview on hover or first tap, then Equip), Journal, Log, Saves, Settings. Rest stays a direct action. The window opens on a main menu (Continue, New game, Load, Settings, Licence and credits) after a splash; New game saves a live game first as a manual save ("before a new game"; manual, not checkpoint, because automatic checkpoints would push it out of the three slots; it is skipped when the newest such save is this same unchanged game); there is no New character mid game. No Pantry or Recipes splash exists to copy, so the splash is the game's own: pixel title, a turning d20, "Setting the table...". Touches: `flows/gameMenuFlow.ts`, `ui/gameMenu.ts`, `ui/menuViews.ts`, `menu/statPreview.ts`, `flows/mainMenu.ts`, `ui/mainMenu.ts`, `Splash.tsx`.
+
+### Story the player did not ask for gets a screen of its own (items 12, 17, 18, 19)
+A place's read-aloud and a scene opening show on a centred story panel; the world is locked until it is read; the normal DM box is hidden. The story screen covers the stage only, so the side panel and the page bar stay reachable (default; the owner may want the whole page). The normal DM box has a reserved band outside the board (`--lto-dock`, `--lto-top-band` for the turn strip and banners), so no text covers the hero. The pop-up strip is deleted; a refusal is said as DM text. Touches: `ui/story.ts`, `ui/dialogue.ts`, `flows/act.ts`.
+
+### Cancel exists only while waiting for the DM, and says nothing about money (items 13, 30)
+Cancel stands beside the DM's dots until the first word types; it aborts the call, drops the reply, changes nothing in the world, and the player is still charged (no refund, and no credit or price text anywhere; the platform's credit icon says it). Touches: `flows/dmFlow.ts`, `ui/dialogue.ts`, `menu/labels.ts`.
+
+### Test rooms show on dev builds only (item 5)
+`src/buildTarget.ts` is `"prod"` in the repo; the publish workflow rewrites it to `"dev"` for a dev publish and fails the step if the rewrite did not take. `testRoomsVisible(target, hostname)` also shows them on localhost and 127.0.0.1 so local play and the e2e still list them. Touches: `src/buildTarget.ts`, `table/host/gameHost.ts`, `.github/workflows/publish-store.yml`.
+
+### Knight, Rogue and Mage; a swipeable hero choice; a new character starts with its name (items 6, 25)
+Display names only; archetype ids stay knight, shadow, fireball-person. The hero choice is a strip of slides (doll in basic gear from the hand made pixel art, never the 3D art, plus a Default stats toggle). The maker asks for the name first (required), then a class or a blank sheet; `creationOptions().defaults.name` stays "Adventurer" because tests and class previews build from it, and the wizard clears it. Touches: `characters/`, `ui/heroEnding.ts`, `ui/heroPreview.ts`, `ui/sheet.ts`.
+
+### The board draws what is there and no hints (items 15, 16, 22, 23)
+Parts of one thing (a well, a cottage, the bed) are one feature and one name (`propGroups.ts`). The marks are the walk path, one neutral ring, and red where the hero cannot go; an open exit is one gold ring with its label, a locked one red. A slain creature lies on its side where it fell (no gold glint). Rats and giant rats can be harvested for a pelt (Survival DC 8, a failure spoils the carcass); that content is a default the owner can veto by deleting two cases in `harvestFor` (`rules/corpses.ts`). Look closer on a creature, yourself or bare floor does not walk first; only things do. Touches: `propGroups.ts`, `flows/board.ts`, `stage.ts`, `rules/corpses.ts`.
+
+### The whole game fits phones, tablets and every desktop (items 1, 2, 3, 26, 27)
+`stageFit.ts` measures the stage and draws the board at the largest whole zoom that fits, CSS-sized to fill it; the tray column sits beside the stage above 720 px and under it at 720 and below; at 720 and below the dice tray floats over the stage while a roll is on; under 520 px (and when it fills its row) the side panel condenses to the title, the move left and the hit points. The page is a play surface: no text selection, no browser menu on a press, no drag. ResizeObserver work is deferred a frame so the loop warning never reaches the page, and the e2e harness fails any spec that sees a window error event. Kept as built: a 320 px phone shows the whole 20 by 15 board (squares about 14 px); a portrait tablet at 768 keeps the column beside the stage. Touches: `stageFit.ts`, `tableStyle.ts`, `ui/dice.ts`, `src/app.css`, `src/main.tsx`.
+
+### Other defaults
+The "AI written" pill stays on AI written cards (the hand written pill and the draft count are gone). The faint movement range tint on a fight turn stays. The selection ring stays until the next click, a new place or the hero standing on it. The Inventory's seventh slot is read-only "Base armour"; there are no gloves, belt or shoulders slots. The bundle grew 1.12 percent in the module split (header comments and imports); accepted, with stripping the per-file headers from the bundle as the fix if it matters. Player-facing words are guarded by `test/livingtable-no-dev-words.test.ts` and `test/livingtable-no-price-text.test.ts` (the Licence and credits menu entry is the attribution, not a price).
+
 ## 2026-10-03
 
 ### The Living Table is a standalone sealed app, not registered in Conjure Games yet

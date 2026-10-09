@@ -2,7 +2,7 @@
 
 Moved from Conjure Games' DESIGN.md (the "The Living Table (fifth game)" section) when the game got its own repo on 2026-09-30. Headings are one level up; the text is unchanged. Where it says "the fifth game" or refers to the hub's other games, read it as history.
 
-**Current scope (2026-09-30).** The art is moving to Kay Lousberg's free KayKit packs, so only what they can draw is playable: the Fantasy template with the Knight, the Shadow and the wizard. Sci-fi is paused and the Healer is out of play; both remain in the code and in the notes below. `PLAYABLE_TEMPLATES` and `PLAYABLE_ARCHETYPE_IDS` in `characters/templates.ts` are the switch.
+**Current scope (2026-09-30).** The art is moving to Kay Lousberg's free KayKit packs, so only what they can draw is playable: the Fantasy template with the Knight, the Rogue and the Mage (shown to players as Knight, Rogue and Mage since 0.10.0; the archetype ids stay knight, shadow and fireball-person). Sci-fi is paused and the Healer is out of play; both remain in the code and in the notes below. `PLAYABLE_TEMPLATES` and `PLAYABLE_ARCHETYPE_IDS` in `characters/templates.ts` are the switch.
 
 
 **The pitch.** A real AI dungeon master, d20s, ability scores, saves,
@@ -196,9 +196,9 @@ Four archetypes per template, same mechanical chassis reskinned, proof that
 | Fantasy | Sci-fi | Chassis |
 |---|---|---|
 | The Knight | The Trooper | Fighter |
-| The Shadow | The Infiltrator | Rogue |
+| The Rogue (id shadow) | The Infiltrator | Rogue |
 | The Healer | The Medic | Cleric |
-| The Fireball Person | The Psion | Wizard |
+| The Mage (id fireball-person) | The Psion | Wizard |
 
 Pick a template, then name it, pick an appearance from the tile set, pick one
 or two flavour choices, then play, under two minutes, no point-buy, no

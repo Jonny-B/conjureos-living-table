@@ -293,6 +293,16 @@ jobs:
           GAMES_DB_URL: https://${{ steps.target.outputs.ref }}.supabase.co/functions/v1/games-db
         run: |
           node -e "const fs=require('fs');const p=require('./package.json');p.conjureos.remoteActions.gamesDb.url=process.env.GAMES_DB_URL;fs.writeFileSync('./package.json',JSON.stringify(p,null,2)+'\n');console.log('stamped gamesDb url ->',process.env.GAMES_DB_URL);"
+          # The game also needs to know which project it is, so the two test rooms show on dev builds only (src/buildTarget.ts).
+          # The committed value is prod; only a dev publish rewrites it, and the step fails if the rewrite did not take.
+          if [ "${{ steps.target.outputs.env }}" = "dev" ]; then
+            sed -i 's/^\(export const BUILD_TARGET: "prod" | "dev" = \)"prod";/\1"dev";/' src/buildTarget.ts
+            grep -q 'BUILD_TARGET: "prod" | "dev" = "dev";' src/buildTarget.ts || { echo "::error::src/buildTarget.ts was not stamped to dev."; exit 1; }
+            echo "stamped build target -> dev"
+          else
+            grep -q 'BUILD_TARGET: "prod" | "dev" = "prod";' src/buildTarget.ts || { echo "::error::src/buildTarget.ts is not the prod default."; exit 1; }
+            echo "build target stays prod"
+          fi
 
       # ── First-ever publish ────────────────────────────────────────────────
       # The composite action can only register a NEW VERSION of an app whose
