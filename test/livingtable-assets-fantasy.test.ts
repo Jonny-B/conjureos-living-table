@@ -277,7 +277,7 @@ test("the character band is frozen at its post-chroma baseline, so no sprite rec
   //
   // It was broken deliberately, exactly once, by the chroma pass. The measured
   // problem: mean chroma (max channel minus min) over every opaque pixel ran
-  // Knight 34, Shadow 43, Healer 43, Fireball Person 46, against Final
+  // Knight 34, Rogue 43, Healer 43, Mage 46, against Final
   // Fantasy's own field sprites at 57 (Terra), 63 (Cecil), 68 (Bartz). Our
   // figures also matched their own ground in VALUE (grass mean L93 against a
   // Knight at L89), so the only thing separating a character from the field was
@@ -617,8 +617,8 @@ test("a token's dark mass is PAINTED shade, counted with the derived outline thr
 test("a token carries colour, not a grey figure held together by its rim", () => {
   // Mean chroma (max channel minus min) over every opaque pixel. Final
   // Fantasy's own field sprites measure 57 (FF6 Terra), 63 (FF4 Cecil) and 68
-  // (FF5 Bartz). This roster measured Knight 34, Shadow 43, Healer 43,
-  // Fireball Person 46: 30 to 45 per cent less saturated, and sitting at the
+  // (FF5 Bartz). This roster measured Knight 34, Rogue 43, Healer 43,
+  // Mage 46: 30 to 45 per cent less saturated, and sitting at the
   // same luminance as their own ground (grass mean L93 against a Knight at
   // L89), so the only thing separating a figure from the field was the black
   // rim. The floor is set under FF's own worst, not at our old best.
@@ -636,7 +636,7 @@ test("a token carries colour, not a grey figure held together by its rim", () =>
 
   // And the accent clause, which is what actually stops a figure reading as
   // grey: every archetype needs a genuinely saturated area (the Knight's
-  // surcoat, the Healer's stole, the Shadow's sash), not just an average
+  // surcoat, the Healer's stole, the Rogue's sash), not just an average
   // nudged up by a wash.
   for (const id of FANTASY_BODY_IDS) {
     const accent = byId(id).pixels.flat().filter((v) => v !== -1 && chromaSpan(v) >= 120).length;
@@ -819,8 +819,8 @@ test("no two tokens share a silhouette", () => {
       // hat to fit all of them. What is left to differ with is build, and
       // standing humanoids inside a 14-column usable width overlap on their
       // whole core. Measured across a deliberate redesign (a fourteen-column
-      // Knight, a Shadow that is a smaller person and starts two rows lower, an
-      // A-line Healer, a straight-column Fireball Person) the worst pair is
+      // Knight, a Rogue that is a smaller person and starts two rows lower, an
+      // A-line Healer, a straight-column Mage) the worst pair is
       // 0.83, against 0.95 before it. The distinctness that survives is carried
       // by the PROFILE, which the next test measures, and by headgear and held
       // objects, which are now separate layers rather than drawn into the body.
@@ -2151,7 +2151,7 @@ const SKIN_INDICES = new Set([4, 36, 37]);
  * from all four of its opaque neighbours by at least 40. That is deliberately
  * palette-agnostic rather than a list of eye indices, because this roster draws
  * eyes four different ways: skin-set darks on the Knight and the Healer, ember
- * dots inside the Shadow's hood, leaf-light dots inside the rare hood, and an
+ * dots inside the Rogue's hood, leaf-light dots inside the rare hood, and an
  * outline slit in the legendary mask named Facelessness. All four are a face;
  * a flat helm with nothing in it is not.
  */
@@ -2189,11 +2189,11 @@ test("no tier of any archetype's kit paints out the face it is worn on", () => {
   for (const id of FANTASY_ARCHETYPES) {
     // The reference is the COMMON kit, not the bare body, and that is the whole
     // shape of the rule: "an upgrade may not take away a face you could see
-    // before". The Shadow is why. Its crown slot IS its hood, so even at common
+    // before". The Rogue is why. Its crown slot IS its hood, so even at common
     // it covers all twelve of the skin pixels its bare head carries and hands
     // back two ember eyes instead; measured against the bare body that would
     // read as a defect, and it is the character. Measured against common it
-    // reads as what it is, and the Shadow is then carried entirely by clause 1,
+    // reads as what it is, and the Rogue is then carried entirely by clause 1,
     // which is the right answer: the rule is "a kit may not delete a face", not
     // "every face must be skin".
     const commonSkin = visibleFaceSkin(id, "common");

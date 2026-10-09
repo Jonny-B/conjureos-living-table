@@ -1,6 +1,6 @@
 /**
  * The game's side of the table window's settings (TableHost.settings): the text style,
- * roll-it-myself, the dice skin and the board zoom, kept in localStorage under the
+ * roll-it-myself, the dice skin, the board zoom and end-turn-by-itself, kept in localStorage under the
  * table's own key (see gameStorage.ts for the envelope and the version field).
  *
  * `get()` always returns a complete, valid TableSettings: a stored value that is the
@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: Readonly<TableSettings> = Object.freeze({
   rollMyself: true,
   diceSkin: "bone",
   zoom: null,
+  autoEndTurn: true,
 });
 
 /** The zoom the board offers, whole steps. */
@@ -35,6 +36,7 @@ export function validSettings(raw: unknown): Partial<TableSettings> {
   if (typeof r.textSpeed === "string" && (TEXT_SPEEDS as readonly string[]).includes(r.textSpeed)) out.textSpeed = r.textSpeed as TextSpeed;
   if (typeof r.rollMyself === "boolean") out.rollMyself = r.rollMyself;
   if (typeof r.diceSkin === "string" && r.diceSkin.length > 0 && r.diceSkin.length <= 64) out.diceSkin = r.diceSkin;
+  if (typeof r.autoEndTurn === "boolean") out.autoEndTurn = r.autoEndTurn;
   if (r.zoom === null) out.zoom = null;
   else if (typeof r.zoom === "number" && Number.isInteger(r.zoom) && r.zoom >= ZOOM_MIN && r.zoom <= ZOOM_MAX) out.zoom = r.zoom;
   return out;

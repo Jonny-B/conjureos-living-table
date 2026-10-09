@@ -462,7 +462,7 @@ export const benchHost: TableHost = {
     address: () => (typeof location === "undefined" ? "" : location.hash),
     sandboxRooms: true,
     debugExport: true,
-    build: { app: `Living Table ${APP_VERSION}`, bench: `${APP_VERSION} (the Play tab of the bench)` },
+    build: { app: `Living Table ${APP_VERSION}`, detail: `${APP_VERSION} (the Play tab of the bench)` },
   },
 };
 

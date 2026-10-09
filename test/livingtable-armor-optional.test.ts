@@ -57,7 +57,7 @@ function bare(id: string, items?: string[]): CharacterSheet {
 
 // ── 1. unarmored AC ─────────────────────────────────────────────────────
 
-test("an unarmored Knight, Shadow and Fireball Person are AC 10 + DEX with nothing slowing them", () => {
+test("an unarmored Knight, Rogue and Mage are AC 10 + DEX with nothing slowing them", () => {
   for (const hero of HEROES) {
     const sheet = bare(hero.id);
     const expected = 10 + sheet.modifiers.dex;
@@ -281,7 +281,7 @@ test("the worn plate slot offers Unequip on a Knight in armour, and a bare one o
   assert.equal(unequipItem(none, "armor").refused, NO_ARMOR_WORN_REASON);
 });
 
-test("a Shadow takes the leather armor off by its armour slot and the worn ref reads", () => {
+test("a Rogue takes the leather armor off by its armour slot and the worn ref reads", () => {
   const shadow = make("shadow");
   const un = itemActionsFor(shadow, { where: "worn", slot: "armor" }, CALM);
   assert.equal(un[0]!.id, "unequip");
@@ -290,7 +290,7 @@ test("a Shadow takes the leather armor off by its armour slot and the worn ref r
   const off = unequipItem(shadow, "armor");
   assert.equal(off.refused, undefined);
   assert.equal(off.sheet.armorClass, 10 + shadow.modifiers.dex);
-  assert.ok(off.sheet.inventory.includes("Leather armor"), "added to the list because the Shadow's kit never named it");
+  assert.ok(off.sheet.inventory.includes("Leather armor"), "added to the list because the Rogue's kit never named it");
   const back = equipItem(off.sheet, { where: "carried", name: "Leather armor" });
   assert.equal(back.sheet.armorClass, shadow.armorClass);
   assert.equal(back.sheet.armor, undefined);
@@ -332,7 +332,7 @@ test("a magic piece worn in the body-armour slot of a bare hero makes them armou
   assert.equal(slotIsBare(on.sheet, "outer"), false, "the plain shield reads as worn again with armour on");
   assert.ok(effectiveArmorClass(on.sheet) > make("knight").armorClass, "the magic bonus is paid on top");
 
-  // A magic cloak on a bare Shadow is a real piece and pays out; the hero stays unarmored.
+  // A magic cloak on a bare Rogue is a real piece and pays out; the hero stays unarmored.
   const shadow: CharacterSheet = { ...bare("shadow"), bag: [{ slot: "outer", tier: "uncommon" }] };
   const cloak = equipItem(shadow, { where: "bag", index: 0 });
   assert.equal(cloak.refused, undefined, cloak.line);

@@ -392,9 +392,9 @@ export interface CreateCharacterInput {
  *   armor "class"  the archetype's own armour (today's behaviour).
  *   armor "none"   no armour, no shield: SRD unarmored AC, 10 + DEX. The
  *                  armour-kind gear slots (the Knight's shield and plate, a
- *                  Shadow's or wizard's cloak) read as bare; the class weapon
+ *                  Rogue's or wizard's cloak) read as bare; the class weapon
  *                  (the Knight's longsword, the wizard's quarterstaff focus,
- *                  the Shadow's shortblade) is kept. The pack is `items`
+ *                  the Rogue's shortblade) is kept. The pack is `items`
  *                  (default empty) and the healing potions are `potions`
  *                  (default 0). Defense is not offered as a fighting style.
  *
@@ -1179,8 +1179,10 @@ function defaultClassSkills(archetype: Archetype): string[] {
 /**
  * Everything the creation wizard offers for one archetype, with a COMPLETE
  * default input (the archetype's own scores, Human, its own skills, the first
- * option of every class choice) so "Begin" works from any step. Throws on an
- * unknown archetype, as creationChoicesFor does.
+ * option of every class choice). The name is a placeholder for callers that
+ * build a hero straight from it; the creation wizard starts with no name
+ * instead (table/ui/sheet.ts initialDraft), because a hero has to be named.
+ * Throws on an unknown archetype, as creationChoicesFor does.
  */
 export function creationOptions(archetypeId: string): {
   classSkills: { count: number; from: string[] };
@@ -1222,6 +1224,15 @@ export function previewCharacter(input: CreateCharacterInput): { sheet: Characte
   }
 }
 
+/** The current display name of an archetype, or undefined when this build has no such archetype. */
+function archetypeDisplayName(archetypeId: string): string | undefined {
+  try {
+    return getArchetype(archetypeId).displayName;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Fill in any field a stored sheet predates.
  *
@@ -1239,6 +1250,8 @@ export function normalizeSheet(sheet: CharacterSheet): CharacterSheet {
   const level = typeof sheet.level === "number" && sheet.level > 0 ? sheet.level : 1;
   const normalized: CharacterSheet = {
     ...sheet,
+    // The class name is the archetype's, not what the save was written with: a hero saved as "The Shadow" reads "The Rogue" now. A class this build does not know keeps its stored name.
+    displayName: archetypeDisplayName(sheet.archetypeId) ?? sheet.displayName,
     level,
     hitDiceRemaining: typeof sheet.hitDiceRemaining === "number" ? sheet.hitDiceRemaining : level,
     downed: sheet.downed === true,

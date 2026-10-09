@@ -178,7 +178,7 @@ function bundle(over: Partial<AdventureBundle> = {}): AdventureBundle {
     format: ADVENTURE_FORMAT,
     version: ADVENTURE_VERSION,
     exportedAt: "2026-10-02T15:00:00.000Z",
-    build: { app: "0.1.2", bench: "bench-7", userAgent: "TestAgent/1.0" },
+    build: { app: "0.1.2", detail: "build-7", userAgent: "TestAgent/1.0" },
     settings: { music: false, difficulty: "normal" },
     character: { name: "Mira", class: "rogue", level: 3 },
     scene: { id: "goblin-cave", width: 12, height: 9 },
@@ -278,7 +278,8 @@ test("README names the files, the build, sharing, and warns about secrets", () =
     assert.ok(r.includes(name), name);
   }
   assert.match(r, /App build: 0\.1\.2/);
-  assert.match(r, /Bench build: bench-7/);
+  assert.match(r, /Game build: build-7/);
+  assert.doesNotMatch(r, /Bench build/);
   assert.match(r, /HOW TO SHARE/);
   assert.match(r, /world's secrets/);
   assert.match(r, /3 DM exchanges/);

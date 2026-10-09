@@ -39,12 +39,12 @@ export interface TipContent {
   /** A short line set apart right under the title, in the accent colour: "Cannot be used", "Worn". What the thing is to you right now. */
   lead?: string;
 }
-export type TipStyle = "pixel" | "storybook" | "bench";
+export type TipStyle = "pixel" | "storybook" | "plain";
 
 export interface TipOptions {
   /** The box the tip must stay inside (the game window). Default: the viewport. */
   boundary?: HTMLElement;
-  /** The look. A function is read each time the tip opens, for a surface that can change style. Default "bench". */
+  /** The look. A function is read each time the tip opens, for a surface that can change style. Default "plain". */
   style?: TipStyle | (() => TipStyle);
   /** Mouse hover and keyboard focus only: a tap on a touch screen does nothing here (the caller gives the tap its own meaning). Default false. */
   hoverOnly?: boolean;
@@ -203,14 +203,14 @@ const TIP_CSS = `
 :root[data-theme="dark"] .lt-tip[data-style="storybook"][data-tone="magic"]{--tt-accent:#c9a6ff}
 :root[data-theme="dark"] .lt-tip[data-style="storybook"] .lt-tip-foot{border-top-color:#c79d4566}
 
-.lt-tip[data-style="bench"]{--tt-btn:var(--bn-bg,#f6f4ef);--tt-bg:var(--bn-panel,#fff);--tt-ink:var(--bn-text,#1d1b16);--tt-muted:var(--bn-muted,#6c6656);--tt-edge:var(--bn-line,#ddd7c9);--tt-accent:var(--bn-text,#1d1b16);border-radius:8px;
+.lt-tip[data-style="plain"]{--tt-btn:var(--bn-bg,#f6f4ef);--tt-bg:var(--bn-panel,#fff);--tt-ink:var(--bn-text,#1d1b16);--tt-muted:var(--bn-muted,#6c6656);--tt-edge:var(--bn-line,#ddd7c9);--tt-accent:var(--bn-text,#1d1b16);border-radius:8px;
   box-shadow:0 6px 20px rgb(0 0 0/.25);font:13px/1.45 ${SANS}}
-.lt-tip[data-style="bench"][data-tone="good"]{--tt-accent:#2a7d45}
-.lt-tip[data-style="bench"][data-tone="bad"]{--tt-accent:var(--bn-danger,#b3311d)}
-.lt-tip[data-style="bench"][data-tone="magic"]{--tt-accent:var(--bn-accent,#6d4fe0)}
-.lt-tip[data-style="bench"] .lt-tip-foot{font-size:12px}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lt-tip[data-style="bench"][data-tone="good"]{--tt-accent:#6fd68f}}
-:root[data-theme="dark"] .lt-tip[data-style="bench"][data-tone="good"]{--tt-accent:#6fd68f}
+.lt-tip[data-style="plain"][data-tone="good"]{--tt-accent:#2a7d45}
+.lt-tip[data-style="plain"][data-tone="bad"]{--tt-accent:var(--bn-danger,#b3311d)}
+.lt-tip[data-style="plain"][data-tone="magic"]{--tt-accent:var(--bn-accent,#6d4fe0)}
+.lt-tip[data-style="plain"] .lt-tip-foot{font-size:12px}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lt-tip[data-style="plain"][data-tone="good"]{--tt-accent:#6fd68f}}
+:root[data-theme="dark"] .lt-tip[data-style="plain"][data-tone="good"]{--tt-accent:#6fd68f}
 
 .lt-tip-lead{margin:0 0 5px;font-weight:700;color:var(--tt-accent)}
 .lt-tip[data-style="storybook"] .lt-tip-lead{font-style:italic}
@@ -344,7 +344,7 @@ const INTERACTIVE = "button,a[href],input,select,textarea,summary,[role=button],
 export function attachTip(el: HTMLElement, content: TipContent | (() => TipContent), opts: TipOptions = {}): () => void {
   if (typeof document === "undefined") return () => {};
   attached.get(el)?.();
-  const resolveStyle = (): TipStyle => (typeof opts.style === "function" ? opts.style() : (opts.style ?? "bench"));
+  const resolveStyle = (): TipStyle => (typeof opts.style === "function" ? opts.style() : (opts.style ?? "plain"));
   const resolveContent = (): TipContent => (typeof content === "function" ? content() : content);
 
   const addedTabindex = !el.hasAttribute("tabindex") && el.tabIndex < 0;
@@ -646,7 +646,7 @@ function cardButton(a: ItemCardAction, n: number, press: (id: string) => void): 
 export function attachItemCard(el: HTMLElement, content: () => ItemCardContent, onAction: (id: string) => void, opts: TipOptions = {}): () => void {
   if (typeof document === "undefined") return () => {};
   cardAttached.get(el)?.();
-  const resolveStyle = (): TipStyle => (typeof opts.style === "function" ? opts.style() : (opts.style ?? "bench"));
+  const resolveStyle = (): TipStyle => (typeof opts.style === "function" ? opts.style() : (opts.style ?? "plain"));
 
   let state: CardState = CARD_CLOSED;
   let current: ItemCardContent | null = null;

@@ -151,8 +151,9 @@ const SACK_ROWS = ["...oo...", "..obbo..", "..otto..", ".obbbbo.", "obhbbbso", "
 const SACK_COLOURS: Readonly<Record<string, string>> = { o: "#3a2414", b: "#b98d52", h: "#dcb877", s: "#8a6232", t: "#b0382f" };
 
 /**
- * What lies on the ground, drawn over the board on the marks canvas: a sack on every square with a pile, and a small gold
- * glint on a body that has not been searched yet. Only squares the hero has seen (the fog is under this canvas, not over it).
+ * What lies on the ground, drawn over the board on the marks canvas: a sack on every square with a pile. A body is not marked:
+ * it is drawn lying where it fell (stage.ts), and the board gives no hints about what can be done with it. Only squares the hero
+ * has seen (the fog is under this canvas, not over it).
  */
 export function drawLootMarks(ctx: CanvasRenderingContext2D, p: PlayState, ts: number): void {
   const u = ts / 16;
@@ -168,13 +169,6 @@ export function drawLootMarks(ctx: CanvasRenderingContext2D, p: PlayState, ts: n
         if (colour) px(7 + rx, 8 + ry, 1, 1, colour, q.at);
       }
     });
-  }
-  for (const b of p.bodies) {
-    if (b.looted || sightLevel(p, b.at) === 0) continue;
-    // A four-point glint in the top right corner of the square.
-    px(12, 1, 1, 3, "#ffd34c", b.at);
-    px(11, 2, 3, 1, "#ffd34c", b.at);
-    px(12, 2, 1, 1, "#fff6dc", b.at);
   }
 }
 

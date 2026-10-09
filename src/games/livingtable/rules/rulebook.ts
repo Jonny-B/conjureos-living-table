@@ -225,7 +225,7 @@ const KNIGHT_BARE = createCharacter({ archetypeId: "knight", name: "Example", ap
 const KNIGHT_IN_MAIL = sampleHero("knight", { fightingStyle: "dueling" });
 const KNIGHT_PERCEPTION = skillModifierFor(KNIGHT, "Perception");
 /**
- * Fire Bolt twice over. Through the Attack button the Fireball Person swings it as a weapon (session/combat.ts
+ * Fire Bolt twice over. Through the Attack button the Mage swings it as a weapon (session/combat.ts
  * weaponDamageNotationFor: the die plus the Intelligence modifier, plus a magic weapon's bonus); through Cast it is
  * the spell (menu/casting.ts SPELL_EFFECTS: the die alone).
  */
@@ -348,8 +348,8 @@ const HOW_TO_PLAY: RuleSection = {
     ),
     // menu/commandMenu.ts COMMAND_VERBS; the game screen's Inventory and Character sheet buttons, the bench's pack key (assets.ts, key "i")
     p(`The game's buttons are ${COMMAND_VERBS.join(", ")}. The Pack button (key I on the bench, the Inventory button in the game screen) shows what you wear and carry, and on the bench the Sheet button (key C) shows your character sheet, where New character makes a new one.`),
-    // menu/commandMenu.ts resolveMenuAction: a move into an unassembled neighbour is the one local verb routed to the DM (1 credit)
-    p("Moving, attacking, casting, searching, using items, resting and levelling are all worked out by the engine on your own device, and none of them costs anything. The one exception is in the game: a step out of the room into a room nobody has built yet asks the DM to build it, and that costs 1 credit. Talking to the DM, typing what you try and looking closer also ask it."),
+    // menu/commandMenu.ts resolveMenuAction: a move into an unassembled neighbour is the one local verb routed to the DM 
+    p("Moving, attacking, casting, searching, using items, resting and levelling are all worked out by the rules on your own device, with no DM needed. The one exception is in the game: a step out of the room into a room nobody has built yet asks the DM to build it. Talking to the DM, typing what you try and looking closer also ask it."),
     note("Where this book says \"The DM rules on this\", the engine has no number behind it and the DM decides what it does in the story. Where it says \"The game applies this\", the engine adds the number for you."),
     note("On the asset bench the Play tab's window shows Attack (F), Use (E), Potion (Q) and End turn (T) as buttons. The game has the full verb list above."),
   ],
@@ -369,16 +369,16 @@ const YOUR_CHARACTER: RuleSection = {
       ["Ability", "Skills", "What else uses it"],
       [
         ["Strength", SKILLS_BY_ABILITY.str.join(", "), `The Knight's attack and damage. Chain mail needs Strength ${CHAIN_MAIL_STRENGTH}, or your speed drops by ${HEAVY_ARMOR_SPEED_PENALTY_FT} ft.`],
-        ["Dexterity", SKILLS_BY_ABILITY.dex.join(", "), "Initiative, Armor Class in light armor or none, the Shadow's attack and damage."],
+        ["Dexterity", SKILLS_BY_ABILITY.dex.join(", "), "Initiative, Armor Class in light armor or none, the Rogue's attack and damage."],
         ["Constitution", SKILLS_BY_ABILITY.con.join(", ") || "none", "Hit points at every level, and what a short rest heals."],
-        ["Intelligence", SKILLS_BY_ABILITY.int.join(", "), "The Fireball Person's attack, damage, spell attack and spell save DC."],
+        ["Intelligence", SKILLS_BY_ABILITY.int.join(", "), "The Mage's attack, damage, spell attack and spell save DC."],
         ["Wisdom", SKILLS_BY_ABILITY.wis.join(", "), "Perception, which Search uses."],
         ["Charisma", SKILLS_BY_ABILITY.cha.join(", "), "Skills only. Nothing else on the sheet reads it yet."],
       ],
     ),
     // rules/abilities.ts proficiencyBonus
     p(`Proficiency bonus is ${signed(proficiencyBonus(1))} at level 1 and stays ${signed(proficiencyBonus(LEVEL_CAP))} at level ${LEVEL_CAP}. It is added to your attack rolls, to the skills and saving throws you are trained in, to your spell attack and to your spell save DC.`),
-    p("A trained skill adds your proficiency bonus to its ability modifier. An untrained skill adds only the modifier. Expertise (the Shadow picks one skill for it) adds your proficiency bonus twice. You can roll any of the 18 skills, trained or not; the sheet lists the ones you are trained in. No skill can be trained twice: if your class, your background or your ancestry already gives you one, the creator refuses it from the second."),
+    p("A trained skill adds your proficiency bonus to its ability modifier. An untrained skill adds only the modifier. Expertise (the Rogue picks one skill for it) adds your proficiency bonus twice. You can roll any of the 18 skills, trained or not; the sheet lists the ones you are trained in. No skill can be trained twice: if your class, your background or your ancestry already gives you one, the creator refuses it from the second."),
     p("Each class is trained in two saving throws. A saving throw you are trained in adds your proficiency bonus; the others add only the ability modifier."),
     p("Armor Class (AC) is the number an attack has to meet or beat to hit you. It comes from your armor:"),
     list(
@@ -464,7 +464,7 @@ const EXPLORING: RuleSection = {
     p(`Walking: on the asset bench you click a square and your hero walks there, and the route round anything in the way is found for you; in the game screen you step N, E, S or W, one square a press. Outside a fight there is no limit to how far you walk. In a fight you have ${SPEED_FT} ft (${SPEED_SQUARES} squares) a turn. You cannot walk through a wall, a shut door or another creature, and a diagonal step cannot squeeze between two solid corners that touch.`),
     p("Doors: a shut door blocks walking and blocks sight, for you and for monsters. In the game the DM opens and closes doors when you try them. A monster cannot open a shut door, so it waits at it unless the DM opens it."),
     note("On the asset bench you stand next to a door and press Use to open or close it, and the DM can also lock and unlock one. A locked door says \"Locked.\" and stays shut."),
-    p("Leaving the room through an exit takes you to the next room. In the game, if nobody has built that room yet, the DM builds it as you arrive, and that step costs 1 credit. Stepping through an exit also ends the fight on your side: the creatures stay in the room you left, and a new fight starts if you come back. Rooms you have been in stay as you left them."),
+    p("Leaving the room through an exit takes you to the next room. In the game, if nobody has built that room yet, the DM builds it as you arrive. Stepping through an exit also ends the fight on your side: the creatures stay in the room you left, and a new fight starts if you come back. Rooms you have been in stay as you left them."),
     p("Search: use Search on a chest or anything else that might hold something. It is a Perception check against that prop's DC. In the game you can search any prop in the room from where you stand: there is no walking up to it, and in a fight it does not use your action. A success finds what is there, and a chest also rolls loot. A failure only means you did not find it: you can search again. A prop you have found something in has nothing more to give."),
     note("On the asset bench the chest simply opens when you use it, with no check. In the game, Search is the check above."),
     p("Sight is a rule, not decoration. Walls, shut doors, trees, buildings, pillars, stacked crates and pipe columns block sight. Water, chasms, chests, tables, beds, fences, open doors and stairs do not. Sight is symmetric: if you can see a creature, it can see you. A look cannot slip through a crack where two solid corners touch."),
@@ -592,7 +592,7 @@ const EQUIPMENT: RuleSection = {
       EQUIPMENT_TIERS.map((tier) => [tierWord(tier), signed(BONUS_BY_TIER[tier])]),
     ),
     p(`A weapon's bonus adds to both its attack roll and its damage. An armor piece's bonus adds to your Armor Class. A saving-throw piece's bonus adds to every saving throw. All the bonuses to Armor Class from your gear together never add more than ${signed(MAX_TOTAL_AC_BONUS)}, and to saving throws never more than ${signed(MAX_TOTAL_SAVE_BONUS)}. Bonuses to skill checks never add more than ${signed(MAX_TOTAL_CHECK_BONUS)}. No magic bonus is above ${signed(MAGIC_ITEM_BONUS_MAX)}.`),
-    p("A legendary weapon also rolls extra damage dice of its own type on every hit (radiant for the Knight's, poison for the Shadow's, fire for the Fireball Person's). The extra dice are doubled on a critical hit."),
+    p("A legendary weapon also rolls extra damage dice of its own type on every hit (radiant for the Knight's, poison for the Rogue's, fire for the Mage's). The extra dice are doubled on a critical hit."),
     p("A shield needs a free hand. A two-handed weapon leaves none, so a shield's bonus does not apply with one. Heavy armor that needs more Strength than you have slows you."),
     p(`A hero can wear no armor at all, and an adventure can start them that way. With no armor and no shield, Armor Class is 10 plus your Dexterity modifier and nothing slows you: a Knight with Dexterity ${KNIGHT_BARE.abilities.dex} is Armor Class ${KNIGHT_BARE.armorClass} bare and ${KNIGHT_IN_MAIL.armorClass} in chain mail. The armor-kind gear rows (a shield, a cloak, body armor) then read Nothing worn, and a bare hero is not drawn wearing them. Armor you find goes in your pack: Equip puts it on and your Armor Class is worked out from it, Unequip takes it off again. Both are free, and like any gear change they are refused with something hostile in the room. A magic piece worn in an armor row is real and adds its bonus whether or not you wear armor. Defense, the fighting style, is a point of Armor Class only while you wear armor, so a hero who starts bare is not offered it.`),
     p("Ring, amulet and boots are shared by every hero. Each does one thing, from its SRD text, and the number is on the item:"),
@@ -661,14 +661,14 @@ const SPELL_ROWS = WIZARD_SPELLS.map((spell) => {
 const MAGIC: RuleSection = {
   id: "magic",
   title: "Magic",
-  summary: "Spells cost slots, take your action and have a reach. Only the Fireball Person casts today.",
+  summary: "Spells cost slots, take your action and have a reach. Only the Mage casts today.",
   blocks: [
     p(`Spell slots are how many leveled spells you can cast before a long rest. A cantrip is a spell of level 0: it is free and you can cast it as often as you like. A leveled spell spends one slot of its own level. There is no casting it at a higher level. Wizard slots by level: ${Array.from({ length: LEVEL_CAP }, (_, i) => `level ${i + 1} has ${slotsWords(i + 1)}`).join("; ")}.`),
     p("Casting takes your action in a fight, and the spell must reach its target. Reach is a distance only: unlike the Attack button, Cast does not check line of sight. A spell hits one target; the area of a cone is not modelled. The engine works out a cast the way it works out an attack. It is free and never asks the DM."),
     p(`Your spell attack bonus is your proficiency bonus plus your spellcasting modifier (Intelligence for a Wizard). Your spell save DC is 8 plus the same two numbers.`),
     table(["Spell", "Level", "Castable from", "What the game does", "Reach"], SPELL_ROWS),
     p("Fireball is a level 3 spell, and a wizard does not get a level 3 slot until character level 5, so it is not here yet. That is the SRD working correctly, not a gap."),
-    p("The Knight and the Shadow have no spell slots. The Healer's spell list exists in the engine but the Healer is out of play for now."),
+    p("The Knight and the Rogue have no spell slots. The Healer's spell list exists in the engine but the Healer is out of play for now."),
     note("Where a spell above says the DM rules on it, the game casts it, spends its slot and your action, and applies no number."),
     note(`Fire Bolt through the Attack button is a ranged weapon attack: it reaches ${RANGED_FT} ft, rolls ${FIRE_BOLT_ATTACK_DAMAGE} (the die plus your Intelligence modifier) and counts a magic weapon's bonus. Cast from the Cast list it reaches ${spellRangeFt("Fire Bolt")} ft, rolls ${FIRE_BOLT_CAST_DAMAGE} and does not count a weapon's bonus.`),
   ],
@@ -706,7 +706,7 @@ const THE_DM: RuleSection = {
     p(`Checks: the DM picks a skill (on the bench, a skill or an ability) and a DC from ${MIN_DC} to ${MAX_DC}. The engine adds your real modifier from your sheet and rolls the dice. On the asset bench the DM may also give advantage or disadvantage, and in a fight it says what an action costs: nothing (speech, looking), one free object interaction (a door, a lever), or your action (a check, forcing, prying, hiding). In the game a check the DM asks for does not use your action.`),
     p(`On the bench the DM can do at most ${BENCH_DM_LIMITS.maxEffects} things in a reply and is held to these limits: healing is up to ${BENCH_DM_LIMITS.maxDice} dice from d4 to d${BENCH_DM_LIMITS.healMaxSides} plus at most ${BENCH_DM_LIMITS.healMaxMod}, harm is up to ${BENCH_DM_LIMITS.maxDice} dice from d4 to d${BENCH_DM_LIMITS.harmMaxSides} plus at most ${BENCH_DM_LIMITS.harmMaxMod} and only on a failed check (a trap, a fall), and it can hand out at most ${BENCH_DM_POTIONS_PER_SCENE} potions a scene.`),
     note("The game's own DM has only the first list today."),
-    p("Every effect the DM asks for is checked before it happens. One that breaks a rule is refused, and the DM is told next turn. Fighting, walking about a room, searching, using items, resting and levelling never ask the DM. Talking, typing what you try and a step into a room nobody has built do, and in the game each of those costs a credit."),
+    p("Every effect the DM asks for is checked before it happens. One that breaks a rule is refused, and the DM is told next turn. Fighting, walking about a room, searching, using items, resting and levelling never ask the DM. Talking, typing what you try and a step into a room nobody has built do."),
   ],
   seeAlso: ["how-to-play", "checks", "equipment"],
 };

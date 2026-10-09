@@ -56,10 +56,38 @@ const t = (name: string): string => `var(--bn-${name},var(--ltt-${name}))`;
 
 const tokenBlock = (pick: "light" | "dark"): string => TOKENS.map((k) => `--ltt-${k.name}:${k[pick]};`).join("");
 
+/**
+ * The layout of the window on the game's own page (the root carries data-fit, set by mountTable when it sits in the page's .lt-app; the bench's panel does not
+ * get it and keeps the fixed box). The root fills the page's window; the arena fills the root; the stage takes what the tray column leaves and the board is sized
+ * by stageFit.ts from the stage's measured box (its inline width and height), so nothing here caps it. At 720 px and narrower the tray column stacks under the
+ * stage and the page scrolls; the dice tray rises over the stage as a layer above the DM's dock band.
+ */
+function fitCss(): string {
+  return `
+${R}[data-fit]{display:flex;flex-direction:column;height:100%;min-height:0;padding:6px}
+${R}[data-fit] .lt-arena{flex:1 1 0;min-height:0;margin:0;flex-wrap:nowrap;align-items:stretch;gap:12px}
+${R}[data-fit] .lt-stage-wrap{flex:1 1 0;min-width:0;min-height:0!important;width:auto;max-width:none;display:flex;align-items:center;justify-content:center}
+${R}[data-fit] .lt-viewport{flex:none;max-width:none;max-height:none;overflow:hidden}
+${R}[data-fit] .lt-board{width:100%;height:100%}
+${R}[data-fit] .lt-board>canvas{width:100%!important;height:100%!important}
+${R}[data-fit] .lt-tray-col{flex:0 0 clamp(320px,16vw,440px);width:clamp(320px,16vw,440px);min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
+${R}[data-fit] .lt-stage-wrap>.lt-dice-host.lt-dice-over{position:absolute;left:50%;bottom:calc(var(--lto-dock,0px) + 8px);width:min(360px,calc(100% - 16px));transform:translateX(-50%);z-index:30;pointer-events:auto}
+${R}[data-fit] .lt-stage-wrap>.lt-dice-host.lt-dice-over.lt-dice-quiet{visibility:hidden;pointer-events:none}
+@media (max-width:720px){
+${R} .lt-arena[data-menu-open] .lt-tray-col{display:none}
+${R}[data-fit]{height:auto;min-height:100%;padding:4px}
+${R}[data-fit] .lt-arena{flex:1 0 auto;flex-direction:column;gap:8px}
+${R}[data-fit] .lt-game{padding:6px}
+${R}[data-fit] .lt-stage-wrap{flex:none;width:100%}
+${R}[data-fit] .lt-tray-col{flex:1 0 auto;width:100%;overflow:visible}
+}`;
+}
+
 /** The whole stylesheet as text (for tests, or a host that wants to inline it). */
 export function tableStyleCss(): string {
   return `
-${R}{${tokenBlock("light")}font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:${t("text")}}
+${R}{${tokenBlock("light")}font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:${t("text")};user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+${R} input,${R} textarea,${R} select,${R} [contenteditable],${R} [data-lt-copy]{user-select:text;-webkit-user-select:text;-webkit-touch-callout:default}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) ${R}{${tokenBlock("dark")}}}
 :root[data-theme="dark"] ${R}{${tokenBlock("dark")}}
 ${R},${R} *,${R} *::before,${R} *::after{box-sizing:border-box}
@@ -70,19 +98,22 @@ ${R} .lt-arena{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margi
 ${R} .lt-game{padding:10px;border-radius:12px;background:#0c0e1d;box-shadow:inset 0 0 0 1px rgb(255 255 255/.06),0 6px 18px rgb(0 0 0/.25)}
 ${R} .lt-game .lt-viewport{border-color:#262a47}
 ${R} .lt-reset{font:inherit;font-size:12.5px;padding:6px 10px;border:1px solid ${t("line")};border-radius:8px;background:${t("panel")};color:${t("text")};cursor:pointer}
-${R} .lt-stage-wrap{position:relative;width:fit-content;max-width:100%}
+${R} .lt-stage-wrap{position:relative;width:fit-content;max-width:100%;padding-bottom:var(--lto-dock,0px);padding-top:var(--lto-top-band,0px);box-sizing:border-box}
 ${R} .lt-tray-col{flex:0 0 320px;width:320px;min-width:0;max-width:100%;display:flex;flex-direction:column;gap:8px}
 ${R} .lt-tray-col>*{max-width:100%}
 ${R} .lt-dice-shop>summary{cursor:pointer;font-size:12.5px;color:${t("muted")}}
 @media (min-width:721px){${R} .lt-stage-wrap{max-width:calc(100% - 344px)}}
 @media (max-width:720px){${R} .lt-tray-col{flex:1 1 100%;width:auto}}
-${R} .lt-viewport{overflow:auto;max-width:100%;max-height:min(66vh,620px);border:1px solid ${t("line")};border-radius:8px;background:${t("panel-alt")};touch-action:manipulation}
+${R} .lt-viewport{overflow:auto;max-width:100%;border:1px solid ${t("line")};border-radius:8px;background:${t("panel-alt")};touch-action:manipulation}
+${R}:not([data-fit]) .lt-viewport{max-height:min(66vh,620px)}
 ${R} .lt-board{position:relative;width:max-content}
+${R} .lt-arena[data-screens] .lt-tray-col{display:none}
 ${R} .${BOARD_CANVAS_CLASS}{image-rendering:pixelated;display:block}
 ${R} .lt-marks{position:absolute;left:0;top:0;pointer-events:none;image-rendering:pixelated}
 ${R} .lt-shroud{position:absolute;left:0;top:0;pointer-events:none;image-rendering:pixelated}
 ${R} .lt-item-icon{image-rendering:pixelated;display:block;background:${t("panel-alt")};border-radius:6px}
-@media (max-width:720px){${R} .lt-viewport{max-height:52vh}}
+@media (max-width:720px){${R}:not([data-fit]) .lt-viewport{max-height:52vh}}
+${fitCss()}
 `;
 }
 

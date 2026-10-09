@@ -47,6 +47,7 @@ import { dmAssets, walkableById, worldManifest } from "./catalog";
 import type { DmEffect, DmSceneView } from "./dmCore";
 import { slayCreature } from "./fightRules";
 import { foldItem, forgetItem, itemName, pileAt, wornTier } from "./gearLoot";
+import { propGroupAt } from "./propGroups";
 import { activeCreature, creatureInSight, creaturesInSight, heroActionReady, heroesTurn, seesTile, sightLevel } from "./sight";
 import {
   addCreature,
@@ -154,7 +155,9 @@ export function whatIsAt(p: PlayState, at: XY): string {
 
 /** The feature the examine/left-click shortcut treats as lookable: a grate or a DM prop (the door and chest keep their Use). */
 export function lookableAt(p: PlayState, at: XY): "grate" | "prop" | null {
-  if (p.extraProps.some((e) => same(e, at))) return "prop";
+  // Any part of a prop drawn in several squares (the well, a cottage) is that prop.
+  if (propGroupAt(p.extraProps, at).length > 0) return "prop";
+  if (p.adventureId && propGroupAt(advBoard(p)?.props ?? [], at).length > 0) return "prop";
   if (isGrate(p, at) && !same(at, doorAt(p)) && !same(at, containerAt(p))) return "grate";
   return null;
 }

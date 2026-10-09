@@ -221,6 +221,15 @@ function plainClassName(displayName: string): string {
   return displayName.replace(/^The\s+/i, "");
 }
 
+/** The class a sheet shows: the archetype's current name (a hero saved before the Shadow became the Rogue still reads Rogue), else the one stored with it. */
+export function sheetClassName(sheet: Pick<CharacterSheet, "archetypeId" | "displayName">): string {
+  try {
+    return plainClassName(getArchetype(sheet.archetypeId).displayName);
+  } catch {
+    return plainClassName(sheet.displayName);
+  }
+}
+
 function sources(parts: readonly { label: string; amount: number }[]): string {
   return parts.map((p) => `${signed(p.amount)} ${p.label}`).join(", ");
 }
@@ -498,14 +507,19 @@ export function itemCount(info: ItemInfo): string {
 
 export type StepId = "class" | "ancestry" | "scores" | "skills" | "background" | "name" | "review";
 export const CREATION_STEPS: readonly { id: StepId; label: string }[] = Object.freeze([
+  { id: "name", label: "Name" },
   { id: "class", label: "Class" },
   { id: "ancestry", label: "Ancestry" },
   { id: "scores", label: "Scores" },
   { id: "skills", label: "Skills" },
   { id: "background", label: "Background" },
-  { id: "name", label: "Name" },
   { id: "review", label: "Review" },
 ]);
+
+/** True when the draft has a name once the spaces are gone: the one thing every other step waits for. */
+export function hasName(input: Pick<CreateCharacterInput, "name">): boolean {
+  return typeof input.name === "string" && input.name.trim().length > 0;
+}
 
 /** Which step an error from previewCharacter belongs to, so the words show next to the thing that caused them. */
 export function stepForError(message: string): StepId {
@@ -704,7 +718,7 @@ export function reconcileDraft(input: CreateCharacterInput): CreateCharacterInpu
   // class choices
   const known = out.classSkills.concat(ancestry?.skills ?? [], out.ancestrySkills ?? [], out.background?.skills ?? []);
   const choices: Record<string, string> = {};
-  for (const choice of creationChoicesFor(archetype.id, known)) {
+  for (const choice of creationChoicesFor(archetype.id, known, input.startingKit)) {
     const wanted = input.choices?.[choice.id];
     choices[choice.id] = choice.options.some((o) => o.id === wanted) ? wanted! : choice.options[0]!.id;
   }
@@ -712,7 +726,10 @@ export function reconcileDraft(input: CreateCharacterInput): CreateCharacterInpu
   return out;
 }
 
-/** The input a fresh wizard starts with: the class's defaults, Human, a "Wanderer" background and a neutral alignment, already reconciled. */
+/**
+ * The input a fresh wizard starts with: the class's defaults, Human, a "Wanderer" background and a neutral alignment, already reconciled.
+ * The name starts empty on purpose: the player has to give one (previewCharacter refuses a draft without), and it is the first step.
+ */
 export function initialDraft(start?: Partial<CreateCharacterInput>): CreateCharacterInput {
   const wanted = start?.archetypeId;
   let archetypeId: string = PLAYABLE_ARCHETYPE_IDS[0] ?? "knight";
@@ -726,12 +743,55 @@ export function initialDraft(start?: Partial<CreateCharacterInput>): CreateChara
   const defaults = creationOptions(archetypeId).defaults;
   const merged: CreateCharacterInput = {
     ...defaults,
+    name: "",
     background: { name: "Wanderer", skills: ["Perception", "Survival"] },
     alignment: "Neutral",
     ...start,
     archetypeId,
   };
   return reconcileDraft(merged);
+}
+
+const BLANK_SCORES: AbilityScores = { str: 8, dex: 8, con: 8, int: 8, wis: 8, cha: 8 };
+
+/**
+ * Start again from a class: its own scores, Human, a Wanderer background, its own skills and choices. The name and the backstory the player typed are kept.
+ * Everything stays editable afterwards.
+ */
+export function startFromClass(input: CreateCharacterInput, archetypeId: string): CreateCharacterInput {
+  const fresh = initialDraft({ archetypeId, name: input.name });
+  const out: CreateCharacterInput = { ...fresh };
+  if (input.backstory !== undefined) out.backstory = input.backstory;
+  // The adventure's starting kit goes with the draft, whichever class it is.
+  if (input.startingKit !== undefined) out.startingKit = input.startingKit;
+  return reconcileDraft(out);
+}
+
+/**
+ * A blank sheet of the draft's class: every score at 8 (point buy, nothing spent), no ancestry, no background, no alignment. The class is
+ * still there for its hit die and gear, and its skill picks are filled in because the rules want them (the Skills step changes them).
+ */
+export function blankDraft(input: CreateCharacterInput): CreateCharacterInput {
+  const out: CreateCharacterInput = {
+    ...input,
+    abilityMethod: "pointBuy",
+    baseScores: { ...BLANK_SCORES },
+    rolledScores: undefined,
+    ancestryId: undefined,
+    ancestrySkills: undefined,
+    ancestryIncreases: undefined,
+    background: undefined,
+    alignment: undefined,
+    classSkills: [],
+    choices: {},
+  };
+  return reconcileDraft(out);
+}
+
+/** Whether a draft is still the blank sheet blankDraft makes (the Start from step shows the Blank card as picked while it is). */
+export function looksBlank(input: CreateCharacterInput): boolean {
+  const s = input.baseScores;
+  return input.abilityMethod === "pointBuy" && !!s && ABILITY_KEYS.every((k) => s[k] === 8) && input.ancestryId === undefined && !input.background;
 }
 
 // ---- the DOM ----------------------------------------------------------------
@@ -758,6 +818,7 @@ const PX_VARS = "--s-bg:#0a0e2a;--s-panel:#141a3c;--s-ink:#f4ecd0;--s-muted:#98a
 const CSS = `
 .lts-root{${SB_LIGHT};position:absolute;inset:0;z-index:40;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;background:var(--s-bg);color:var(--s-ink);font:14px/1.4 ${SERIF};text-align:left;container-type:inline-size;scrollbar-width:thin}
 .lts-root[data-style="storybook"]{font-family:${SERIF}}
+.lts-root.lts-embed{position:relative;inset:auto;z-index:auto;overflow:visible;background:transparent}
 .lts-root[data-style="pixel"]{${PX_VARS};font-family:${SANS};font-size:13.5px}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .lts-root[data-style="storybook"]{${SB_DARK}}}
 :root[data-theme="dark"] .lts-root[data-style="storybook"]{${SB_DARK}}
@@ -881,6 +942,7 @@ const CSS = `
 .lts-root[data-style="pixel"] .lts-step{border-radius:0;border-width:2px}
 @container (max-width:700px){.lts-step .n{display:none}.lts-step.on{flex:2 1 0}}
 @container (max-width:520px){.lts-step:not(.on) .t{display:none}.lts-step .n{display:inline}.lts-step.on{flex:4 1 0}}
+@media (pointer:coarse),(max-width:720px){.lts-btn,.lts-step,.lts-tab{min-height:44px}.lts-btn.sq,.lts-step{min-width:44px}.lts-steps{flex-wrap:wrap}}
 .lts-cre-body{flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:10px 10px 14px;overscroll-behavior:contain;scrollbar-width:thin}
 .lts-cre-inner{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
 .lts-cre-foot{flex:none;display:flex;gap:6px;align-items:center;padding:8px 10px;background:var(--s-bg);border-top:1px solid var(--s-edge)}
@@ -1058,7 +1120,7 @@ function headerBlock(ctx: Ctx, sheet: CharacterSheet, extras: SheetExtras): HTML
   main.append(heading(ctx, sheet.name, 3));
   top.append(main);
   const fields = h("div", "lts-fields");
-  const cls = plainClassName(sheet.displayName);
+  const cls = sheetClassName(sheet);
   fields.append(
     fieldEl(ctx, "Class and level", `${cls}, level ${sheet.level}`, {
       title: `${cls}, level ${sheet.level}`,
@@ -1386,8 +1448,8 @@ function backstoryCard(ctx: Ctx, sheet: CharacterSheet): HTMLElement {
   return card;
 }
 
-/** The whole sheet as one element. Used by the sheet window and by creation's review step. */
-function buildSheetContent(ctx: Ctx, sheet: CharacterSheet, extras: SheetExtras): HTMLElement {
+/** The whole sheet as one element. Used by buildSheetContent below and by creation's review step. */
+function sheetBody(ctx: Ctx, sheet: CharacterSheet, extras: SheetExtras): HTMLElement {
   const wrap = h("div", "lts-sheet");
   wrap.append(headerBlock(ctx, sheet, extras), abilityBlock(ctx, sheet), statsBlock(ctx, sheet), vitalsBlock(ctx, sheet));
   const cols = h("div", "lts-cols");
@@ -1425,18 +1487,76 @@ function isTextTarget(t: EventTarget | null): boolean {
   return t instanceof HTMLElement && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
 }
 
+// ---- buildSheetContent ------------------------------------------------------
+
+/** The sheet as an element a host can put anywhere (the in-game menu's Character tab): no close button and no frame of its own. */
+export interface SheetContent {
+  el: HTMLElement;
+  update(sheet: CharacterSheet, extras?: SheetExtras): void;
+  setStyle(style: TextStyle): void;
+  /** Take the sheet off the page and let go of its tips and listeners. */
+  destroy(): void;
+}
+
+/**
+ * The whole character sheet (header, abilities, vitals, saves, skills, attacks, features, gear, personality, backstory) as one element,
+ * with the sheet's own colours, so it reads the same inside the menu as in the old window. The host scrolls it. Item chips become item
+ * cards when `itemCard` is given (see SheetItemCards).
+ */
+export function buildSheetContent(sheet: CharacterSheet, opts: { style: TextStyle; extras?: SheetExtras } & SheetItemCards): SheetContent {
+  injectStyle();
+  let style = opts.style;
+  let current = sheet;
+  let extras: SheetExtras = opts.extras ?? {};
+  let dead = false;
+  const el = h("div", "lts-root lts-embed");
+  el.dataset.lts = "content";
+  el.dataset.style = style;
+  const ctx: Ctx = {
+    style: () => style,
+    bound: () => el.closest<HTMLElement>(".lt-game") ?? el,
+    width: () => el.clientWidth || 358,
+    offs: [],
+    cards: { itemCard: opts.itemCard, onItemAction: opts.onItemAction },
+  };
+  function render(): void {
+    clearTips(ctx);
+    el.dataset.style = style;
+    el.replaceChildren(sheetBody(ctx, current, extras));
+  }
+  render();
+  return {
+    el,
+    update(next, nextExtras) {
+      if (dead) return;
+      current = next;
+      if (nextExtras) extras = nextExtras;
+      render();
+    },
+    setStyle(next) {
+      if (dead || next === style) return;
+      style = next;
+      render();
+    },
+    destroy() {
+      if (dead) return;
+      dead = true;
+      clearTips(ctx);
+      el.remove();
+    },
+  };
+}
+
 // ---- openSheet --------------------------------------------------------------
 
 export function openSheet(
   host: HTMLElement,
   sheet: CharacterSheet,
-  opts: { style: TextStyle; extras?: SheetExtras; onNewCharacter?: () => void; onClose: () => void } & SheetItemCards,
+  opts: { style: TextStyle; extras?: SheetExtras; onClose: () => void } & SheetItemCards,
 ): SheetView {
   injectStyle();
   const restorePosition = ensurePositioned(host);
   let style = opts.style;
-  let current = sheet;
-  let extras: SheetExtras = opts.extras ?? {};
   let closed = false;
   const root = h("div", "lts-root");
   root.dataset.lts = "sheet";
@@ -1444,31 +1564,24 @@ export function openSheet(
   root.tabIndex = -1;
   root.setAttribute("role", "dialog");
   root.setAttribute("aria-label", "Character sheet");
-  const ctx: Ctx = { style: () => style, bound: () => boundaryFor(host), width: () => root.clientWidth || 358, offs: [], cards: { itemCard: opts.itemCard, onItemAction: opts.onItemAction } };
+  const ctx: Ctx = { style: () => style, bound: () => boundaryFor(host), width: () => root.clientWidth || 358, offs: [] };
+  const content = buildSheetContent(sheet, { style, extras: opts.extras, itemCard: opts.itemCard, onItemAction: opts.onItemAction });
 
-  function render(): void {
-    const keepScroll = root.scrollTop;
+  /** The title bar. The sheet itself is the content's. */
+  function renderBar(): void {
     clearTips(ctx);
     root.dataset.style = style;
     const bar = h("div", "lts-topbar");
     const title = h("div", "lts-grow");
     title.append(heading(ctx, "Character sheet"));
     bar.append(title);
-    if (opts.onNewCharacter) {
-      const nb = h("button", "lts-btn", "New character");
-      nb.type = "button";
-      nb.dataset.ltsAct = "new";
-      nb.addEventListener("click", () => opts.onNewCharacter?.());
-      bar.append(nb);
-    }
     const cb = h("button", "lts-btn pri", "Close");
     cb.type = "button";
     cb.dataset.ltsAct = "close";
     cb.setAttribute("aria-label", "Close the character sheet");
     cb.addEventListener("click", () => view.close());
     bar.append(cb);
-    root.replaceChildren(bar, buildSheetContent(ctx, current, extras));
-    root.scrollTop = keepScroll;
+    root.replaceChildren(bar, content.el);
   }
 
   const onKey = (e: KeyboardEvent): void => {
@@ -1497,26 +1610,30 @@ export function openSheet(
     el: root,
     update(next, nextExtras) {
       if (closed) return;
-      current = next;
-      if (nextExtras) extras = nextExtras;
-      render();
+      const keepScroll = root.scrollTop;
+      content.update(next, nextExtras);
+      root.scrollTop = keepScroll;
     },
     setStyle(next) {
       if (closed || next === style) return;
       style = next;
-      render();
+      const keepScroll = root.scrollTop;
+      content.setStyle(next);
+      renderBar();
+      root.scrollTop = keepScroll;
     },
     close() {
       if (closed) return;
       closed = true;
       document.removeEventListener("keydown", onKey, true);
       clearTips(ctx);
+      content.destroy();
       root.remove();
       restorePosition();
       opts.onClose();
     },
   };
-  render();
+  renderBar();
   host.appendChild(root);
   root.focus({ preventScroll: true });
   return view;
@@ -1543,7 +1660,7 @@ export function openCreation(
   const restorePosition = ensurePositioned(host);
   let style = api.style();
   let closed = false;
-  let step: StepId = "class";
+  let step: StepId = "name";
   let input: CreateCharacterInput = initialDraft(opts.start);
   /** The four d6 as rolled, and which rolled total each ability took (index into rolled.scores). */
   let rolled: RolledSet | null = null;
@@ -1592,6 +1709,7 @@ export function openCreation(
   function renderChrome(): void {
     const pv = preview();
     const bad = errorSteps(pv.errors);
+    const named = hasName(input);
     // The header
     headEl.replaceChildren();
     const top = h("div", "lts-cre-top");
@@ -1606,8 +1724,10 @@ export function openCreation(
     const steps = h("div", "lts-steps");
     steps.setAttribute("role", "tablist");
     CREATION_STEPS.forEach((s, i) => {
-      const b = h("button", `lts-step${s.id === step ? " on" : ""}${bad.has(s.id) ? " bad" : ""}`);
+      const b = h("button", `lts-step${s.id === step ? " on" : ""}${bad.has(s.id) && (s.id !== "name" || named) ? " bad" : ""}`);
       b.type = "button";
+      // Nothing past the name opens until the hero has one.
+      b.disabled = !named && s.id !== "name";
       b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", String(s.id === step));
       b.dataset.ltsStep = s.id;
@@ -1630,11 +1750,15 @@ export function openCreation(
     const next = h("button", "lts-btn", "Next");
     next.type = "button";
     next.dataset.ltsAct = "next";
+    next.disabled = !named;
+    if (!named) next.title = "Give your hero a name first";
     next.addEventListener("click", () => go(CREATION_STEPS[Math.min(CREATION_STEPS.length - 1, i + 1)]!.id));
     const begin = h("button", "lts-btn pri", "Begin");
     begin.type = "button";
     begin.dataset.ltsAct = "begin";
     begin.setAttribute("aria-label", "Begin the adventure with this character");
+    begin.disabled = !named;
+    if (!named) begin.title = "Give your hero a name first";
     begin.addEventListener("click", () => doBegin());
     footEl.append(back, grow);
     if (i < CREATION_STEPS.length - 1) footEl.append(next);
@@ -1642,12 +1766,18 @@ export function openCreation(
   }
 
   function go(id: StepId): void {
+    if (id !== "name" && !hasName(input)) return;
     step = id;
     render(true);
   }
 
   function doBegin(): void {
     if (closed) return;
+    if (!hasName(input)) {
+      step = "name";
+      render(true);
+      return;
+    }
     const pv = preview();
     if (!pv.sheet) {
       const first = pv.errors[0];
@@ -1671,8 +1801,9 @@ export function openCreation(
     bodyEl.replaceChildren();
     const inner = h("div", "lts-cre-inner");
     const pv = preview();
-    const mine = errorSteps(pv.errors).get(step);
-    if (mine && step !== "review") {
+    // An empty name is not an error to shout about on the first step: the page says what to do, and Next waits.
+    const mine = (errorSteps(pv.errors).get(step) ?? []).filter((e) => step !== "name" || hasName(input) || !/needs a name/i.test(e));
+    if (mine.length && step !== "review") {
       const ul = h("ul", "lts-errs");
       ul.setAttribute("role", "alert");
       for (const e of mine) ul.append(h("li", undefined, e.endsWith(".") ? e : `${e}.`));
@@ -1703,13 +1834,19 @@ export function openCreation(
     }
     bodyEl.append(inner);
     bodyEl.scrollTop = resetScroll ? 0 : keep;
+    // The name is the first thing asked for: put the cursor in it.
+    if (step === "name" && !hasName(input)) {
+      queueMicrotask(() => {
+        if (!closed) root.querySelector<HTMLElement>('[data-lts-field="Name"]')?.focus({ preventScroll: true });
+      });
+    }
     if (focusKey) {
       const again = root.querySelector<HTMLElement>(`[data-fk="${focusKey}"]`);
       if (again && !again.hasAttribute("disabled")) again.focus({ preventScroll: true });
     }
   }
 
-  // ---- step 1: class ----
+  // ---- step 2: start from a class or a blank sheet ----
 
   const defaultSheets = new Map<string, CharacterSheet | null>();
   function defaultSheetOf(id: string): CharacterSheet | null {
@@ -1730,8 +1867,15 @@ export function openCreation(
     render();
   }
 
+  /** Leave a blank sheet for the class's own numbers, or turn the class's numbers into a blank sheet. */
+  function setBlank(on: boolean): void {
+    input = on ? blankDraft(input) : startFromClass(input, input.archetypeId);
+    render();
+  }
+
   function buildClass(into: HTMLElement): void {
-    into.append(h("p", "lts-lede", "Pick the way your hero fights. Hover or tap any number or item to see exactly what it is."));
+    into.append(heading(ctx, "Start from"));
+    into.append(h("p", "lts-lede", "Pick a class and its numbers are filled in for you; change any of them on the next steps. Or start from a blank sheet. Hover or tap any number or item to see exactly what it is."));
     const cards = h("div", "lts-cards");
     cards.setAttribute("role", "group");
     cards.setAttribute("aria-label", "Class");
@@ -1821,10 +1965,23 @@ export function openCreation(
       }
       cards.append(b);
     }
+    // The blank sheet: nothing filled in. The class picked above still gives its hit die and gear.
+    const blankOn = looksBlank(input);
+    const bl = h("button", "lts-pick lts-blank");
+    bl.type = "button";
+    bl.dataset.ltsBlank = "";
+    bl.dataset.fk = "class-blank";
+    bl.setAttribute("aria-pressed", String(blankOn));
+    bl.append(
+      h("div", "nm", "Blank sheet"),
+      h("div", "ds", "Every score at 8, no ancestry, no background. Build everything yourself. The class picked here still gives your hit die and gear."),
+    );
+    bl.addEventListener("click", () => setBlank(!blankOn));
+    cards.append(bl);
     into.append(cards);
 
     // The class's own choice, where it has one at level 1.
-    const choices = creationChoicesFor(input.archetypeId, input.classSkills);
+    const choices = creationChoicesFor(input.archetypeId, input.classSkills, input.startingKit);
     const fighting = choices.find((c) => c.id === "fightingStyle");
     if (fighting) {
       const box = h("section", "lts-card");
@@ -1853,7 +2010,7 @@ export function openCreation(
     }
   }
 
-  // ---- step 2: ancestry ----
+  // ---- step 3: ancestry ----
 
   function incChips(a: Ancestry, picks?: readonly AbilityKey[]): string[] {
     const inc = ancestryIncreaseFor(a, a.id === input.ancestryId ? picks : undefined);
@@ -1931,7 +2088,7 @@ export function openCreation(
     into.append(detail);
   }
 
-  // ---- step 3: ability scores ----
+  // ---- step 4: ability scores ----
 
   const SCORE_METHODS: AbilityMethod[] = ["archetype", "standard", "pointBuy", "rolled"];
 
@@ -2126,7 +2283,7 @@ export function openCreation(
     if (active === "archetype") into.append(h("p", "lts-note", "These are the class's own ready-made scores. Switch to another method above to place them yourself."));
   }
 
-  // ---- step 4: skills ----
+  // ---- step 5: skills ----
 
   function skillChip(skill: string, state: { on: boolean; disabled: boolean; locked?: string; onClick?: () => void; expertise?: boolean }): HTMLElement {
     const b = h("button", `lts-skill${state.locked ? " locked" : ""}`);
@@ -2231,7 +2388,7 @@ export function openCreation(
     }
   }
 
-  // ---- step 5: background ----
+  // ---- step 6: background ----
 
   function textField(label: string, value: string | undefined, placeholder: string, max: number, apply: (v: string) => void, long = false): HTMLElement {
     const f = h("div", "lts-fld");
@@ -2353,17 +2510,19 @@ export function openCreation(
     into.append(al);
   }
 
-  // ---- step 6: name and backstory ----
+  // ---- step 1: name and backstory ----
 
   function buildName(into: HTMLElement): void {
-    into.append(h("p", "lts-lede", "Last two things: what people call your hero, and (if you like) where they came from."));
+    into.append(h("p", "lts-lede", "Every hero starts with a name. Type one to go on."));
     const card = h("section", "lts-card");
     card.append(heading(ctx, "Name and backstory"));
     const col = h("div", "lts-col");
+    const nameField = textField("Name", input.name, "What do people call your hero?", 60, (v) => {
+      input = { ...input, name: v };
+    });
+    nameField.querySelector("input")?.setAttribute("aria-required", "true");
     col.append(
-      textField("Name", input.name, "Adventurer", 60, (v) => {
-        input = { ...input, name: v };
-      }),
+      nameField,
       textField("Backstory", input.backstory, "Raised on a salt farm, left after the flood, owes a boatman a favor...", BACKSTORY_MAX, (v) => {
         input = { ...input, backstory: v };
       }, true),
@@ -2390,7 +2549,7 @@ export function openCreation(
     }
     if (pv.sheet) {
       into.append(h("p", "lts-lede", "This is your sheet. Hover or tap any number to see where it came from, then press Begin."));
-      const content = buildSheetContent(ctx, pv.sheet, { portrait: api.portrait?.(input.archetypeId) ?? null });
+      const content = sheetBody(ctx, pv.sheet, { portrait: api.portrait?.(input.archetypeId) ?? null });
       content.style.padding = "0";
       content.style.maxWidth = "none";
       // Auto side margins would shrink it to its content inside this flex column.

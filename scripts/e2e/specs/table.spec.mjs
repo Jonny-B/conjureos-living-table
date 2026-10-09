@@ -7,11 +7,11 @@ import { dmReply, dmScript, LONG_NARRATION } from "../lib/fixtures.mjs";
 
 const WITH_SERVER = { art: true };
 /** No price, no credit, in any text a player can read or hover. */
-const NO_PRICE = /credit|\bcosts?\b.*\b\d|\b\d+\s*(credits?|coins?)\b/i;
+const NO_PRICE = /(?<!Licence and )credit|\bcosts?\b.*\b\d|\b\d+\s*(credits?|coins?)\b/i;
 
 export const specs = [
   {
-    name: "opens straight into the start screen: the adventures and the test rooms, no hub, no price text, no AI call",
+    name: "opens on the adventure list: the adventures and the test rooms, no hub, no price text, no AI call",
     async run({ newGame, assert }) {
       const g = await newGame({ server: WITH_SERVER, script: dmScript() });
       const d = g.driver;
@@ -27,13 +27,15 @@ export const specs = [
       assert.doesNotMatch(text, /Conjure Games|back to the games|\bhub\b/i, "nothing leads to another app");
       assert.doesNotMatch(await d.labels(), NO_PRICE);
       assert.equal(await g.page.getByRole("button", { name: "Fullscreen" }).count(), 1, "the Fullscreen button is there");
-      assert.equal(await g.page.getByRole("button", { name: "Adventures", exact: true }).count(), 1);
+      assert.equal(await g.page.locator(".lt-app-menu").count(), 1, "the page bar's Menu button is there");
       assert.equal(await g.page.title(), "The Living Table");
       assert.equal(g.platform.calls.length, 0, "opening the game must not call the model");
-      // The licence credit is one tap away.
-      await g.page.locator(".lt-app-credits summary").click();
-      assert.match(await g.page.locator(".lt-app-credits-body").innerText(), /System Reference Document 5\.1/);
-      assert.match(await g.page.locator(".lt-app-credits-body").innerText(), /Creative Commons Attribution 4\.0/);
+      // The licence credit is two taps away: the main menu's Licence and credits.
+      await g.page.locator("[data-lto-menu]").click();
+      await g.page.locator('[data-ltm-act="credits"]').click();
+      const credits = g.page.locator("[data-ltm-credits]");
+      assert.match(await credits.innerText(), /System Reference Document 5\.1/);
+      assert.match(await credits.innerText(), /Creative Commons Attribution 4\.0/);
     },
   },
 
@@ -44,13 +46,16 @@ export const specs = [
       const d = g.driver;
       await d.ready();
       await d.quickStart("rat-cellar", "fighter");
-      await d.openDrawer("pack");
-      const hud = await d.hudText();
-      assert.match(hud, /Longsword/, "the sword is worn");
-      assert.doesNotMatch(hud, /armor|armour|mail|plate|shield|helm|breastplate/i, "no armor, no shield");
-      assert.match(hud, /Bag Nothing/, "nothing in the bag");
-      assert.match(hud, /Consumables Nothing/, "no potions");
-      assert.match(hud, /AC 11/, "an unarmored Knight is AC 10 plus Dexterity");
+      await d.dismissDialogue();
+      await d.openMenu("inventory");
+      const menu = g.page.locator("[data-game-menu]");
+      assert.match(await menu.locator('[data-slot="weapon"]').getAttribute("aria-label"), /Longsword/, "the sword is worn");
+      assert.equal(await menu.locator('[data-slot="weapon"]').getAttribute("data-tier"), "common", "a plain one");
+      for (const role of ["outer", "crown", "armor"]) assert.equal(await menu.locator(`[data-slot="${role}"]`).getAttribute("data-empty"), "true", `nothing worn in the ${role} slot: no armor, no shield`);
+      assert.equal(await menu.locator("[data-bag-index]").count(), 0, "nothing in the bag");
+      assert.match(await menu.locator('[data-inv-section="Consumables"]').innerText(), /Nothing/, "no potions");
+      assert.equal(await menu.locator('[data-stat="ac"] [data-stat-value]').innerText(), "11", "an unarmored Knight is AC 10 plus Dexterity");
+      assert.match(await d.readout(), /AC 11/, "and the side panel says so");
       assert.equal(g.platform.calls.length, 0, "starting an adventure never calls the model");
     },
   },
@@ -114,6 +119,8 @@ export const specs = [
         assert.doesNotMatch(await d.labels(), NO_PRICE, `${where} has a price in a label`);
       };
       await d.ready();
+      await clean("the main menu");
+      await d.toAdventureList();
       await clean("the start screen");
       await g.page.locator("[data-lto-ai]").first().click().catch(() => {});
       await clean("the writer card");
@@ -121,7 +128,7 @@ export const specs = [
       await g.page.locator('[data-lto-quick="fighter"]').waitFor();
       await clean("the hero choice");
       await g.page.locator("[data-lto-create]").click();
-      await g.page.locator("[data-lto-hud]").waitFor();
+      await g.page.locator('[data-lts="creation"]').waitFor();
       await g.page.waitForTimeout(500);
       await clean("the character maker");
       await d.adventuresButton();
@@ -230,7 +237,8 @@ export const specs = [
       });
       await g.page.reload({ waitUntil: "load" });
       await d.ready();
-      assert.equal(await g.page.locator("[data-lto-adventure]").count(), 0, "the game opens where it was, not on the start screen");
+      await d.continueGame();
+      assert.equal(await g.page.locator("[data-lto-adventure]").count(), 0, "the game is back where it was, not on the start screen");
       const after = await d.readout();
       const head = (s) => s.split(/AC \d+/)[0];
       assert.equal(head(after), head(before), "the same scene is up");
@@ -314,9 +322,13 @@ export const specs = [
       await d.ready();
       await d.quickStart();
       await d.dismissDialogue();
-      const input = g.page.locator("[data-lto-hud] input.lto-hud-input");
+      // Free text lives in the right click menu now: it is off, and the menu says why.
+      const r = await d.heroRect();
+      await g.page.mouse.click(r.x + r.w * 1.5, r.y + r.h / 2, { button: "right" });
+      const input = g.page.locator("input[data-lto-cm-input]");
+      await input.waitFor({ timeout: 8000 });
       assert.equal(await input.isDisabled(), true, "the ask line is off");
-      assert.match(await d.hudText(), /permission to use AI/i, "the player is told the DM needs AI turned on");
+      assert.match(`${await d.text()} ${await g.page.evaluate(() => document.body.textContent)} ${await d.labels()}`, /permission to use AI/i, "the player is told the DM needs AI turned on");
       assert.equal(g.platform.calls.length, 0, "nothing was asked");
     },
   },
@@ -339,6 +351,8 @@ export const specs = [
       await g.page.reload({ waitUntil: "load" });
       await d.ready();
       await g.page.waitForTimeout(600);
+      assert.equal(await g.page.locator('[data-ltm-act="continue"]').isDisabled(), true, "the second player has nothing to continue");
+      await d.toAdventureList();
       assert.equal(await g.page.locator("[data-lto-adventure]").count(), 2, "the second player starts at the start screen");
       assert.equal(g.platform.saves.size, 0, "nothing of the first player's reached the second player's account");
       const kept = await g.page.evaluate(() => Object.keys(localStorage).filter((k) => k.includes(":backup:")));
@@ -370,21 +384,21 @@ export const specs = [
       const g = await newGame({ server: WITH_SERVER, script: dmScript(), viewport: { width: 390, height: 844 }, hasTouch: true });
       const d = g.driver;
       await d.ready();
+      assert.equal(await d.scrollsSideways(), false, "main menu");
+      await d.toAdventureList();
       assert.equal(await d.scrollsSideways(), false, "start screen");
       await g.page.locator('[data-lto-adventure="rat-cellar"]').click();
       await g.page.locator('[data-lto-quick="fighter"]').waitFor();
       assert.equal(await d.scrollsSideways(), false, "hero choice");
-      await g.page.locator('[data-lto-quick="fighter"]').click();
-      await g.page.locator("[data-lto-dialogue]:not([hidden])").waitFor();
-      assert.equal(await d.scrollsSideways(), false, "board with the dialogue box");
-      const dlg = await d.dialogue();
-      assert.equal(dlg.scrolls, false, "the dialogue box does not scroll on a phone");
+      await d.playAs("fighter");
+      assert.equal(await d.scrollsSideways(), false, "board with the opening on screen");
       await d.dismissDialogue();
-      for (const drawer of ["pack", "saves", "settings"]) {
-        await d.openDrawer(drawer);
-        assert.equal(await d.scrollsSideways(), false, `${drawer} drawer`);
-        await d.closeDrawer(drawer);
+      assert.equal(await d.scrollsSideways(), false, "board");
+      for (const tab of ["character", "inventory", "journal", "log", "saves", "settings"]) {
+        await d.openMenu(tab);
+        assert.equal(await d.scrollsSideways(), false, `${tab} tab of the menu`);
       }
+      await d.closeMenu();
       await g.screenshot("phone-board");
     },
   },

@@ -251,7 +251,7 @@ test("gameArt: a manifest that covers everything is used as is", async () => {
   await art.load();
   assert.equal(art.ready(), true);
   const s = art.status("fantasy");
-  assert.equal(s.source, "games-db");
+  assert.equal(s.source, "server");
   assert.deepEqual(s.missing, none);
   assert.equal(art.manifest("fantasy"), REAL_MANIFEST);
   assert.equal(art.render("fantasy"), REAL_MANIFEST.render);
@@ -274,7 +274,7 @@ test("gameArt: the default load path asks loadManifest for each template once", 
   });
   await art.load();
   assert.deepEqual(asked.sort(), ["fantasy", "scifi"]);
-  assert.equal(art.status("scifi").source, "games-db");
+  assert.equal(art.status("scifi").source, "server");
 });
 
 test("gameArt: a manifest with holes falls back to the whole bundled library, never a mix", async () => {
@@ -304,7 +304,7 @@ test("gameArt: the dev placeholder manifest (four colours, a dot per token) has 
   // Outside ConjureOS with no .devserve/livingtable-assets.json this is what the game draws; the fallback is for MISSING ids, not for ugly ones.
   const art = createGameArt({ load: async () => MOCK_MANIFEST, required: withAdventures() });
   await art.load();
-  assert.equal(art.status("fantasy").source, "games-db");
+  assert.equal(art.status("fantasy").source, "server");
   assert.deepEqual(art.status("fantasy").missing, none);
 });
 
@@ -343,7 +343,7 @@ test("gameArt: a template with no bundled copy uses its manifest even with gaps,
   });
   await art.load();
   const s = art.status("scifi");
-  assert.equal(s.source, "games-db");
+  assert.equal(s.source, "server");
   assert.deepEqual(s.missing.tiles, ["no_such_tile"]);
 });
 
@@ -357,7 +357,7 @@ test("gameArt: a bundled library that cannot be imported counts as no bundled co
   });
   await art.load();
   const s = art.status("fantasy");
-  assert.equal(s.source, "games-db", "the manifest is all there is");
+  assert.equal(s.source, "server", "the manifest is all there is");
   assert.ok(total(s.missing) > 0);
 });
 
@@ -401,7 +401,7 @@ test("gameArt: the signature tells games-db art from bundled art, tracks the cas
   await fromDb.load();
   await fromBundle.load();
   const a = fromDb.signature();
-  assert.match(a, /^fantasy:games-db:/);
+  assert.match(a, /^fantasy:server:/);
   assert.match(fromBundle.signature(), /^fantasy:bundled:/);
   assert.notEqual(a, fromBundle.signature());
   assert.equal(fromDb.signature(), a, "stable between calls");
@@ -630,7 +630,7 @@ test("gameSettings: a change is kept across instances, merged into what was ther
   a.set({ textStyle: "storybook" });
   a.set({ zoom: 3, rollMyself: false });
   const b = createGameSettings({ store });
-  assert.deepEqual(b.get(), { textStyle: "storybook", textSpeed: "normal", rollMyself: false, diceSkin: "bone", zoom: 3 });
+  assert.deepEqual(b.get(), { textStyle: "storybook", textSpeed: "normal", rollMyself: false, diceSkin: "bone", zoom: 3, autoEndTurn: true });
   b.set({ zoom: null });
   assert.equal(createGameSettings({ store }).get().zoom, null);
   const raw = JSON.parse(store.data.get(TABLE_KEYS.settings)!);
@@ -650,6 +650,23 @@ test("gameSettings: invalid fields are ignored one by one, in what is stored and
   assert.deepEqual(validSettings(null), {});
   assert.deepEqual(validSettings({ zoom: 1 }), { zoom: 1 });
   assert.deepEqual(validSettings({ zoom: 0 }), {});
+});
+
+test("gameSettings: autoEndTurn is on by default, can be turned off and on, is kept, and a bad value is ignored", () => {
+  assert.equal(DEFAULT_SETTINGS.autoEndTurn, true, "a turn ends by itself unless the player turns it off");
+  const store = memStore();
+  const a = createGameSettings({ store });
+  assert.equal(a.get().autoEndTurn, true);
+  a.set({ autoEndTurn: false });
+  assert.equal(createGameSettings({ store }).get().autoEndTurn, false, "off is kept across instances");
+  a.set({ autoEndTurn: "no" as never });
+  assert.equal(a.get().autoEndTurn, false, "a value that is not a true or false is ignored");
+  a.set({ autoEndTurn: true });
+  assert.equal(createGameSettings({ store }).get().autoEndTurn, true);
+  assert.deepEqual(validSettings({ autoEndTurn: false }), { autoEndTurn: false });
+  assert.deepEqual(validSettings({ autoEndTurn: 1 }), {});
+  const old = memStore({ [TABLE_KEYS.settings]: JSON.stringify({ v: 1, settings: { textStyle: "storybook" } }) });
+  assert.equal(createGameSettings({ store: old }).get().autoEndTurn, true, "settings saved before the option existed read as on");
 });
 
 test("gameSettings: another version or corrupt data gives the defaults and is not erased by reading", () => {

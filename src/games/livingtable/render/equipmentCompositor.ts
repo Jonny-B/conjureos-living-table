@@ -132,7 +132,7 @@ export interface ResolvedLayer extends EquipmentLayerPlan {
  *
  * Layers are sorted by their `layer` integer, which is DATA on the slot rather
  * than derived from the slot's role. That is exactly what lets the Knight's
- * shield sit in FRONT of him at 35 while the Shadow's cloak sits BEHIND her at
+ * shield sit in FRONT of him at 35 while the Rogue's cloak sits BEHIND her at
  * 10 even though both are the `outer` role. The sort is stable and the array is
  * built in plan order, so a tie (which the shipped table never produces) is
  * broken by the order the slots were listed in.
@@ -170,7 +170,7 @@ export function compositeToken(
   const draws: CompositeDraw[] = [];
 
   // ONLY GEAR DRAWN IN FRONT OF THE BODY MAY CATCH THE LIGHT. A rim rastered
-  // from a layer BEHIND the body (the Shadow's cloak at 10, the Psion's barrier
+  // from a layer BEHIND the body (the Rogue's cloak at 10, the Psion's barrier
   // field) is grown from a full-body silhouette, so it comes out as a closed
   // outline round the whole figure, which is what a strategy game of this era
   // used to mean "this unit is selected" and not what it used to mean
@@ -216,7 +216,7 @@ export function compositeToken(
 //
 // IT USED TO BE A CLOSED RING AND THAT WAS THE DEFECT. The first version
 // dilated every glowing layer's whole silhouette in both bands, so a legendary
-// Fireball Person painted 175 ring pixels round a 139 pixel body: an unbroken
+// Mage painted 175 ring pixels round a 139 pixel body: an unbroken
 // hard-edged saturated oval, larger than the character, which at phone scale
 // read as a gold letter O with a dark smear inside it. The era signalled
 // enchantment with a sparkle over the item, a rim light along one edge of the

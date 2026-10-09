@@ -247,6 +247,39 @@ export function approachTile(
 }
 
 /**
+ * `approachTile` for a thing that fills several squares (a well, a cottage, a bed): the cheapest reachable square within
+ * `reachTiles` of ANY of its squares and, when `hasLineOfSight` is given, in sight of one of them. The footprint is one
+ * thing, so the nearest part wins, and a square inside it is never an answer.
+ *
+ * Ties on cost go to the square nearest a part of the thing, then to the one nearest where the mover starts (so the
+ * walk comes at the side it is coming from), then to the lowest row and column so the answer is stable. A footprint
+ * of one square answers as `approachTile` does, except that last-but-one tie-break. Null when no square qualifies
+ * (out of budget, walled in) and for an empty footprint.
+ */
+export function approachFootprint(
+  field: MovementField,
+  targets: readonly TileCoord[],
+  reachTiles: number,
+  hasLineOfSight?: (from: TileCoord, to: TileCoord) => boolean,
+): TileCoord | null {
+  if (targets.length === 0) return null;
+  const inside = new Set(targets.map(tileKey));
+  const candidates: { tile: TileCoord; cost: number; near: number; fromMover: number; seen: TileCoord[] }[] = [];
+  for (const t of field.reached) {
+    if (inside.has(tileKey(t))) continue;
+    const within = targets.filter((g) => tileDistance(t, g) <= reachTiles);
+    if (within.length === 0) continue;
+    const near = Math.min(...within.map((g) => (t.x - g.x) ** 2 + (t.y - g.y) ** 2));
+    candidates.push({ tile: t, cost: field.cost.get(tileKey(t))!, near, fromMover: (t.x - field.from.x) ** 2 + (t.y - field.from.y) ** 2, seen: within });
+  }
+  candidates.sort((a, b) => a.cost - b.cost || a.near - b.near || a.fromMover - b.fromMover || a.tile.y - b.tile.y || a.tile.x - b.tile.x);
+  for (const c of candidates) {
+    if (!hasLineOfSight || c.seen.some((g) => hasLineOfSight(c.tile, g))) return { x: c.tile.x, y: c.tile.y };
+  }
+  return null;
+}
+
+/**
  * The economy to walk with OUTSIDE a fight: every resource ready and movement
  * that never runs out, so a path of any length can be walked (the squares an
  * `Infinity` `movementField` reaches, which are further than one turn's speed).

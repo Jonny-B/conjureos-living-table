@@ -177,8 +177,8 @@ test("every class gets a hook, and the hooks follow the outline", () => {
   const rogue = heroHook(A, "rogue")!;
   const wizard = heroHook(A, "wizard")!;
   assert.match(fighter, /strong/i, "the Knight is known for brawn");
-  assert.match(wizard, /magic/i, "the Fireball Person is known for magic talent");
-  assert.match(rogue, /quick hands/i, "the Shadow is known for quick hands (an addition)");
+  assert.match(wizard, /magic/i, "the Mage is known for magic talent");
+  assert.match(rogue, /quick hands/i, "the Rogue is known for quick hands (an addition)");
   for (const h of [fighter, rogue, wizard, heroHook(A, "cleric")!, heroHook(A)!]) assert.match(h, /apprentice to your father/i);
   assert.equal(new Set([fighter, rogue, wizard]).size, 3, "three different hooks");
 });

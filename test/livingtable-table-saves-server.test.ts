@@ -44,6 +44,7 @@ import {
   aiRowKey,
   createGameStorage,
   gamesSaveServer,
+  refusedMessage,
   saveRowKey,
   statusText,
   type KeyValueStore,
@@ -650,6 +651,16 @@ test("ltSave calls: permanent refusals map to their own codes, a timeout or a se
   } finally {
     delete (globalThis as { __conjureos?: unknown }).__conjureos;
   }
+});
+
+test("refusal messages are in plain player words: no deployment talk (not allowed yet, not switched on, server, service)", () => {
+  for (const code of ["wrong_app", "unknown_action", "bad_label", "bad_payload", "bad_game", "rejected", "something_new"]) {
+    const m = refusedMessage(code);
+    assert.match(m, /stays on this device/i, code);
+    assert.doesNotMatch(m, /switched on|not allowed|bench|games-db|stub|engine|app|service/i, `${code}: ${m}`);
+  }
+  assert.match(refusedMessage("wrong_app"), /not available/);
+  assert.match(refusedMessage("unknown_action"), /not available/);
 });
 
 test("storage: a permanent refusal (not too_large) is its own message, stays local, and does not stop the other saves", async () => {

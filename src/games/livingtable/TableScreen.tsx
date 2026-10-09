@@ -2,9 +2,10 @@
  * The Living Table, as the whole app.
  *
  * One screen: the table window (table/mountTable.ts) filling the page, with a slim bar above it (the title, the
- * way back to the adventure list, Fullscreen) and a line below (where the saves are, the version, the licence
- * credits). The window itself holds everything else: the start screen with the adventures, the hero choice, the
- * board, the sheet, the dice, the DM and its Settings tab.
+ * Menu button, Fullscreen) and a line below (where the saves are, the version). While the table is being set a splash
+ * screen (Splash.tsx) covers the page. The window itself holds everything else: the main menu (Continue, New game, Load,
+ * Settings, Licence and credits), the start screen with the adventures, the hero choice, the board, the dice, the DM and
+ * the game menu.
  *
  * The game stands alone: nothing here leads to another app. The window is built once per visit, from the game's own
  * host (table/host/gameHost.ts), and torn down with the screen.
@@ -14,10 +15,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { APP_VERSION } from "../../version";
-import { SRD_ATTRIBUTION } from "./menu/labels";
+import { Splash, SPLASH_FADE_MS, splashRemainingMs } from "./Splash";
 import { mountTable, type TableWindow } from "./table/mountTable";
 import { createGameHost, type GameHost } from "./table/host/gameHost";
 import { statusText, type StorageStatus } from "./table/host/gameStorage";
+
+/** The splash: shown while loading, fading once the window is up (it stays at least a moment so it does not flash), then gone. */
+type SplashState = "show" | "leave" | "gone";
 
 type Phase = { kind: "loading" } | { kind: "ready" } | { kind: "failed"; message: string };
 
@@ -36,6 +40,7 @@ export function TableScreen() {
   // Try again after a failure opens on the start screen: the save that just failed is not resumed, and nothing is deleted.
   const noResume = useRef(false);
   const [saveLine, setSaveLine] = useState("");
+  const [splash, setSplash] = useState<SplashState>("show");
   const [full, setFull] = useState(false);
   const [fullNote, setFullNote] = useState("");
 
@@ -43,7 +48,11 @@ export function TableScreen() {
     let alive = true;
     let game: GameHost | null = null;
     let offStatus: (() => void) | null = null;
+    let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+    let goneTimer: ReturnType<typeof setTimeout> | null = null;
+    const shownAt = performance.now();
     setPhase({ kind: "loading" });
+    setSplash("show");
     // Started a tick later, not at once: React's development double run (mount, unmount, mount) would otherwise leave two hosts
     // pulling the same saves into the same device storage at the same time. The first run is cancelled before it starts.
     const timer = setTimeout(() => {
@@ -67,14 +76,22 @@ export function TableScreen() {
             win.current = null;
             el.replaceChildren();
             noResume.current = true;
+            setSplash("gone");
             setPhase({ kind: "failed", message: MOUNT_FAILED });
             return;
           }
           line(made.storage.status());
           setPhase({ kind: "ready" });
+          // The splash stays for its minimum, then fades away.
+          leaveTimer = setTimeout(() => {
+            if (!alive) return;
+            setSplash("leave");
+            goneTimer = setTimeout(() => alive && setSplash("gone"), SPLASH_FADE_MS + 40);
+          }, splashRemainingMs(shownAt, performance.now()));
         },
         (e: unknown) => {
           if (!alive) return;
+          setSplash("gone");
           setPhase({ kind: "failed", message: e instanceof Error && e.message ? e.message : "The table could not be set." });
         },
       );
@@ -82,6 +99,8 @@ export function TableScreen() {
     return () => {
       alive = false;
       clearTimeout(timer);
+      if (leaveTimer !== null) clearTimeout(leaveTimer);
+      if (goneTimer !== null) clearTimeout(goneTimer);
       offStatus?.();
       win.current?.dispose();
       win.current = null;
@@ -106,15 +125,21 @@ export function TableScreen() {
     }
   }, []);
 
-  const showAdventures = useCallback(() => win.current?.showStart(), []);
+  // The Menu button opens the main menu. A window without one (it is optional on the handle) falls back to the adventure list.
+  const openMenu = useCallback(() => {
+    const w = win.current;
+    if (!w) return;
+    if (w.openMainMenu) w.openMainMenu();
+    else w.showStart();
+  }, []);
 
   return (
     <main className="lt-app" ref={frame}>
       <header className="lt-app-bar">
         <h1 className="lt-app-title">The Living Table</h1>
         <div className="lt-app-actions">
-          <button type="button" className="cui-button cui-button--secondary" onClick={showAdventures} disabled={phase.kind !== "ready"}>
-            Adventures
+          <button type="button" className="cui-button cui-button--secondary lt-app-menu" onClick={openMenu} disabled={phase.kind !== "ready"}>
+            Menu
           </button>
           {canFullscreen() ? (
             <button type="button" className="cui-button cui-button--secondary lt-app-full" onClick={toggleFullscreen} aria-pressed={full}>
@@ -126,7 +151,6 @@ export function TableScreen() {
 
       <div className="lt-app-window">
         <div ref={stage} className="lt-app-stage" />
-        {phase.kind === "loading" ? <p className="lt-app-note" role="status">Setting the table...</p> : null}
         {phase.kind === "failed" ? (
           <div className="lt-app-note" role="alert">
             <p>{phase.message}</p>
@@ -148,23 +172,9 @@ export function TableScreen() {
         <span className="lt-app-save" role="status">
           {fullNote || saveLine}
         </span>
-        <details className="lt-app-credits">
-          <summary>Licence and attribution</summary>
-          <div className="lt-app-credits-body">
-            <p>{SRD_ATTRIBUTION.creator}</p>
-            <p>{SRD_ATTRIBUTION.copyright}</p>
-            <p>
-              {SRD_ATTRIBUTION.license}{" "}
-              <a href={SRD_ATTRIBUTION.licenseUrl} target="_blank" rel="noreferrer noopener">
-                {SRD_ATTRIBUTION.licenseUrl}
-              </a>
-            </p>
-            <p>{SRD_ATTRIBUTION.modified}</p>
-            <p>{SRD_ATTRIBUTION.disclaimer}</p>
-          </div>
-        </details>
         <span className="lt-app-version">v{APP_VERSION}</span>
       </footer>
+      {splash !== "gone" ? <Splash leaving={splash === "leave"} /> : null}
     </main>
   );
 }

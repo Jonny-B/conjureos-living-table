@@ -11,6 +11,7 @@ import {
   bodyFor,
   carriedBy,
   harvestFor,
+  harvestForToken,
   itemNotes,
   pocketPick,
   takeFromBody,
@@ -49,7 +50,8 @@ test("a goblin carries scimitar, shortbow, leather armor and shield, then coins"
   const coins = items.find((i) => i.kind === "coins");
   assert.ok(coins, "a goblin has a purse");
   assert.match(coins.name, /^\d+ copper pieces$/);
-  assert.match(coins.note, /does not track money/i);
+  assert.match(coins.note, /only something you carry/i);
+  assert.doesNotMatch(coins.note, /does not track|DM does/i);
   assert.ok(items.length === 5 || items.length === 6, "purse plus at most one trinket");
 });
 
@@ -75,7 +77,32 @@ test("beasts carry nothing; a wolf harvests a pelt", () => {
   assert.equal(h.skill, "Survival");
   assert.equal(typeof h.dc, "number");
   assert.equal(harvestFor(goblin), null, "a person is not harvested");
-  assert.equal(harvestFor(beastById("rat")!), null);
+  assert.equal(harvestFor(beastById("orc") ?? goblin), null, "nor is an orc");
+});
+
+test("a rat and a giant rat give a pelt: a small Survival check, nothing grand", () => {
+  const rat = harvestFor(beastById("rat")!);
+  assert.ok(rat, "the rat was the owner's case: Harvest on its body must work");
+  assert.equal(rat.item.kind, "part");
+  assert.equal(rat.item.pocketable, false);
+  assert.equal(rat.skill, "Survival");
+  assert.ok(rat.dc <= 10, "a low DC");
+  assert.match(rat.item.note, /Worth (a copper|next to nothing|about)/);
+  const giant = harvestFor(beastById("giant-rat")!);
+  assert.ok(giant);
+  assert.notEqual(giant.item.name, rat.item.name);
+  assert.ok(giant.dc <= 10);
+});
+
+test("harvestForToken reads the token a body was made from: rats yield a part, a goblin, a skeleton or an unknown token does not", () => {
+  assert.ok(harvestForToken("token_rat"));
+  assert.ok(harvestForToken("token_giant_rat"));
+  assert.equal(harvestForToken("token_rat")?.item.name, "Rat pelt");
+  assert.equal(harvestForToken("token_skeleton"), null, "bones give nothing");
+  assert.equal(harvestForToken("token_goblin"), null);
+  assert.equal(harvestForToken("token_raider"), null);
+  assert.equal(harvestForToken("token_nothing_like_it"), null);
+  assert.equal(harvestForToken(""), null);
 });
 
 test("harvest table: every entry is a part with a skill, a DC and a note", () => {
@@ -249,7 +276,7 @@ test("every emitted item has a real note, a valid kind, and fits describeCarried
       assert.ok(kinds.has(it.kind), it.kind);
       assert.equal(typeof it.pocketable, "boolean");
       if (it.kind === "armor" || it.kind === "part") assert.equal(it.pocketable, false, it.name);
-      if (it.kind === "coins") assert.match(it.note, /does not track money/i);
+      if (it.kind === "coins") assert.match(it.note, /only something you carry/i);
     }
     const notes = itemNotes(items);
     for (const it of items) assert.equal(notes[it.name], it.note);

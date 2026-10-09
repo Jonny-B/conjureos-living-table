@@ -251,7 +251,7 @@ export interface SlotDefinition {
  * so two reskins of one class are equally strong.
  *
  * The Knight's set is the owner's own example, given verbatim (sword, shield,
- * armour), and the Fireball Person's is their wizard example (staff, hat,
+ * armour), and the Mage's is their wizard example (staff, hat,
  * cloak). The other six follow that spirit off each archetype's real
  * `startingInventory` in templates.ts.
  *
@@ -546,7 +546,7 @@ export const GEAR_ASSET_ID_PREFIX = "gear_";
  * Spaced by 10 so a future band can be inserted without renumbering anything.
  * A slot's band is DATA on the slot (`SlotDefinition.layer`), never derived
  * from its role and never derived from its position in a list, which is what
- * lets the Knight's shield sit in front of him while the Shadow's cloak sits
+ * lets the Knight's shield sit in front of him while the Rogue's cloak sits
  * behind her even though both are the `outer` role.
  */
 export type EquipmentLayer = 0 | 10 | 20 | 25 | 30 | 35 | 40 | 50;

@@ -21,7 +21,7 @@ import {
   type CharacterSheet,
   type CreateCharacterInput,
 } from "../src/games/livingtable/characters/creation";
-import { PLAYABLE_ARCHETYPE_IDS } from "../src/games/livingtable/characters/templates";
+import { PLAYABLE_ARCHETYPE_IDS, getArchetype } from "../src/games/livingtable/characters/templates";
 import { packInfo } from "../src/games/livingtable/inventory/itemInfo";
 import { saveModifierFor, skillModifierFor, weaponDamageNotationFor, attackerBonusFor, effectiveArmorClass } from "../src/games/livingtable/session/combat";
 import {
@@ -43,6 +43,7 @@ import {
   finalScores,
   hitDiceTip,
   hitPointsTip,
+  blankDraft,
   initialDraft,
   initiativeTip,
   itemCount,
@@ -56,16 +57,23 @@ import {
   skillTip,
   speedTip,
   spellSlotTip,
+  startFromClass,
   stepForError,
   swapAssign,
   swapScore,
   toHitTip,
   scoresFromAssign,
+  sheetClassName,
   sheetItemKey,
   validDiceGroups,
   type StepId,
 } from "../src/games/livingtable/table/ui/sheet";
 import type { TipContent } from "../src/games/livingtable/table/ui/tip";
+import { heroPreview } from "../src/games/livingtable/table/ui/heroPreview";
+import { parseAdventureMarkdown } from "../src/games/livingtable/adventures/markdown";
+import { adventureHero } from "../src/games/livingtable/table/adventureCatalog";
+import { attackerBonusFor, effectiveArmorClass, weaponDamageNotationFor } from "../src/games/livingtable/session/combat";
+import { readFileSync } from "node:fs";
 
 // The two dash glyphs the project forbids, built from code points so this file never types them.
 const EM = String.fromCharCode(0x2014);
@@ -284,11 +292,102 @@ test("every skill has a blurb", () => {
 
 // ---- creation helpers ---------------------------------------------------------
 
-test("the creation steps are the seven the brief asks for, in order", () => {
+test("the creation steps are the seven the brief asks for, in order, the name first", () => {
   assert.deepEqual(
     CREATION_STEPS.map((s) => s.id),
-    ["class", "ancestry", "scores", "skills", "background", "name", "review"],
+    ["name", "class", "ancestry", "scores", "skills", "background", "review"],
   );
+});
+
+test("a fresh draft has no name and cannot be built until it gets one (item 25)", () => {
+  const draft = initialDraft();
+  assert.equal(draft.name, "");
+  const refused = previewCharacter(draft);
+  assert.equal(refused.sheet, null);
+  assert.ok(refused.errors.some((e) => /needs a name/.test(e)), refused.errors.join("|"));
+  assert.equal(stepForError(refused.errors[0]!), "name");
+  // Spaces are not a name.
+  assert.equal(previewCharacter({ ...draft, name: "   " }).sheet, null);
+  // A name is all it takes: every class starts as a complete, buildable hero.
+  for (const id of PLAYABLE_ARCHETYPE_IDS) {
+    const named = previewCharacter(initialDraft({ archetypeId: id, name: "Mira" }));
+    assert.deepEqual(named.errors, [], id);
+    assert.equal(named.sheet?.name, "Mira");
+  }
+  // A start that carries a name keeps it.
+  assert.equal(initialDraft({ name: "Corin" }).name, "Corin");
+});
+
+test("an adventure's starting kit stays with the draft through a class change, a blank sheet and back (item 25)", () => {
+  // No armor in the kit: a Knight's first fighting style (Defense) needs armor, so the draft must start on one that does not.
+  const kit = { armor: "none" as const, items: ["Longsword"], potions: 0 };
+  const choices = { fightingStyle: "dueling" };
+  const start = initialDraft({ archetypeId: "knight", name: "Mira", startingKit: kit, choices });
+  assert.deepEqual(previewCharacter(start).errors, []);
+  assert.deepEqual(previewCharacter(blankDraft(start)).errors, [], "blank");
+  assert.deepEqual(previewCharacter(startFromClass(blankDraft(start), "knight")).errors, [], "back from blank");
+  assert.deepEqual(previewCharacter(startFromClass(start, "shadow")).errors, [], "another class");
+  assert.deepEqual(previewCharacter(reconcileDraft({ ...startFromClass(start, "shadow"), archetypeId: "knight", choices: {} })).errors, [], "a class change that clears the choices");
+  assert.equal(startFromClass(start, "shadow").startingKit, kit, "the kit rides along");
+});
+
+test("heroPreview gives the default stats of each class under the adventure's own kit (item 6)", () => {
+  const parsed = parseAdventureMarkdown(readFileSync(new URL("../adventures/rat-cellar.md", import.meta.url), "utf8").replace(/\r\n/g, "\n"), { file: "adventures/rat-cellar.md" });
+  assert.ok(parsed.adventure, parsed.errors.map((e) => e.message).join("|"));
+  const adventure = parsed.adventure!;
+  const byLabel = (stats: readonly { label: string; value: string }[]): Record<string, string> => Object.fromEntries(stats.map((s) => [s.label, s.value]));
+  for (const [chassis, id] of [["fighter", "knight"], ["rogue", "shadow"], ["wizard", "fireball-person"]] as const) {
+    const p = heroPreview(adventure, chassis);
+    const sheet = adventureHero(adventure, id);
+    const m = byLabel(p.stats);
+    assert.equal(m.AC, String(effectiveArmorClass(sheet)), id);
+    assert.equal(m.HP, String(sheet.maxHp), id);
+    assert.equal(m["To hit"], `${attackerBonusFor(sheet) >= 0 ? "+" : ""}${attackerBonusFor(sheet)}`, id);
+    assert.equal(m.Damage, weaponDamageNotationFor(sheet), id);
+    for (const [k, name] of [["str", "STR"], ["dex", "DEX"], ["con", "CON"], ["int", "INT"], ["wis", "WIS"], ["cha", "CHA"]] as const) {
+      assert.ok((m[name] ?? "").startsWith(`${sheet.abilities[k]} (`), `${id} ${name}: ${m[name]}`);
+    }
+    assert.equal(p.canvas, null, "no page here, so no picture");
+  }
+  // A class the game does not have gives no stats, and nothing throws.
+  assert.deepEqual(heroPreview(adventure, "nonsense").stats, []);
+});
+
+test("the sheet names the class by the archetype, so a hero saved as The Shadow reads Rogue (item 6)", () => {
+  const old = { ...build(), archetypeId: "shadow", displayName: "The Shadow" } as CharacterSheet;
+  assert.equal(sheetClassName(old), "Rogue");
+  assert.equal(sheetClassName({ ...old, archetypeId: "fireball-person", displayName: "The Fireball Person" } as CharacterSheet), "Mage");
+  assert.equal(sheetClassName({ ...old, archetypeId: "from-the-future", displayName: "The Oddity" } as CharacterSheet), "Oddity", "an unknown class keeps its stored name");
+});
+
+test("startFromClass fills in a class's own defaults and keeps the name; blankDraft is a bare sheet (item 25)", () => {
+  const typed = initialDraft({ name: "Mira", backstory: "Raised on a salt farm." });
+  const mage = startFromClass(typed, "fireball-person");
+  assert.equal(mage.archetypeId, "fireball-person");
+  assert.equal(mage.name, "Mira");
+  assert.equal(mage.backstory, "Raised on a salt farm.");
+  assert.deepEqual(mage.baseScores, getArchetype("fireball-person").baseAbilityScores);
+  assert.equal(mage.abilityMethod, "archetype");
+  assert.equal(previewCharacter(mage).sheet?.archetypeId, "fireball-person");
+  // Everything stays editable from there: an edit is kept.
+  assert.equal(reconcileDraft({ ...mage, name: "Mirabel" }).name, "Mirabel");
+
+  const blank = blankDraft(typed);
+  assert.equal(blank.name, "Mira", "the name survives");
+  assert.equal(blank.abilityMethod, "pointBuy");
+  assert.deepEqual(blank.baseScores, { str: 8, dex: 8, con: 8, int: 8, wis: 8, cha: 8 });
+  assert.equal(blank.ancestryId, undefined, "no ancestry");
+  assert.equal(blank.background, undefined, "no background");
+  const sheet = previewCharacter(blank).sheet;
+  assert.ok(sheet, previewCharacter(blank).errors.join("|"));
+  for (const k of ["str", "dex", "con", "int", "wis", "cha"] as const) assert.equal(sheet!.abilities[k], 8, k);
+  assert.ok(sheet!.maxHp > 0, "the class still gives a hit die");
+  assert.ok(sheet!.equipment, "and gear");
+  // A blank sheet of any class builds.
+  for (const id of PLAYABLE_ARCHETYPE_IDS) {
+    const b = blankDraft(initialDraft({ archetypeId: id, name: "Z" }));
+    assert.deepEqual(previewCharacter(b).errors, [], id);
+  }
 });
 
 test("stepForError puts each real engine error next to the step that caused it", () => {
@@ -361,8 +460,8 @@ test("reconcileDraft keeps a Rogue's Expertise on a skill the Rogue actually has
   assert.ok(sheet.skills.some((s) => s.skill === picked));
 });
 
-test("initialDraft is a complete, valid draft with a background, and its start values win", () => {
-  const draft = initialDraft();
+test("initialDraft is a complete draft with a background, valid once it has a name, and its start values win", () => {
+  const draft = initialDraft({ name: "Test Hero" });
   assert.equal(draft.archetypeId, PLAYABLE_ARCHETYPE_IDS[0]);
   assert.equal(draft.background?.name, "Wanderer");
   assert.deepEqual(previewCharacter(draft).errors, []);
@@ -482,7 +581,7 @@ test("validDiceGroups accepts only six groups of four faces from 1 to 6", () => 
 });
 
 test("adding an ancestry or switching class does not move the skills the background already holds", () => {
-  const start = initialDraft();
+  const start = initialDraft({ name: "Test Hero" });
   const bgBefore = [...start.background!.skills];
   for (const a of ANCESTRIES) {
     for (const id of PLAYABLE_ARCHETYPE_IDS) {

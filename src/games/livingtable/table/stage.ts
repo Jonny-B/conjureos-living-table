@@ -126,6 +126,28 @@ export function creatureTokensOf(p: PlayState): TileId[] {
   return [...new Set([...p.creatures.map((c) => c.token), ...p.bodies.map((b) => b.token)])].sort();
 }
 
+/**
+ * The bodies lying on the board, for the hand-drawn art (no cast to animate). That art draws the hero and every living
+ * creature into the room bitmap and never a body (the bitmap is also what the engine and the sight read, so a body must
+ * not become a token there: it would block a step), so each body is its creature's own drawing lying on its side, fall
+ * finished, back to front. A body whose square holds the hero or a creature in sight is left out: that figure is
+ * already in the bitmap, and the body would be drawn over it.
+ */
+export function bodySpriteItems(p: Pick<PlayState, "bodies">, manifest: RenderManifest, tileScale: number, occupied: readonly XY[]): StageItem[] {
+  const out: StageItem[] = [];
+  const pose = spritePose("death", 3, "left");
+  const px16 = tileScale / 16;
+  const bodies = [...p.bodies].sort((a, b) => a.at.y - b.at.y);
+  for (const b of bodies) {
+    if (occupied.some((o) => o.x === b.at.x && o.y === b.at.y)) continue;
+    const feetX = (b.at.x + 0.5) * tileScale;
+    const feetY = (b.at.y + 1) * tileScale;
+    const g = spriteGeometry(manifest, b.token, pose, feetX, feetY, px16);
+    if (g) out.push({ kind: "sprite", manifest, assetId: b.token, pose, feetX, feetY, px16, box: g.box });
+  }
+  return out;
+}
+
 export interface PlayStageHost {
   viewport: HTMLElement;
   canvas: HTMLCanvasElement;
@@ -332,8 +354,7 @@ export function createPlayStage(host: PlayStageHost): PlayStage {
     return { items: out, hero, creatureTiles };
   }
 
-  /** The actor a body is drawn with: one per body, facing left, its fall played once and then held (so a kill shows the creature going down where it stood). */
-  const bodyActors = new Map<string, Actor>();
+  /** The actor a body is drawn with: one per body, facing left, its fall played once and then held (so a kill shows the creature going down where it stood). */  const bodyActors = new Map<string, Actor>();
   function bodyActor(key: string): Actor {
     let a = bodyActors.get(key);
     if (!a) {
@@ -423,9 +444,13 @@ export function createPlayStage(host: PlayStageHost): PlayStage {
       full = true;
     }
 
+    // With a cast the figures (bodies among them) are drawn here; without one the room bitmap holds the living, so the bodies are laid over it.
     const placed: { items: StageItem[]; hero: XY; creatureTiles: XY[] } = style
       ? placeFigures(p, now, style, manifest, tileScale)
-      : { items: [], hero: p.heroAt, creatureTiles: creaturesInSight(p).map((c) => c.at) };
+      : (() => {
+          const creatureTiles = creaturesInSight(p).map((c) => c.at);
+          return { items: bodySpriteItems(p, manifest, tileScale, [p.heroAt, ...creatureTiles]), hero: p.heroAt, creatureTiles };
+        })();
     if (full || dirty || !sameItems(items, placed.items)) {
       ctx.imageSmoothingEnabled = false;
       if (full) {

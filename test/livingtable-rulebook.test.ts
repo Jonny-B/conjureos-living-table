@@ -291,7 +291,7 @@ test("gear caps, attunement and the bag are the engine's numbers", () => {
 test("a legendary weapon's rider damage types are the ones the book names", () => {
   const riders = (["knight", "shadow", "fireball-person"] as const).map((id) => SLOTS_BY_ARCHETYPE[id as ArchetypeId].weapon.legendaryRider?.damageType);
   assert.deepEqual(riders, ["radiant", "poison", "fire"]);
-  assert.ok(sectionText("equipment").includes("radiant for the Knight's, poison for the Shadow's, fire for the Fireball Person's"));
+  assert.ok(sectionText("equipment").includes("radiant for the Knight's, poison for the Rogue's, fire for the Mage's"));
 });
 
 test("magic: slots by level, and every spell on the list is in the table with its real reach", () => {
@@ -352,16 +352,15 @@ test("modifiers and proficiency in the book are the engine's", () => {
 // ── the bench's own numbers, read from the bench ─────────────────────────
 
 /**
- * Every module of the table window (src/games/livingtable/table/*.ts, not its subfolders) as one text. The numbers and words the book
+ * Every module of the table window (src/games/livingtable/table/*.ts and its flows/ folder, not ui/) as one text. The numbers and words the book
  * quotes from the window live there now (state.ts holds the wake and hearing distances and the potion cap), so the scans read the
  * folder rather than one file and keep working when a constant moves between its modules.
  */
+// The window is split into mountTable.ts and the flows/ modules beside it (tableCtx.ts is what they share), so the scan reads them all.
 function tableSource(): string {
-  const dir = new URL("../src/games/livingtable/table/", import.meta.url);
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".ts"))
-    .sort()
-    .map((f) => readFileSync(new URL(f, dir), "utf8"))
+  const dirs = [new URL("../src/games/livingtable/table/", import.meta.url), new URL("../src/games/livingtable/table/flows/", import.meta.url)];
+  return dirs
+    .flatMap((dir) => readdirSync(dir).filter((f) => f.endsWith(".ts")).sort().map((f) => readFileSync(new URL(f, dir), "utf8")))
     .join("\n");
 }
 
@@ -471,17 +470,17 @@ test("the game's DM opens and closes doors; locking is the bench DM's", () => {
   says("the-dm", "cannot be removed that way while it has hit points left");
 });
 
-test("a step into a room nobody has built asks the DM and costs a credit; nothing else on the buttons does", () => {
+test("a step into a room nobody has built asks the DM; nothing else on the buttons does, and the book names no price", () => {
   const here = { world: emptyWorld(), cell: { cx: 0, cy: 0 } };
   const route = resolveMenuAction({ kind: "move", destination: { withinCell: false, direction: "E" } }, here);
   assert.equal(route.kind, "dm");
-  assert.ok(route.kind === "dm" && /1 credit/.test(route.reason));
+  assert.equal(route.kind, "dm");
   for (const kind of ["attack", "cast", "rest", "search", "item"] as const) {
     assert.equal(resolveMenuAction({ kind }, here).kind, "local", kind);
   }
-  says("how-to-play", "asks the DM to build it, and that costs 1 credit");
-  says("exploring", "that step costs 1 credit");
-  lacks("the-dm", /Only talking to the DM costs anything/, "a step into an unbuilt room costs a credit too");
+  says("how-to-play", "asks the DM to build it");
+  says("exploring", "the DM builds it as you arrive");
+  for (const id of ["how-to-play", "exploring", "the-dm"]) lacks(id, /credits?\b/i,`${id} states no price`);
 });
 
 test("who rolls: the engine rolls every die, and the tray only animates", () => {

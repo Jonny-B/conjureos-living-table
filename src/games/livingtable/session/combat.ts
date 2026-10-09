@@ -299,7 +299,7 @@ export function equipmentContextFor(sheet: CharacterSheet): EquipmentContext {
 // spell it identically. For the other two, plus any archetype whose fighting
 // style selects its alternate weapon, they are genuinely two, and pretending
 // otherwise printed sentences that were simply false: a legendary Sunstroke on
-// a Fireball Person logged "Sunstroke: 4 fire damage" against an attack the
+// a Mage logged "Sunstroke: 4 fire damage" against an attack the
 // engine had resolved as a Fire Bolt, and an Archery Knight's +1 was labelled
 // "Keen Longsword" on a thrown handaxe. Naming both is the only honest answer,
 // and it is one function so no readout can invent a sixth way to phrase it.
@@ -441,7 +441,7 @@ export function legendaryRiderDamageFor(sheet: CharacterSheet, rng: () => number
   return {
     roll: resolveMagicWeaponRider(rider.bonusDamage, rng, critical),
     damageType: rider.damageType,
-    // `weaponIdentityFor().label`, not the item name alone. A Fireball Person
+    // `weaponIdentityFor().label`, not the item name alone. A Mage
     // with a legendary staff resolves their attack as a Fire Bolt, and a dice
     // log reading "Sunstroke: 4 fire damage" beside an attack line reading
     // "Fire Bolt" names a weapon that was never swung. The label names the

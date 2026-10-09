@@ -141,9 +141,9 @@ export const PLAYABLE_HEROES: ArchetypeId[] = ARCHETYPE_IDS.filter((id) => TEMPL
 /** What each archetype is called in a name and a card. */
 export const ARCHETYPE_LABEL: Record<ArchetypeId, string> = {
   knight: "Knight",
-  shadow: "Shadow",
+  shadow: "Rogue",
   healer: "Healer",
-  "fireball-person": "Fireball Person",
+  "fireball-person": "Mage",
   trooper: "Trooper",
   infiltrator: "Infiltrator",
   medic: "Medic",

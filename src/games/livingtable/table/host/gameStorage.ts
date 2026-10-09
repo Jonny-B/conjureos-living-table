@@ -200,8 +200,8 @@ export const MESSAGES = {
 /** Why the server turned a save down, in plain words, by the reason code the server gave. */
 const REFUSAL_REASONS: Record<string, string> = {
   unavailable: "the server kept failing on it",
-  wrong_app: "this app is not allowed to keep saves yet",
-  unknown_action: "the save service is not switched on yet",
+  wrong_app: "saving to your account is not available for this game yet",
+  unknown_action: "saving to your account is not available right now",
   bad_label: "the save's name was not accepted",
   bad_payload: "the save's contents were not accepted",
   bad_game: "the game name was not accepted",

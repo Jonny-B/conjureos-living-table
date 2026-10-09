@@ -17,6 +17,19 @@ import "./styles.css";
 import "./core.css";
 import "./app.css";
 
+// The browser raises "ResizeObserver loop completed with undelivered notifications." and "ResizeObserver loop limit exceeded." as a window "error" event when a ResizeObserver callback changes the size of what it watches. They are
+// harmless (nothing is lost, the next frame lays out again), but the ConjureOS shell paints every window error as a red banner over the
+// game. The fixes are in the observers themselves (each one defers its work a frame); this is the net under them. A capture listener on
+// the window runs before anyone else's and stops exactly these two messages, nothing else.
+const BENIGN_RESIZE = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)\.?$/;
+window.addEventListener(
+  "error",
+  (ev: ErrorEvent) => {
+    if (typeof ev.message === "string" && BENIGN_RESIZE.test(ev.message)) ev.stopImmediatePropagation();
+  },
+  true,
+);
+
 const container = document.getElementById("root");
 if (!container) throw new Error("#root not found");
 

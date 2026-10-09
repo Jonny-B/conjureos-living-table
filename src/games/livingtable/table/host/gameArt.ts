@@ -241,7 +241,8 @@ async function defaultBundled(): Promise<Partial<Record<TemplateGenre, BundledLi
 
 // ---- the adapter ----------------------------------------------------------------------
 
-export type ArtSource = "games-db" | "bundled";
+/** Where a template's pictures came from: the server's art library (the games-db manifest), or the hand-drawn library that ships with the game. */
+export type ArtSource = "server" | "bundled";
 
 /** What `load()` settled on for one template. */
 export interface ArtStatus {
@@ -558,9 +559,9 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
     const own = manifest ? gameCatalog(manifest) : null;
     const gap = own ? missingAssetIds(own.world, need) : need;
     if (manifest && own && countIds(gap) === 0) {
-      return { source: "games-db", manifest, catalog: own, status: { source: "games-db", missing: gap } };
+      return { source: "server", manifest, catalog: own, status: { source: "server", missing: gap } };
     }
-    const reason = error ? `games-db manifest not loaded: ${error}` : `games-db manifest lacks ${countIds(gap)} id(s) the table needs`;
+    const reason = error ? `The art library from the server was not loaded: ${error}` : `The art library from the server lacks ${countIds(gap)} id(s) the table needs`;
     let lib: BundledLibrary | undefined;
     try {
       lib = (await getBundled())[t];
@@ -578,7 +579,7 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
       };
     }
     if (manifest && own) {
-      return { source: "games-db", manifest, catalog: own, status: { source: "games-db", missing: gap, reason } };
+      return { source: "server", manifest, catalog: own, status: { source: "server", missing: gap, reason } };
     }
     throw new Error(`The ${t} art could not be loaded and there is no bundled copy: ${error ?? "unknown error"}`);
   }

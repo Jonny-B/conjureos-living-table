@@ -225,6 +225,8 @@ export interface TableSettings {
   diceSkin: string;
   /** Board zoom 1 to 4, or null to let the window pick from the screen. */
   zoom: number | null;
+  /** True (or absent): a turn ends by itself when the hero has no move left. False: the player ends it. Game default: on. */
+  autoEndTurn?: boolean;
 }
 
 export interface TableSettingsHost {
@@ -245,9 +247,13 @@ export interface TableEnv {
   address(): string;
   /** Whether #sandbox in the address starts a sandbox room. Bench: true. Game: false. */
   sandboxRooms: boolean;
+  /** Whether the start screen lists the two test rooms. Absent means yes (the bench host and the memory host leave it out). Game: dev builds and local pages only. */
+  testRooms?: boolean;
+  /** Whether the window opens on the main menu (and the adventure list has a way back to it). Absent: it opens on the adventure list, as the bench does. Game: true. */
+  mainMenu?: boolean;
   /** Whether the export includes the debug exchange log. Bench: true. Game: false. */
   debugExport: boolean;
-  build: { app: string; bench?: string };
+  build: { app: string; detail?: string };
 }
 
 // ---- the host ---------------------------------------------------------------

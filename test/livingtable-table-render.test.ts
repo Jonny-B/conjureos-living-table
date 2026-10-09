@@ -27,6 +27,7 @@ import { clearHeadroom, createFog, drawLootMarks, drawProneMark, portraitCanvas 
 import { animatedStyle, createPlayStage, creatureTimingFor, creatureTokensOf, equipmentSig, manifestId, sameItems, type StageItem } from "../src/games/livingtable/table/stage";
 import { BOARD_CANVAS_CLASS, TABLE_ROOT_CLASS, TABLE_STYLE_ID, injectTableStyle, tableStyleCss } from "../src/games/livingtable/table/tableStyle";
 import { ROOM_FLOOR, addCreature, newPlay } from "../src/games/livingtable/table/state";
+import { slayCreature } from "../src/games/livingtable/table/fightRules";
 import type { CastClip, CastData, CastStyle } from "../src/games/livingtable/table/ui/cast";
 import { CELL_HEIGHT, CELL_WIDTH } from "../src/games/livingtable/world/coordinates";
 import { spriteSizeOf, type RenderManifest } from "../src/games/livingtable/render/canvasRenderer";
@@ -394,6 +395,18 @@ test("fog: loot marks show for a pile and an unsearched body the hero has seen, 
   assert.equal(count(unseen, "fillRect"), 0);
 });
 
+test("fog: an unsearched body gets no glint (the body itself is drawn now, and the board hints at nothing), a pile keeps its sack", () => {
+  hostWithStableArt();
+  const p = stateWithHero();
+  const c = addCreature(p, "token_goblin", { x: p.heroAt.x + 2, y: p.heroAt.y });
+  slayCreature(p, c);
+  assert.equal(p.bodies.length, 1);
+  assert.equal(p.bodies[0]!.looted, false, "unsearched");
+  const canvas = fakeCanvas();
+  drawLootMarks(canvas.ctx as unknown as CanvasRenderingContext2D, p, 32);
+  assert.equal(count(canvas, "fillRect"), 0, "nothing is drawn for a body");
+});
+
 test("fog: the prone tag is a box with the word PRONE at the foot of the square", () => {
   const c = fakeCanvas();
   drawProneMark(c.ctx as unknown as CanvasRenderingContext2D, { x: 2, y: 3 }, 32);
@@ -575,6 +588,75 @@ test("stage: with a cast the figures are asked for, never drawn half-decoded", (
   } finally {
     loop.restore();
   }
+});
+
+/** A host whose art draws the goblin (the stage draws a fallen creature from its token), and has no animated cast: the hand-drawn figures. */
+function hostThatDrawsGoblins() {
+  const base = createMemoryHost().art.render("fantasy");
+  const withGoblin: RenderManifest = { ...base, tokens: { ...base.tokens, token_goblin: { pixels: [[-1, 1, -1], [1, 2, 1]] } } };
+  return hostWithStableArt({ render: () => withGoblin });
+}
+
+test("stage: with the hand-drawn figures (no cast) a slain creature is drawn lying where it fell, under the living, and not on the hero's square", () => {
+  const loop = fakeLoop();
+  try {
+    withDocument(() => {
+      const host = hostThatDrawsGoblins();
+      assert.equal(host.art.cast(), null, "no cast: the hand-drawn art");
+      const p = stateWithHero();
+      const rat = addCreature(p, "token_goblin", { x: p.heroAt.x + 3, y: p.heroAt.y });
+      const other = addCreature(p, "token_goblin", { x: p.heroAt.x + 3, y: p.heroAt.y + 2 });
+      const canvas = fakeCanvas();
+      const stage = createPlayStage({ viewport: viewport(), canvas: canvas as unknown as HTMLCanvasElement, state: () => p, art: host.art, reducedMotion: true, zoom: () => 1 });
+      loop.step();
+      const lying = (): number => count(canvas, "rotate");
+      assert.equal(lying(), 0, "nobody has fallen yet");
+
+      slayCreature(p, rat);
+      assert.equal(p.bodies.length, 1);
+      loop.step();
+      assert.equal(lying(), 1, "the body is drawn lying down");
+      const move = canvas.calls.filter((c) => c[0] === "translate").at(-1)!;
+      const body = p.bodies[0]!.at;
+      assert.ok((move[1] as number) >= body.x * 16 && (move[1] as number) <= (body.x + 1) * 16, "across the square it fell on");
+      assert.ok((move[2] as number) >= body.y * 16 && (move[2] as number) <= (body.y + 1) * 16, "down the square it fell on");
+
+      // Another creature standing on it hides it; the hero standing on it hides it too.
+      const before = lying();
+      other.at = { ...body };
+      stage.invalidate();
+      loop.step();
+      assert.equal(lying(), before, "a living creature on the square is drawn instead of the body");
+      other.at = { x: body.x, y: body.y + 2 };
+      p.heroAt = { ...body };
+      stage.invalidate();
+      loop.step();
+      assert.equal(lying(), before, "the hero on the square is drawn instead of the body");
+      p.heroAt = { x: body.x - 2, y: body.y };
+      stage.invalidate();
+      loop.step();
+      assert.equal(lying(), before + 1, "stepping off shows the body again");
+      stage.dispose();
+    });
+  } finally {
+    loop.restore();
+  }
+});
+
+test("a body never joins the engine's layout (it would block a step): the scene layout holds the hero and the living only", async () => {
+  const { sceneLayout } = await import("../src/games/livingtable/table/adventureRun");
+  hostThatDrawsGoblins();
+  const p = stateWithHero();
+  const rat = addCreature(p, "token_goblin", { x: p.heroAt.x + 3, y: p.heroAt.y });
+  slayCreature(p, rat);
+  assert.equal(p.bodies.length, 1);
+  for (const forDisplay of [false, true]) {
+    const tokens = sceneLayout(p, false, forDisplay).tokens;
+    assert.ok(tokens.length <= 1 + p.creatures.length, "the hero and the creatures still standing, no more");
+    if (!forDisplay) assert.equal(tokens.length, 1 + p.creatures.length);
+    assert.ok(!tokens.some((t) => t.x === p.bodies[0]!.at.x && t.y === p.bodies[0]!.at.y));
+  }
+  assert.equal(sceneLayout(p, true).tokens.length, 0);
 });
 
 test("stage: creatureTokensOf lists each kind once, sorted; equipmentSig changes with the worn gear", () => {

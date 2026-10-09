@@ -30,6 +30,10 @@
 // A reply is a string (the model's text), a function returning one, or
 // { error: { message, code } } to reject like a provider failure, or
 // { hold: true, reply } to park the call until platform.release() is called.
+// An entry with `stream: { size, ms, until }` delivers the reply to the page the way the real bridge does, as streamed text:
+// `size` characters at a time (default 12), `ms` apart (default 15), stopping after `until` characters (default all). The game's
+// onChunk listener hears each piece before the call settles, so a spec can look at the page while the DM's words are still coming.
+// `stream` with `hold: true` streams first and then parks: the reply has started to type, but the call has not ended.
 // No match at all rejects the call and records it in `platform.unmatched`, so a
 // spec cannot spend a call it did not plan for without noticing.
 
@@ -114,6 +118,20 @@ export async function installPlatform(page, opts = {}) {
     entry.used++;
     let reply = entry.reply;
     if (typeof reply === "function") reply = await reply(call, entry.used);
+    if (entry.stream && typeof reply === "string" && req?.__e2eId !== undefined) {
+      const { size = 12, ms = 15, until = reply.length } = entry.stream;
+      const id = req.__e2eId;
+      const end = Math.min(reply.length, until);
+      for (let at = 0; at < end; at += size) {
+        const delta = reply.slice(at, Math.min(end, at + size));
+        try {
+          await page.evaluate(([i, d, t]) => window.__e2eEmit?.(i, d, t), [id, delta, reply.slice(0, at + delta.length)]);
+        } catch {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, ms));
+      }
+    }
     if (entry.hold) await new Promise((resolve) => platform.held.push(resolve));
     else if (platform.latencyMs) await new Promise((r) => setTimeout(r, platform.latencyMs));
     if (reply && typeof reply === "object" && reply.error) {
@@ -161,9 +179,25 @@ export async function installPlatform(page, opts = {}) {
 
   // The init script runs before the page's own scripts, in every frame.
   await page.addInitScript(({ extra, server, who }) => {
+    // Streaming: the page keeps the request's onChunk by an id, and Node calls __e2eEmit with each piece (see `stream` above).
+    const chunks = new Map();
+    let nextId = 1;
+    window.__e2eEmit = (id, delta, text) => {
+      const fn = chunks.get(id);
+      if (fn) fn(delta, text);
+    };
     const ai = {
       complete: async (req) => {
-        const out = await window.__e2eAiComplete(JSON.parse(JSON.stringify(req)));
+        const id = typeof req.onChunk === "function" ? nextId++ : undefined;
+        if (id !== undefined) chunks.set(id, req.onChunk);
+        const wire = JSON.parse(JSON.stringify(req));
+        if (id !== undefined) wire.__e2eId = id;
+        let out;
+        try {
+          out = await window.__e2eAiComplete(wire);
+        } finally {
+          if (id !== undefined) chunks.delete(id);
+        }
         if (out && out.error) {
           throw Object.assign(new Error(out.error.message || "ai.complete failed"), { code: out.error.code });
         }

@@ -4,15 +4,17 @@
  *  - the host is the game's: the owner's adventures, the playable classes, no sandbox address, no debug export, a fresh hero each
  *    time, the settings with the text speed, and no price text anywhere on the DM part;
  *  - open() settles the art (falling back to the bundled library when games-db has none) and the saves, and hands back a session;
- *  - a player who has a save is put back in it (not on the start screen), and one who has none starts at the start screen;
+ *  - the session always starts at the main menu, and is never put into a save behind the player's back: a player who has a save gets
+ *    Continue on it (session.continueId), and one who has none gets Continue off;
+ *  - the window opens on the main menu and lists the test rooms only where the build and the page allow it (env.mainMenu, env.testRooms);
  *  - the catalog binding open() needs for reading saves is its own: it is gone again afterwards, and a window's binding that is
  *    already there is left alone;
  *  - a save that arrives late (another device, after the wait gave up) joins the book the window keeps;
  *  - who is playing is kept as a hash, never as the address, and a second player's device cache is put aside;
- *  - a window that could not be mounted on the save the host resumed is remembered: the next open lands on the start screen, with the
- *    saves kept, and Try again (`resume: false`) does the same;
- *  - with a server, whoami is asked again when it does not answer; while the owner is unknown nothing is resumed or pulled, and a late
- *    answer hands the sync on and tells the screen;
+ *  - a window that could not be mounted when Continue was on is remembered: the next open has Continue off, with the saves kept,
+ *    and Try again (`resume: false`) does the same;
+ *  - with a server, whoami is asked again when it does not answer; while the owner is unknown Continue is off and nothing is pulled,
+ *    and a late answer turns Continue on, hands the sync on and tells the screen;
  *  - dispose is safe to call twice.
  *
  * Run: npx tsx --test test/livingtable-table-game-host.test.ts
@@ -117,7 +119,13 @@ test("open() with nothing saved: the art is settled (bundled when games-db has n
   assert.equal(catalogBound(), false, "the binding open() used for reading saves is gone again");
 });
 
-test("open() puts a player who has a save back in it, and the book holds their saves", async () => {
+test("the window opens on the main menu, and the test rooms follow the build (this is the committed prod build)", () => {
+  const g = make(memStore());
+  assert.equal(g.host.env.mainMenu, true);
+  assert.equal(g.host.env.testRooms, false, "a prod build, served from no local page, lists no test rooms");
+});
+
+test("open() does not put the player into their save: it names it for Continue, and the book holds their saves", async () => {
   const store = memStore();
   const first = make(store);
   const s1 = await first.open();
@@ -126,11 +134,11 @@ test("open() puts a player who has a save back in it, and the book holds their s
 
   const again = make(store);
   const s2 = await again.open();
-  assert.equal(s2.atStart, false, "the game opens where it was");
-  assert.ok(s2.play, "the scene is up");
-  assert.equal(s2.play!.adventureId, "rat-cellar");
+  assert.equal(s2.atStart, true, "the game opens on the main menu, not inside the save");
+  assert.equal(s2.play, null, "nothing is played until the player chooses");
   assert.equal(s2.saves.list().length, 1);
   assert.equal(s2.saves.list()[0]!.kind, "checkpoint");
+  assert.equal(s2.continueId, s2.saves.list()[0]!.id, "Continue is on, and it goes to the newest save");
   assert.equal(catalogBound(), false);
 });
 
@@ -170,9 +178,11 @@ test("a save that arrives after the wait gave up joins the book the window keeps
   const session = await g.open();
   assert.equal(session.saves.list().length, 0, "the wait gave up with an empty book");
   assert.equal(session.atStart, true);
+  assert.equal(session.continueId, null, "nothing to continue yet");
   release();
   await g.storage.sync();
   assert.ok(session.saves.list().length >= 1, "the late save joined the book");
+  assert.equal(session.continueId, session.saves.list()[0]!.id, "and Continue found it");
 });
 
 test("who is playing is kept as a hash, never as the address, and another player's device cache is put aside", async () => {
@@ -189,6 +199,7 @@ test("who is playing is kept as a hash, never as the address, and another player
   const b = make(store, { whoami: async () => ({ signedIn: true, email: "someone-else@example.test" }), storage: { store, remote: gamesSaveServer, retryMs: 0, readyTimeoutMs: 0 } });
   const s = await b.open();
   assert.equal(s.atStart, true, "the first player's game is not the second player's");
+  assert.equal(s.continueId, null, "and Continue is off for them");
   assert.equal(s.saves.list().length, 0);
   assert.equal((await gamesSaveServer.list()).saves.length, 0, "nothing of the first player's was uploaded");
   assert.ok([...store.data.keys()].some((k) => k.startsWith(TABLE_KEYS.backupPrefix)), "the first player's saves were kept aside on the device");
@@ -209,36 +220,36 @@ async function deviceWithSave(store: KeyValueStore): Promise<void> {
   first.dispose();
 }
 
-test("a window that failed to mount on the resumed save is not given that save again: the start screen, saves kept", async () => {
+test("a window that failed to mount when Continue was on is not offered that save again: Continue off, saves kept", async () => {
   const store = memStore();
   await deviceWithSave(store);
   const a = make(store);
   const s1 = await a.open();
-  assert.equal(s1.atStart, false, "the save is resumed the first time");
+  assert.ok(s1.continueId, "Continue is on the first time");
   a.noteMountFailed();
   a.dispose();
 
   const b = make(store);
   const s2 = await b.open();
-  assert.equal(s2.atStart, true, "the save that failed to mount is not resumed again, even by a fresh host");
-  assert.equal(s2.play, null);
+  assert.equal(s2.atStart, true);
+  assert.equal(s2.continueId, null, "the save that failed to mount is not offered again, even by a fresh host");
   assert.equal(s2.saves.list().length, 1, "the save is kept");
 
   resetFailedResumes();
   const c = make(store, { resume: false });
   const s3 = await c.open();
-  assert.equal(s3.atStart, true, "resume: false opens on the start screen (Try again)");
+  assert.equal(s3.continueId, null, "resume: false opens with Continue off (Try again)");
   assert.equal(s3.saves.list().length, 1);
 });
 
-test("noteMountFailed does nothing when no save was resumed", async () => {
+test("noteMountFailed does nothing when Continue was never on", async () => {
   const store = memStore();
   await deviceWithSave(store);
   const a = make(store, { resume: false });
   await a.open();
   a.noteMountFailed();
   const b = make(store);
-  assert.equal((await b.open()).atStart, false, "nothing was marked failed, so the save is still resumed");
+  assert.ok((await b.open()).continueId, "nothing was marked failed, so Continue is still on");
 });
 
 const WITH_SERVER = { remote: gamesSaveServer, retryMs: 0, readyTimeoutMs: 0 } as const;
@@ -272,8 +283,9 @@ test("while the owner is unknown nothing is resumed, nothing is pulled or pushed
   const g = make(store, { storage: { store, ...WITH_SERVER }, whoamiAttempts: 2, whoamiRetryMs: 0, whoamiLateMs: 0, whoamiTimeoutMs: 20, whoami: async () => null });
   const s = await g.open();
   assert.equal(g.ownerKnown(), false);
-  assert.equal(s.atStart, true, "the cache may be another player's: no save is resumed");
+  assert.equal(s.atStart, true, "the cache may be another player's: Continue is off");
   assert.equal(s.play, null);
+  assert.equal(s.continueId, null);
   assert.equal((await gamesSaveServer.list()).saves.length, 0, "nothing of the device cache went to the server");
 });
 

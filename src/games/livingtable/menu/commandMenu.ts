@@ -147,9 +147,9 @@ export function resolveMenuAction(action: MenuAction, context: MenuContext): Men
       // Always local: applying a known item's effect needs no reasoning.
       return { kind: "local" };
     case "talk":
-      return { kind: "dm", reason: "talking to someone is always a DM turn (1 credit)" };
+      return { kind: "dm", reason: "talking to someone is always a DM turn" };
     case "freeText":
-      return { kind: "dm", reason: "free text is always a DM turn (1 credit); it's the escape hatch that pays for itself" };
+      return { kind: "dm", reason: "free text is always a DM turn; it's the escape hatch for anything the menu does not cover" };
   }
 }
 
@@ -189,6 +189,6 @@ function resolveMove(destination: MoveDestination, context: MenuContext): MenuRo
 
   return {
     kind: "dm",
-    reason: `cell (${target.cx},${target.cy}) is unassembled -- the DM has to build it (assembleCell, 1 credit) before the party can walk in`,
+    reason: `cell (${target.cx},${target.cy}) is unassembled -- the DM has to build it (assembleCell) before the party can walk in`,
   };
 }

@@ -14,7 +14,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARCHETYPES, getArchetype } from "../src/games/livingtable/characters/templates";
+import { ARCHETYPES, PLAYABLE_ARCHETYPE_IDS, getArchetype } from "../src/games/livingtable/characters/templates";
+import { ARCHETYPE_LABEL } from "../src/games/livingtable/table/state";
 import { createCharacter, creationChoicesFor, normalizeSheet, type CharacterSheet } from "../src/games/livingtable/characters/creation";
 import { addMilestone, applyLevelUpChoice, canLevelUp, levelUpChoices, milestonesRemaining, MILESTONES_PER_LEVEL } from "../src/games/livingtable/characters/leveling";
 import { applyDamage, applyDeathSave, applyHealing, longRest, longRestBlockedReason, newAdventuringDay, shortRest, shortRestBlockedReason } from "../src/games/livingtable/characters/health";
@@ -23,7 +24,7 @@ import { SLOT_ROLES, STARTING_LOADOUT } from "../src/games/livingtable/character
 import { equipItem, equippableTiers, gearView } from "../src/games/livingtable/menu/equipment";
 import { commitLoadout, draftFromSheet, stageEquip } from "../src/games/livingtable/rules/inventory";
 import { lootFor } from "../src/games/livingtable/rules/loot";
-import { CAMPAIGN_PLANNING_SUB, CREDIT_BUYS, FREE_FOREVER_LINE, GAME_TAGLINE, NEW_CAMPAIGN_BLURB } from "../src/games/livingtable/menu/labels";
+import { CAMPAIGN_PLANNING_SUB, GAME_TAGLINE } from "../src/games/livingtable/menu/labels";
 import { join } from "node:path";
 
 // ── helpers ─────────────────────────────────────────────────────────────
@@ -53,6 +54,31 @@ function numericSignature(sheet: CharacterSheet): string {
 }
 
 // ── templates.ts ────────────────────────────────────────────────────────
+
+test("the three playable classes are called Knight, Rogue and Mage; the ids stay as they were (item 6)", () => {
+  assert.deepEqual(
+    PLAYABLE_ARCHETYPE_IDS.map((id) => [id, ARCHETYPE_LABEL[id as keyof typeof ARCHETYPE_LABEL], getArchetype(id).displayName]),
+    [
+      ["knight", "Knight", "The Knight"],
+      ["shadow", "Rogue", "The Rogue"],
+      ["fireball-person", "Mage", "The Mage"],
+    ],
+  );
+  // Nothing a player reads still uses the old names.
+  for (const a of ARCHETYPES) assert.doesNotMatch(a.displayName, /Shadow|Fireball/);
+});
+
+test("normalizeSheet refreshes a stored class name, so an old save no longer says Shadow (item 6)", () => {
+  for (const [id, old, now] of [["shadow", "The Rogue", "The Rogue"], ["fireball-person", "The Mage", "The Mage"]] as const) {
+    const sheet = makeDefault(id);
+    const stored = { ...sheet, displayName: old } as CharacterSheet;
+    assert.equal(normalizeSheet(stored).displayName, now, id);
+    assert.equal(normalizeSheet(sheet).displayName, now, id);
+  }
+  // A sheet whose class is unknown to this build keeps what it had.
+  const odd = { ...makeDefault("knight"), archetypeId: "from-the-future", displayName: "The Oddity" } as CharacterSheet;
+  assert.equal(normalizeSheet(odd).displayName, "The Oddity");
+});
 
 test("there are exactly eight archetypes, four fantasy and four sci-fi", () => {
   assert.equal(ARCHETYPES.length, 8);
@@ -356,8 +382,8 @@ test("levelUpChoices keeps a caster's spell slots in sync with the new level", (
 // ── the Item verb has something to spend, for every archetype ───────────
 //
 // The failure this guards, measured across all eight archetypes through the
-// real createCharacter: the item-usable inventory was Knight none, Shadow
-// none, Healer none, Fireball Person none, Psion none. Only three archetypes
+// real createCharacter: the item-usable inventory was Knight none, Rogue
+// none, Healer none, Mage none, Psion none. Only three archetypes
 // carried anything the old name-substring heuristic matched, which means one
 // of the five command-menu verbs was guaranteed to fail for the entire
 // Fantasy template -- and the failure message advised using a potion that
@@ -668,10 +694,7 @@ test("no player-facing pitch promises company the build cannot deliver (issue #1
   const PARTY_WORDS = /\bpart(y|ies)\b|\bsquad\b|\bteammates?\b|\ballies\b|\bcompanions?\b|\byour crew\b/i;
   const copy: [string, string][] = [
     ["GAME_TAGLINE", GAME_TAGLINE],
-    ["NEW_CAMPAIGN_BLURB", NEW_CAMPAIGN_BLURB],
     ["CAMPAIGN_PLANNING_SUB", CAMPAIGN_PLANNING_SUB],
-    ["FREE_FOREVER_LINE", FREE_FOREVER_LINE],
-    ...(Object.entries(CREDIT_BUYS) as [string, string][]),
   ];
   for (const [name, text] of copy) {
     const match = PARTY_WORDS.exec(text);

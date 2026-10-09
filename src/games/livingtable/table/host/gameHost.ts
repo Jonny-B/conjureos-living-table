@@ -11,7 +11,7 @@
  *   heroes     the playable classes; a fresh hero each time (progress lives in the saves)
  *
  *   const game = createGameHost();
- *   const session = await game.open();       // art settled, saves pulled, the newest save ready to resume
+ *   const session = await game.open();       // art settled, saves pulled; the main menu offers Continue on the newest save
  *   const win = mountTable(el, game.host, { session });
  *   ...
  *   win.dispose(); game.dispose();
@@ -36,6 +36,7 @@ import { createGameFiles, type FilesEnv } from "./gameFiles";
 import { createGameSettings, type GameSettingsOptions } from "./gameSettings";
 import { createGameStorage, hashText, type GameStorage, type GameStorageOptions } from "./gameStorage";
 import { APP_VERSION } from "../../../../version";
+import { BUILD_TARGET } from "../../../../buildTarget";
 
 export interface GameHostOptions {
   art?: GameArtOptions;
@@ -58,7 +59,7 @@ export interface GameHostOptions {
   whoamiRetryMs?: number;
   /** While the owner is still unknown after opening, how often to ask again in the background (up to 3 more times). Default 8000; 0 turns it off. */
   whoamiLateMs?: number;
-  /** Whether `open()` puts the player back in their newest save. Default true; the screen passes false for "Try again" after a failed mount. */
+  /** Whether `open()` offers Continue on the player's newest save. Default true; the screen passes false for "Try again" after a failed mount. */
   resume?: boolean;
   reducedMotion?: boolean;
   rng?: () => number;
@@ -72,13 +73,13 @@ export interface GameHost {
   storage: GameStorage;
   /**
    * Settle everything the window needs before it mounts, and hand back the session to mount it with: the saves are in the
-   * book, and when the player has one the game is already standing at their newest save (they land where they left off, not
-   * on the start screen). Runs once; later calls give the same session.
+   * book, and the session starts at the main menu. When the player has a save the session names it (`continueId`) and the menu's
+   * Continue goes back to it; the game is not put into a save behind the player's back. Runs once; later calls give the same session.
    */
   open(): Promise<TableSession>;
   /**
-   * The window could not be mounted on the session `open()` gave. When it had put the player into a save, that save is remembered
-   * (for this page session, across hosts) and never resumed again, so the next open lands on the start screen. The saves are kept.
+   * The window could not be mounted on the session `open()` gave. The save it offered Continue on is remembered (for this page
+   * session, across hosts) and not offered again, so the next open has Continue off. The saves are kept, and Load still has them.
    */
   noteMountFailed(): void;
   /**
@@ -106,6 +107,26 @@ export function resetFailedResumes(): void {
 
 export function playableHeroes(): ArchetypeId[] {
   return ARCHETYPE_IDS.filter((id) => TEMPLATE_OF_ARCHETYPE[id] === "fantasy" && PLAYABLE_ARCHETYPE_IDS.includes(id));
+}
+
+/** The page names that mean "served from this machine": local development and the e2e harness. */
+const LOCAL_HOSTNAMES: readonly string[] = ["localhost", "127.0.0.1"];
+
+/**
+ * Whether the two test rooms show on the start screen. A dev build shows them; a prod build never does, unless the page is served
+ * from this machine (local development and the e2e harness keep them). Pure.
+ */
+export function testRoomsVisible(target: "prod" | "dev", hostname: string): boolean {
+  return target === "dev" || LOCAL_HOSTNAMES.includes(hostname);
+}
+
+/** The page's hostname, or "" when there is no page (Node). */
+function pageHostname(): string {
+  try {
+    return typeof location === "object" && location && typeof location.hostname === "string" ? location.hostname : "";
+  } catch {
+    return "";
+  }
 }
 
 /** The bridge's `whoami`, or null when there is none (outside ConjureOS). */
@@ -172,6 +193,8 @@ export function createGameHost(options: GameHostOptions = {}): GameHost {
       reducedMotion,
       address: () => "",
       sandboxRooms: false,
+      testRooms: testRoomsVisible(BUILD_TARGET, pageHostname()),
+      mainMenu: true,
       debugExport: false,
       build: { app: `The Living Table ${APP_VERSION}` },
     },
@@ -217,25 +240,30 @@ export function createGameHost(options: GameHostOptions = {}): GameHost {
     ownerUnknown = storage.waitingForOwner();
 
     await Promise.all([art.load(), storage.ready()]);
-    // A player with a save lands in it, unless the owner is unknown, or the save is one the window already failed to mount, or the
-    // screen asked for the start screen. The start screen is one tap away (the Adventures button).
+    // The player lands on the main menu with Continue on their newest save, unless the owner is unknown, or the save is one the window
+    // already failed to mount, or the screen asked for a plain start. The game is never put into a save for them.
     const made = withCatalog(() => {
       const book = createTableSession(host);
-      const newest = book.saves.list()[0];
-      const play = newest && !ownerUnknown && options.resume !== false && !failedResumes.has(newest.id) ? fromSnapshot(newest.data) : null;
-      if (newest && play && playableHeroes().includes(play.archetypeId)) {
-        book.play = play;
-        book.atStart = false;
-        resumedId = newest.id;
-      }
+      book.continueId = continueFor(book);
+      resumedId = book.continueId;
       return book;
     });
     // A save that arrives late (another device, after the wait gave up) joins the book the window keeps.
     unsubscribeChange = storage.onChange(() => {
-      if (!disposed) made.saves = withCatalog(() => createSaveBook(storage.saves));
+      if (disposed) return;
+      made.saves = withCatalog(() => createSaveBook(storage.saves));
+      made.continueId = withCatalog(() => continueFor(made));
     });
     if (ownerUnknown) askLater(made, 0);
     return made;
+  }
+
+  /** The save the main menu's Continue goes to: the newest, when the owner is known, it reads, it is a class the game plays, and the window never failed on it. Else null. */
+  function continueFor(book: TableSession): string | null {
+    const newest = book.saves.list()[0];
+    if (!newest || ownerUnknown || options.resume === false || failedResumes.has(newest.id)) return null;
+    const play = fromSnapshot(newest.data);
+    return play && playableHeroes().includes(play.archetypeId) ? newest.id : null;
   }
 
   /** The owner is still unknown after opening: ask again now and then. When it answers, the sync starts and the book is read again. */
@@ -253,6 +281,7 @@ export function createGameHost(options: GameHostOptions = {}): GameHost {
         await storage.ownerKnown();
         if (disposed) return;
         made.saves = withCatalog(() => createSaveBook(storage.saves));
+        made.continueId = withCatalog(() => continueFor(made));
         for (const cb of [...ownerListeners]) cb();
       });
     }, every);

@@ -182,7 +182,7 @@ export function isUnarmored(sheet: Pick<EquippedSheet, "armor">): boolean {
 
 /**
  * True when `role` is an armour-kind slot (the Knight's shield and plate, a
- * Shadow's or wizard's cloak) that holds only the plain common piece AND the
+ * Rogue's or wizard's cloak) that holds only the plain common piece AND the
  * hero wears no armour: nothing is worn there. A magic piece in such a slot is
  * a real worn item and makes this false. See `ArmorState` for why this is a
  * reading of the sheet and not an empty storage slot.

@@ -65,7 +65,7 @@ export interface AdventureBundle {
   format: "living-table-adventure";
   version: number;
   exportedAt: string;
-  build: { app: string; bench?: string; userAgent?: string };
+  build: { app: string; detail?: string; userAgent?: string };
   settings: Record<string, unknown>;
   character: unknown;
   scene: unknown;
@@ -241,7 +241,7 @@ function readme(bundle: AdventureBundle): string {
     `Format: ${bundle.format} version ${bundle.version}`,
     `App build: ${b.app}`,
   ];
-  if (b.bench) lines.push(`Bench build: ${b.bench}`);
+  if (b.detail) lines.push(`Game build: ${b.detail}`);
   if (b.userAgent) lines.push(`Browser: ${b.userAgent}`);
   lines.push(
     "",

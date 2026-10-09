@@ -322,7 +322,7 @@ test("a weapon the engine is not rolling says so, and names the one it is", () =
   assert.ok(archerAxe.inGame.includes("Archery adds +2 to hit"));
   assert.ok(describeCarried(archer, "Longsword").inGame.startsWith(DM_RULES_LABEL));
 
-  // A Shadow's shortbow is never the engine's weapon.
+  // A Rogue's shortbow is never the engine's weapon.
   const shadow = sheetFor("shadow");
   const bow = describeCarried(shadow, "Shortbow, 20 arrows");
   assert.ok(bow.inGame.startsWith(DM_RULES_LABEL));

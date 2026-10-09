@@ -14,7 +14,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { createMemoryHost } from "../src/games/livingtable/table/hostDefault";
 import { createTableSession, mountTable } from "../src/games/livingtable/table/mountTable";
@@ -28,6 +28,14 @@ import { fightEnvBound, tableRng } from "../src/games/livingtable/table/fightRul
 
 const read = (rel: string): string => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").split(String.fromCharCode(13)).join("");
 const MOUNT = "src/games/livingtable/table/mountTable.ts";
+// mountTable.ts holds the window's setup and its handle; the flows (the board, the fight, the DM, the menu, the input...) are one module each
+// in flows/, installed over a shared context (tableCtx.ts) that they reach each other through as `tc`. The source scans read all of them,
+// with that prefix taken off, so a scan finds a call wherever it now lives.
+const FLOW_FILES = readdirSync(new URL("../src/games/livingtable/table/flows/", import.meta.url))
+  .filter((f) => f.endsWith(".ts"))
+  .sort()
+  .map((f) => `src/games/livingtable/table/flows/${f}`);
+const readMount = (): string => [MOUNT, ...FLOW_FILES].map(read).join("\n").replace(/\btc\./g, "");
 const BENCH_HOST = "scripts/asset-bench/benchHost.ts";
 const DASHES = new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`);
 
@@ -177,7 +185,7 @@ test("installBenchHooks puts the handles the play scripts read on globalThis, fr
 // ---- the source keeps its promises ----------------------------------------------------------------------------------------
 
 test("every document and window listener the window adds is removed again by dispose()", () => {
-  const src = read(MOUNT);
+  const src = readMount();
   const added = [...src.matchAll(/\b(document|window)\.addEventListener\("([a-z]+)"/g)].map((m) => `${m[1]}.${m[2]}`);
   assert.ok(added.length >= 2, "the keyboard and the blur listeners are there");
   for (const a of added) {
@@ -195,7 +203,7 @@ test("every document and window listener the window adds is removed again by dis
 });
 
 test("every module binding the window makes is a token it releases (a late dispose cannot unbind its successor)", () => {
-  const src = read(MOUNT);
+  const src = readMount();
   const binds = [...src.matchAll(/\b(bind[A-Z][A-Za-z]+)\(/g)].map((m) => m[1]!);
   for (const b of new Set(binds)) assert.ok(/^(bindCatalog|bindAdventures|bindFightEnv|bindCastSource)$/.test(b), `unexpected binding ${b}`);
   assert.match(src, /const unbinds: Array<\(\) => void> = \[bindCatalog\(host\.art\), bindAdventures\(host\), bindFightEnv\(host\.env\)\]/);
@@ -204,7 +212,7 @@ test("every module binding the window makes is a token it releases (a late dispo
 });
 
 test("the window holds no state of the bench's: the singletons live in the session, the settings in the host, the page reads go through the host", () => {
-  const src = read(MOUNT);
+  const src = readMount();
   // The module level of mountTable.ts has no mutable state: no `let` outside the function.
   const outside = src.slice(0, src.indexOf("export function mountTable("));
   assert.doesNotMatch(outside, /^let /m, "no module-level let");
@@ -218,7 +226,7 @@ test("the window holds no state of the bench's: the singletons live in the sessi
 });
 
 test("neither file names the bench folder or uses a dash character", () => {
-  for (const f of [MOUNT, BENCH_HOST, "scripts/asset-bench/assets.ts"]) {
+  for (const f of [MOUNT, ...FLOW_FILES, BENCH_HOST, "scripts/asset-bench/assets.ts"]) {
     const text = read(f);
     if (f.startsWith("src/")) assert.equal(text.includes("asset-bench"), false, `${f} names the bench folder`);
     assert.equal(DASHES.test(text), false, `${f} has an en or em dash`);
@@ -227,10 +235,18 @@ test("neither file names the bench folder or uses a dash character", () => {
 
 // ---- the dialogue box and the window's own copy ---------------------------------------------------------------------------
 
-const OVERLAY = "src/games/livingtable/table/ui/overlay.ts";
+// The overlay's source: overlay.ts re-exports the modules it was split into, so the scan reads the whole family (see livingtable-bench-overlay.test.ts).
+const UI = "src/games/livingtable/table/ui";
+const OTHER_UI = ["sheet.ts", "dice.ts", "foeDice.ts", "cast.ts", "tip.ts", "pixelFont.ts"];
+const readOverlay = (): string =>
+  readdirSync(new URL(`../${UI}/`, import.meta.url))
+    .filter((f) => f.endsWith(".ts") && !OTHER_UI.includes(f))
+    .sort()
+    .map((f) => read(`${UI}/${f}`))
+    .join("\n");
 
 test("the window states no price, no number and no credits anywhere a player can read it", () => {
-  const src = read(MOUNT);
+  const src = readMount();
   assert.doesNotMatch(src, /costNote|AI_ADVENTURE_COST_NOTE/, "the window shows no cost note");
   const note = /const AI_WRITER_NOTE = "([^"]*)"/.exec(src)?.[1] ?? "";
   assert.match(note, /few minutes/, "the writer's note says it is a long job");
@@ -242,14 +258,14 @@ test("the window states no price, no number and no credits anywhere a player can
 });
 
 test("story text has one home: the window queues it in the dialogue box, and the Space key is the box's press first", () => {
-  const src = read(MOUNT);
+  const src = readMount();
   assert.match(src, /overlay\.advanceStory\(\)/, "Space presses the dialogue box when one is up");
   assert.match(src, /overlay\.say\(line\)/, "story lines go to the box");
   assert.match(src, /overlay\.narrate\(/, "the DM's text goes to the box");
   assert.doesNotMatch(src, /locationHoldMs|dropPendingCards|sceneTimer/, "the cards no longer carry text or take turns");
   // A streaming reply that turns out to be a person speaking keeps its entry: it is renamed, not queued twice.
   assert.match(src, /current\.setSpeaker\(speaker\)/);
-  const overlay = read(OVERLAY);
+  const overlay = readOverlay();
   for (const name of ["setTextSpeed", "advanceStory", "createDialogueQueue"]) assert.ok(overlay.includes(name), name);
   assert.doesNotMatch(overlay, /lto-narr-host|lto-dlg-scroll|stripOverflow|retireNarration/, "the second box and the scrolling strip are gone");
 });
@@ -258,16 +274,17 @@ test("text speed is a game setting: the host type declares it, the window reads 
   const host = read("src/games/livingtable/table/host.ts");
   assert.match(host, /export type TextSpeed = "slow" \| "normal" \| "fast" \| "instant"/);
   assert.match(host, /textSpeed: TextSpeed;/);
-  const src = read(MOUNT);
+  const src = readMount();
   assert.match(src, /textSpeedOf\(host\.settings\.get\(\)\.textSpeed\)/, "an old saved setting with no speed reads as normal");
   assert.match(src, /reducedMotion \? "instant" : textSpeed/, "reduced motion prints at once");
   for (const g of SETTING_CHOICES) assert.match(src, new RegExp(`key === "${g.key}"`), `the window handles set:${g.key}`);
   assert.match(src, /id\.startsWith\("set:"\)/);
-  assert.match(src, /settings: \{ textSpeed, textStyle, rollMyself, zoom: host\.settings\.get\(\)\.zoom \?\? null \}/, "the HUD is told the settings");
+  // The menu is told the settings the window holds (and any the host adds, such as autoEndTurn): generic over what follows them.
+  assert.match(src, /settings: \{ textSpeed: textSpeed, textStyle: textStyle, rollMyself: rollMyself, zoom: [^}]*\}/, "the menu is told the settings");
 });
 
 test("Space and Enter keep their own meaning on a focused control: summary, link, button and role=button are exempt from the board's keys", () => {
-  const src = read(MOUNT);
+  const src = readMount();
   // The guard line in onKey: a focused control that Space or Enter activates is left alone (the board keeps Space on the board itself).
   const guard = /target\?\.closest\?\.\("([^"]*)"\) && \(key === " " \|\| key === "enter"\)/.exec(src);
   assert.ok(guard, "onKey has a guard that lets Space and Enter through to a focused control");
@@ -278,4 +295,75 @@ test("Space and Enter keep their own meaning on a focused control: summary, link
   assert.match(src, /target\?\.tagName === "SELECT" && !KEY_DIR\[key\]\) return;/);
   // The board's own Space (dialogue press, then skip) is still there, after the guard.
   assert.ok(src.indexOf("overlay.advanceStory()") > guard.index, "Space still presses the dialogue box and skips when nothing focused wants it");
+});
+
+// ---- the board's input: select and walk, never act ---------------------------------------------------------------------
+
+const FLOWS = "src/games/livingtable/table/flows";
+/** The body of a function declared with `function name(` in `src`, up to its closing brace at the same indent. */
+function bodyOf(src: string, name: string): string {
+  const m = new RegExp(`\\n( *)(?:async )?function ${name}\\(`).exec(src);
+  if (!m) return "";
+  const rest = src.slice(m.index + 1);
+  const end = rest.indexOf(`\n${m[1]}}\n`);
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+test("a left click or a tap selects and walks and never acts: the click handler plans a walk and runs it, with no first-tap preview", () => {
+  const input = read(`${FLOWS}/input.ts`);
+  const click = /addEventListener\("click", \(e\) => \{([\s\S]*?)\n  \}\);/.exec(input)?.[1] ?? "";
+  assert.ok(click.length > 0, "the click handler is found");
+  assert.match(click, /tc\.planFor\(t\)/);
+  assert.match(click, /tc\.runPlan\(plan\)/);
+  assert.doesNotMatch(input, /previewed/, "a tap goes at once: nothing waits for a second tap");
+  assert.doesNotMatch(input, /crosshair/, "no cursor tells a hostile from a floor");
+  // The menu is a right click or a half-second press, and it selects the square it opens on.
+  assert.match(input, /addEventListener\("contextmenu"/);
+  assert.match(input, /\}, 500\);/, "a long press is half a second");
+  assert.match(input, /selectUnder\(e\.clientX, e\.clientY\);\s*tc\.openMenu\(/);
+  // Pressing and holding never selects text.
+  assert.match(input, /addEventListener\("selectstart", \(e\) => e\.preventDefault\(\)\)/);
+  assert.match(input, /removeAllRanges\(\)/);
+});
+
+test("planFor only ever answers walk, a walk to a way out, or none: the other plan kinds are the actions menu's, run by runPlan after a walk", () => {
+  const board = read(`${FLOWS}/board.ts`);
+  const plan = bodyOf(board, "planFor");
+  assert.ok(plan.length > 300, "planFor is found");
+  for (const kind of ["attack", "loot", "use", "look", "talk", "feature"]) assert.doesNotMatch(plan, new RegExp(`kind: "${kind}"`), `a click makes no ${kind} plan`);
+  for (const kind of ["walk", "exit", "none"]) assert.match(plan, new RegExp(`kind: "${kind}"`), kind);
+  // What the menu reuses is still there.
+  assert.match(board, /tc\.approachCost = approachCost;/);
+  assert.match(board, /tc\.walkThen = walkThen;/);
+  const attack = read(`${FLOWS}/attack.ts`);
+  assert.match(attack, /tc\.runPlan = runPlan;/);
+  assert.match(attack, /tc\.attackPlanFor = attackPlanFor;/);
+  for (const kind of ["attack", "loot", "use", "look", "talk", "feature", "exit"]) assert.match(attack, new RegExp(`plan\\.kind === "${kind}"`), `runPlan still runs a ${kind} plan`);
+});
+
+test("the board gives no hints: no verb words and no per-kind colours, only the walk, one neutral ring, a gold way out and red for a square the hero cannot go to", () => {
+  const board = read(`${FLOWS}/board.ts`);
+  const marks = bodyOf(board, "drawMarks");
+  assert.ok(marks.length > 500, "drawMarks is found");
+  for (const verb of ["Attack", "Search", "Look", "Talk", "Use", "Go through"]) assert.ok(!marks.includes(`"${verb}`), `no "${verb}" word on the board`);
+  assert.doesNotMatch(marks, /170, 215, 255|255, 120, 90/, "no blue look colour, no orange attack colour");
+  assert.doesNotMatch(marks, /setLineDash|reach \?/, "no outline on a hostile creature");
+  assert.match(marks, /rgba\(235, 70, 60/, "red stays for a square the hero cannot go to");
+  assert.match(marks, /exit\.exit\.label/, "a way out is named");
+  assert.doesNotMatch(read("src/games/livingtable/table/fog.ts"), /ffd34c/, "an unsearched body gets no glint");
+});
+
+test("C, I, J and L open the game menu on a tab (and switch or close it while it is up); Esc cancels the DM only while it is thinking; F, E, Q, T and R stay as accelerators", () => {
+  const input = read(`${FLOWS}/input.ts`);
+  assert.match(input, /MENU_KEY[^=]*= \{ c: "character", i: "inventory", j: "journal", l: "log" \}/);
+  assert.match(input, /tc\.openGameMenu\(menuTab\)/);
+  assert.match(input, /key === "escape" && tc\.dmThinking\) \{\s*tc\.cancelDm\(\);/);
+  assert.match(input, /if \(tc\.overlayOpen\(\)\) \{/, "the menu, the screens and the creator still pause the board");
+  for (const [key, call] of [["f", "attackNearest"], ["e", "useNearby"], ["q", "drinkPotion"], ["t", "endTurnFlow"], ["r", "restFlow"]] as const) {
+    assert.match(input, new RegExp(`key === "${key}"\\) \\{\\s*if \\(!e\\.repeat\\) void tc\\.${call}\\(\\)`), `${key} still runs ${call}`);
+  }
+});
+
+test("a loaded save is not refused because the game menu (where the Saves tab lives) is open", () => {
+  assert.doesNotMatch(bodyOf(read(`${FLOWS}/turns.ts`), "loadSave"), /overlayOpen/);
 });

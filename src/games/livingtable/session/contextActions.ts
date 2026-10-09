@@ -46,7 +46,7 @@ import { getAncestry } from "../characters/ancestries";
 import { equipmentCheckBonus } from "../characters/equipment";
 import { castableSpells, castingAbilityFor, spellAttackBonus } from "../menu/casting";
 import { FEET_PER_TILE } from "../menu/combatRound";
-import { skillModifierFor } from "./combat";
+import { attackerBonusFor, skillModifierFor, weaponDamageNotationFor, weaponFor } from "./combat";
 import { DEFAULT_MELEE_REACH_TILES } from "../world/reach";
 
 // --- the public shapes -----------------------------------------------------
@@ -75,8 +75,11 @@ export interface ContextTarget {
     passivePerception: number;
   };
   door?: { open: boolean; locked: boolean; lockDc?: number };
-  body?: { looted: boolean; harvested: boolean; beast: boolean };
+  /** `harvestable`: the body is of something that yields a part (rules/corpses.ts harvestForToken is not null). A beast alone is not enough. */
+  body?: { looted: boolean; harvested: boolean; beast: boolean; harvestable: boolean };
   searched?: boolean;
+  /** A chest the Open line works on (a scene's own container). Doors are always openable; a searchable feature of an adventure is searched, not opened. */
+  openable?: boolean;
 }
 
 export interface ContextSituation {
@@ -104,8 +107,11 @@ export interface ContextAction {
   bonus?: number;
   /** The SRD cost in a fight. Outside a fight nothing is spent. */
   cost: "free" | "object" | "action" | "bonus" | "move";
-  /** Why it is on your menu: "Rogue", "Stealth +5, expertise", "Anyone can try: Athletics +2". */
-  why: string;
+  /**
+   * The plain numbers behind the line, when there are any: "Stealth +5, expertise", "Rogue, Stealth +5", "Longsword +4, 1d8+4".
+   * Absent for a line with nothing to add (Look closer, Talk, Loot). Never explains that anyone may try it.
+   */
+  why?: string;
   /** You are especially good at this (expertise, or a bonus of GOOD_BONUS or more). */
   good?: boolean;
   /** First-person words for the DM or the log: "I try to pick the goblin's pocket". */
@@ -114,6 +120,11 @@ export interface ContextAction {
   /** Plain words, present exactly when `enabled` is false. */
   reason?: string;
   needsAdjacent?: boolean;
+  /**
+   * Set when the only thing in the way is distance: how many tiles beyond reach the target is. The menu may then offer to walk
+   * there first (and run the action on arrival). Absent when anything else blocks it, since walking would not help.
+   */
+  farBy?: number;
 }
 
 // --- tuning ----------------------------------------------------------------
@@ -150,6 +161,9 @@ const LORE_SKILL_BY_TYPE: Readonly<Record<string, string>> = {
 
 export const CONTEXT_ACTION_IDS: readonly string[] = Object.freeze([
   "look",
+  "attack",
+  "open",
+  "drink-potion",
   "talk",
   "loot",
   "harvest",
@@ -178,13 +192,13 @@ export const CONTEXT_ACTION_IDS: readonly string[] = Object.freeze([
 
 /** Menu order when a hostile creature is in your face: the fight first. */
 const COMBAT_ORDER: readonly string[] = [
-  "stabilize", "cast", "kick", "shove", "grapple", "hide", "bluff", "threaten", "parley", "read-intent",
+  "stabilize", "attack", "cast", "kick", "shove", "grapple", "hide", "bluff", "threaten", "parley", "read-intent",
   "calm-beast", "recall-lore", "talk", "pickpocket", "sneak-up",
 ];
 
 /** Menu order for everything else: the quiet verbs first. */
 const CALM_ORDER: readonly string[] = [
-  "stabilize", "loot", "harvest", "pick-lock", "force-door", "listen", "search", "read-runes", "track", "talk",
+  "stabilize", "open", "drink-potion", "attack", "loot", "harvest", "pick-lock", "force-door", "listen", "search", "read-runes", "track", "talk",
   "pickpocket", "sneak-up", "parley", "bluff", "threaten", "read-intent", "calm-beast", "recall-lore", "cast",
   "kick", "shove", "grapple", "hide", "sneak",
 ];
@@ -257,12 +271,12 @@ function skillFacts(sheet: CharacterSheet, skill: string): SkillFacts {
   };
 }
 
-/** "Stealth +5, expertise" / "Athletics +4, trained" / "Anyone can try: Persuasion +1". With a class tag in front when the class is why you see it. */
+/** "Stealth +5, expertise" / "Athletics +4, trained" / "Persuasion +1". With a class tag in front when the class is why you see it. Just the number a roll will add; nothing about who may try it. */
 function whyFor(f: SkillFacts, classTag?: string): string {
   const core = `${f.skill} ${signed(f.bonus)}`;
   const training = f.expertise ? ", expertise" : f.trained ? ", trained" : "";
   if (classTag) return `${classTag}, ${core}${training}`;
-  return f.trained ? `${core}${training}` : `Anyone can try: ${core}`;
+  return `${core}${training}`;
 }
 
 // --- the gate every action passes through ---------------------------------
@@ -272,7 +286,7 @@ interface Def {
   label: string;
   resolver: ContextResolver;
   cost: ContextAction["cost"];
-  why: string;
+  why?: string;
   say: string;
   skill?: string;
   ability?: string;
@@ -296,27 +310,34 @@ function tooFar(target: ContextTarget): string {
 
 function finish(def: Def, target: ContextTarget, sit: ContextSituation): ContextAction {
   let reason: string | undefined;
+  let farBy: number | undefined;
   if (sit.heroDown) reason = "You are down. You cannot act until you are back on your feet.";
   else if (sit.inFight && !sit.heroTurn) reason = "Not your turn.";
   else if (sit.inFight && def.cost === "action" && !sit.actionReady) reason = "You have already used your action this turn.";
   else if (sit.inFight && def.cost === "bonus" && !sit.bonusReady) reason = "You have already used your bonus action this turn.";
   else if (sit.inFight && def.cost === "move" && sit.movementFt <= 0) reason = "You have no movement left this turn.";
   else if (sit.inFight && def.noFight) reason = "That takes more than a moment. Finish the fight first.";
-  else if (def.needsAdjacent && target.distanceTiles > DEFAULT_MELEE_REACH_TILES) reason = tooFar(target);
-  else if (def.needsVoice && target.distanceTiles > TALK_RANGE_TILES) {
+  else if (def.needsAdjacent && target.distanceTiles > DEFAULT_MELEE_REACH_TILES) {
+    reason = tooFar(target);
+    farBy = target.distanceTiles - DEFAULT_MELEE_REACH_TILES;
+  } else if (def.needsVoice && target.distanceTiles > TALK_RANGE_TILES) {
     reason = `Too far away to talk: ${target.distanceTiles * FEET_PER_TILE} feet, and a conversation reaches ${TALK_RANGE_TILES * FEET_PER_TILE} feet.`;
+    farBy = target.distanceTiles - TALK_RANGE_TILES;
   } else if ((def.needsSight || def.needsVoice) && !target.inSight) reason = "You cannot see it from here.";
   else if (def.blocked) reason = def.blocked;
+  // Distance only counts as the way in if nothing else would still block the action once the hero had walked up to it.
+  if (farBy !== undefined && (((def.needsSight || def.needsVoice) && !target.inSight) || def.blocked)) farBy = undefined;
 
   const action: ContextAction = {
     id: def.id,
     label: def.label,
     resolver: def.resolver,
     cost: def.cost,
-    why: def.why,
     say: def.say,
     enabled: reason === undefined,
   };
+  if (def.why !== undefined) action.why = def.why;
+  if (farBy !== undefined) action.farBy = farBy;
   if (def.skill !== undefined) action.skill = def.skill;
   if (def.ability !== undefined) action.ability = def.ability;
   if (def.bonus !== undefined) action.bonus = def.bonus;
@@ -328,17 +349,22 @@ function finish(def: Def, target: ContextTarget, sit: ContextSituation): Context
 
 // --- the catalog, per target ----------------------------------------------
 
+/** Targets a character walks up to before looking closer: a thing, not a person and not the open floor. */
+const LOOK_WALKS_UP: readonly ContextTargetKind[] = ["body", "door", "chest", "prop"];
+
 function lookCloser(target: ContextTarget, sit: ContextSituation): ContextAction {
   const self = target.kind === "self";
-  return {
+  const action: ContextAction = {
     id: "look",
     label: "Look closer",
     resolver: "dm",
     cost: "free",
-    why: "Anyone can look",
     say: self ? `I check myself over, ${clean(sit.sheet.name)}.` : `I take a closer look at ${clean(target.name)}.`,
     enabled: true,
   };
+  // A thing is looked at from beside it: the menu walks the hero there first when it is further off than that.
+  if (LOOK_WALKS_UP.includes(target.kind) && target.distanceTiles > DEFAULT_MELEE_REACH_TILES) action.farBy = target.distanceTiles - DEFAULT_MELEE_REACH_TILES;
+  return action;
 }
 
 /** Athletics contests (Shove, Grapple) share their size rule. */
@@ -402,7 +428,6 @@ function creatureDefs(target: ContextTarget, sit: ContextSituation): Def[] {
       label: "Talk",
       resolver: "dm",
       cost: "free",
-      why: "Anyone can talk",
       say: `I speak to ${name}.`,
       needsVoice: true,
     });
@@ -497,6 +522,7 @@ function creatureDefs(target: ContextTarget, sit: ContextSituation): Def[] {
 
   // Hands-on: only against creatures that are a threat to you.
   if (c.hostile) {
+    out.push(attackDef(sheet, name));
     const ath = skillFacts(sheet, "Athletics");
     const str = sheet.modifiers.str;
     const kickBonus = str + sheet.proficiencyBonus;
@@ -538,7 +564,7 @@ function creatureDefs(target: ContextTarget, sit: ContextSituation): Def[] {
       good: ath.good,
       // Monsters carry no condition list on the board, so a grapple cannot be
       // applied honestly yet. Say so rather than let the DM narrate one.
-      why: `${whyFor(ath)} against its Athletics or Acrobatics. The board does not track grappled yet, so the DM rules on it`,
+      why: `${whyFor(ath)} against its Athletics or Acrobatics. The DM decides what a grab does`,
       say: `I grapple ${name}.`,
       needsAdjacent: true,
       blocked: sizeBlock(sheet, c, name, "grapple"),
@@ -547,7 +573,7 @@ function creatureDefs(target: ContextTarget, sit: ContextSituation): Def[] {
 
   // Hide from it.
   if (c.hostile && c.awake) {
-    out.push(hideDef(sheet, sit, watching && target.inSight ? `${name} is looking right at you. Break its line of sight first.` : null));
+    out.push(hideDef(sheet, sit, watching && target.inSight ? `${name} is looking right at you. Break its line of sight first.` : null, true));
   }
 
   // Pickpocket: a rogue, or anyone trained in Sleight of Hand, on something with pockets.
@@ -563,7 +589,7 @@ function creatureDefs(target: ContextTarget, sit: ContextSituation): Def[] {
         ability: "dex",
         bonus: soh.bonus,
         good: soh.good,
-        why: `${whyFor(soh, rogue ? "Rogue" : undefined)} against its passive Perception`,
+        why: `${whyFor(soh, rogue ? "Rogue" : undefined)} against its Perception`,
         say: `I try to pick ${name}'s pocket.`,
         needsAdjacent: true,
         blocked: watching ? `${name} is watching you. Hide, or wait until it looks away.` : null,
@@ -583,12 +609,28 @@ function creatureDefs(target: ContextTarget, sit: ContextSituation): Def[] {
       ability: "dex",
       bonus: st.bonus,
       good: st.good,
-      why: `${whyFor(st, rogue ? "Rogue" : undefined)} against its passive Perception`,
+      why: `${whyFor(st, rogue ? "Rogue" : undefined)} against its Perception`,
       say: `I sneak up on ${name}.`,
     });
   }
 
   return out;
+}
+
+/** Swing the weapon in hand at it. The numbers are the ones the swing rolls: the weapon's name, what it adds to the d20, and its damage. */
+function attackDef(sheet: CharacterSheet, name: string): Def {
+  const weapon = weaponFor(sheet);
+  const bonus = attackerBonusFor(sheet);
+  return {
+    id: "attack",
+    label: "Attack",
+    resolver: "engine",
+    cost: "action",
+    ability: weapon.ability,
+    bonus,
+    why: `${weapon.name} ${signed(bonus)}, ${weaponDamageNotationFor(sheet)}`,
+    say: `I attack ${name}.`,
+  };
 }
 
 function castDef(sheet: CharacterSheet, name: string, target: ContextTarget): Def {
@@ -610,9 +652,10 @@ function castDef(sheet: CharacterSheet, name: string, target: ContextTarget): De
   };
 }
 
-function hideDef(sheet: CharacterSheet, sit: ContextSituation, watchedReason: string | null): Def {
+function hideDef(sheet: CharacterSheet, sit: ContextSituation, watchedReason: string | null, from = false): Def {
   const st = skillFacts(sheet, "Stealth");
   const cunning = sheet.chassis === "rogue" && sheet.level >= 2;
+  const against = from ? " against its Perception" : "";
   return {
     id: "hide",
     label: "Hide",
@@ -622,9 +665,7 @@ function hideDef(sheet: CharacterSheet, sit: ContextSituation, watchedReason: st
     ability: "dex",
     bonus: st.bonus,
     good: st.good,
-    why: cunning
-      ? `Rogue, Cunning Action: a bonus action. ${whyFor(st)} against passive Perception`
-      : `${whyFor(st)} against passive Perception`,
+    why: `${cunning ? whyFor(st, "Rogue trick") : whyFor(st)}${against}`,
     say: "I try to hide.",
     blocked: sit.heroHidden ? "You are already hidden." : watchedReason,
   };
@@ -663,7 +704,7 @@ function searchDef(sheet: CharacterSheet, target: ContextTarget): Def {
     good: best.good,
     why: whyFor(best),
     say: `I search ${name} carefully.`,
-    needsAdjacent: target.kind !== "floor",
+    needsAdjacent: true,
     blocked: target.searched ? "You have already searched this. Nothing new turns up." : null,
   };
 }
@@ -680,12 +721,11 @@ function bodyDefs(target: ContextTarget, sit: ContextSituation): Def[] {
       label: "Loot",
       resolver: "engine",
       cost: "action",
-      why: "Anyone can search a body",
       say: `I search ${name} for anything useful.`,
       needsAdjacent: true,
     });
   }
-  if (b.beast && !b.harvested) {
+  if (b.beast && b.harvestable && !b.harvested) {
     const sur = skillFacts(sheet, "Survival");
     out.push({
       id: "harvest",
@@ -715,6 +755,16 @@ function doorDefs(target: ContextTarget, sit: ContextSituation): Def[] {
   const { sheet } = sit;
   const name = clean(target.name);
   const out: Def[] = [];
+
+  out.push({
+    id: "open",
+    label: "Open",
+    resolver: "engine",
+    cost: "object",
+    say: `I open ${name}.`,
+    needsAdjacent: true,
+    blocked: d.locked ? "It is locked." : null,
+  });
 
   const per = skillFacts(sheet, "Perception");
   out.push({
@@ -771,6 +821,22 @@ function doorDefs(target: ContextTarget, sit: ContextSituation): Def[] {
   return out;
 }
 
+function chestDefs(target: ContextTarget, sit: ContextSituation): Def[] {
+  const out: Def[] = [];
+  if (target.openable && !target.searched) {
+    out.push({
+      id: "open",
+      label: "Open",
+      resolver: "engine",
+      cost: "object",
+      say: `I open ${clean(target.name)}.`,
+      needsAdjacent: true,
+    });
+  }
+  out.push(searchDef(sit.sheet, target));
+  return out;
+}
+
 function propDefs(target: ContextTarget, sit: ContextSituation): Def[] {
   const { sheet } = sit;
   const name = clean(target.name);
@@ -823,6 +889,18 @@ function selfDefs(target: ContextTarget, sit: ContextSituation): Def[] {
   const { sheet } = sit;
   const out: Def[] = [hideDef(sheet, sit, null), sneakDef(sheet, target)];
   if (isCaster(sheet)) out.push(castDef(sheet, "yourself", target));
+  const potions = sit.potions ?? 0;
+  if (potions > 0) {
+    out.push({
+      id: "drink-potion",
+      label: "Drink a potion",
+      resolver: "engine",
+      cost: "action",
+      why: `Heals 2d4+2, you have ${potions}`,
+      say: "I drink a healing potion.",
+      blocked: sheet.currentHp >= sheet.maxHp && !sheet.dead ? "You are already at full health." : null,
+    });
+  }
   return out;
 }
 
@@ -840,26 +918,30 @@ function orderIndex(order: readonly string[], id: string): number {
  * your face, the quiet verbs otherwise), with anything unavailable right now
  * sinking below what you can do this instant. Actions your class or training
  * rules out are not in the list at all.
+ *
+ * `adjust` lets the caller change a finished action before the list is ordered (the table makes a far action reachable by walking, or
+ * greys one the DM cannot answer just now), so the order always follows what is really on offer.
  */
-export function contextActionsFor(target: ContextTarget, situation: ContextSituation): ContextAction[] {
+export function contextActionsFor<A extends ContextAction = ContextAction>(target: ContextTarget, situation: ContextSituation, adjust?: (a: ContextAction) => A): A[] {
   let defs: Def[];
   switch (target.kind) {
     case "self": defs = selfDefs(target, situation); break;
     case "creature": defs = creatureDefs(target, situation); break;
     case "body": defs = bodyDefs(target, situation); break;
     case "door": defs = doorDefs(target, situation); break;
-    case "chest": defs = [searchDef(situation.sheet, target)]; break;
+    case "chest": defs = chestDefs(target, situation); break;
     case "prop": defs = propDefs(target, situation); break;
     case "floor": defs = floorDefs(target, situation); break;
     default: defs = [];
   }
 
+  const fix = (a: ContextAction): A => (adjust ? adjust(a) : (a as A));
   const c = target.creature;
   const combatMode = target.kind === "creature" && !!c && c.hostile && c.awake && (situation.inFight || c.awareOfHero);
   const order = combatMode ? COMBAT_ORDER : CALM_ORDER;
 
   const rest = defs
-    .map((def, index) => ({ action: finish(def, target, situation), index }))
+    .map((def, index) => ({ action: fix(finish(def, target, situation)), index }))
     .sort((a, b) => {
       if (a.action.enabled !== b.action.enabled) return a.action.enabled ? -1 : 1;
       const byRank = orderIndex(order, a.action.id) - orderIndex(order, b.action.id);
@@ -867,5 +949,5 @@ export function contextActionsFor(target: ContextTarget, situation: ContextSitua
     })
     .map((x) => x.action);
 
-  return [lookCloser(target, situation), ...rest];
+  return [fix(lookCloser(target, situation)), ...rest];
 }

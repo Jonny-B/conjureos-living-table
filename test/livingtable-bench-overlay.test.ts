@@ -10,7 +10,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import {
   CELL_H,
@@ -56,14 +56,13 @@ import {
   SETTING_CHOICES,
   TEXT_SPEEDS,
   TEXT_SPEED_CPS,
-  authorBadge,
+  cardBadge,
   clipOptionLabel,
   createDialogueQueue,
   createHud,
   createOverlay,
   dialogueLines,
   dialoguePages,
-  draftNote,
   drawerColumns,
   endingBannerKind,
   endingChoices,
@@ -954,7 +953,7 @@ test("menuPlacement: a point near the left or top edge clamps to the margin, and
 
 test("menuWidth: the usual width on a wide board, less the margins on a phone", () => {
   assert.equal(menuWidth(1000), MENU_MAX_WIDTH);
-  assert.equal(menuWidth(370), 272);
+  assert.equal(menuWidth(370), 320);
   assert.equal(menuWidth(260), 244);
   assert.equal(menuWidth(100), 140);
 });
@@ -982,16 +981,9 @@ test("the menu and loot timings are the ones the contract states", () => {
 
 // ---- the adventure screens: pure helpers ----------------------------------------
 
-test("draftNote and authorBadge: the words on an adventure card", () => {
-  assert.equal(draftNote(undefined), "");
-  assert.equal(draftNote(0), "");
-  assert.equal(draftNote(-3), "");
-  assert.equal(draftNote(NaN), "");
-  assert.equal(draftNote(1), "Draft: 1 item marked for review");
-  assert.equal(draftNote(6), "Draft: 6 items marked for review");
-  assert.equal(draftNote(2.9), "Draft: 2 items marked for review");
-  assert.equal(authorBadge("owner"), "Hand written");
-  assert.equal(authorBadge("ai"), "AI written");
+test("cardBadge: only an AI written adventure wears a tag", () => {
+  assert.equal(cardBadge("owner"), "");
+  assert.equal(cardBadge("ai"), "AI written");
 });
 
 test("startCards: tidy, drop the nameless, keep the first of a repeated id, and only a file without problems is playable", () => {
@@ -1119,8 +1111,8 @@ test("drawerColumns: a tab each up to three, two columns of two for four", () =>
   assert.equal(drawerColumns(6), 2);
 });
 
-test("the Settings tab: four settings, each with its choices, and the one in use is found by value", () => {
-  assert.deepEqual(SETTING_CHOICES.map((g) => g.key), ["textSpeed", "textStyle", "rollMyself", "zoom"]);
+test("the Settings tab: five settings, each with its choices, and the one in use is found by value", () => {
+  assert.deepEqual(SETTING_CHOICES.map((g) => g.key), ["textSpeed", "textStyle", "rollMyself", "zoom", "autoEndTurn"]);
   assert.deepEqual(SETTING_CHOICES[0]!.choices.map((c) => c.value), [...TEXT_SPEEDS], "every text speed is offered, in order");
   const now: HudSettings = { textSpeed: "fast", textStyle: "storybook", rollMyself: false, zoom: null };
   assert.equal(settingValue(now, "textSpeed"), "fast");
@@ -1129,6 +1121,8 @@ test("the Settings tab: four settings, each with its choices, and the one in use
   assert.equal(settingValue(now, "zoom"), "auto");
   assert.equal(settingValue({ ...now, zoom: 3, rollMyself: true }, "zoom"), "3");
   assert.equal(settingValue({ ...now, rollMyself: true }, "rollMyself"), "true");
+  assert.equal(settingValue(now, "autoEndTurn"), "true", "end turn automatically is on unless it was turned off");
+  assert.equal(settingValue({ ...now, autoEndTurn: false }, "autoEndTurn"), "false");
   for (const g of SETTING_CHOICES) {
     for (const probe of [now, { ...now, zoom: 2, rollMyself: true, textStyle: "pixel" as const, textSpeed: "slow" as const }]) {
       assert.equal(g.choices.filter((c) => c.value === settingValue(probe, g.key)).length, 1, `${g.key} has exactly one choice in use`);
@@ -1152,10 +1146,19 @@ test("journal helpers: objectives tidied, progress counted, recent beats newest 
   assert.deepEqual(journalRecent(many, 2), ["7", "6"]);
 });
 
+// overlay.ts is the entry that re-exports the public API; the overlay and the HUD live in the modules it was split into (see its header),
+// so the source scans read every one of them. These are the files of that family; the others in ui/ (the sheet, the dice, the cast, the tips,
+// the pixel font) are separate pieces with their own rules.
+const UI_DIR = new URL("../src/games/livingtable/table/ui/", import.meta.url);
+const OTHER_UI = ["sheet.ts", "dice.ts", "foeDice.ts", "cast.ts", "tip.ts", "pixelFont.ts"];
+const OVERLAY_FILES = readdirSync(UI_DIR).filter((f) => f.endsWith(".ts") && !OTHER_UI.includes(f)).sort();
+const overlaySource = (): string => OVERLAY_FILES.map((f) => readFileSync(new URL(f, UI_DIR), "utf8")).join("\n");
+
 test("the adventure screens are part of the Overlay and the Hud, and need no DOM to import", () => {
   assert.equal(typeof createOverlay, "function");
   assert.equal(typeof createHud, "function");
-  const text = readFileSync(new URL("../src/games/livingtable/table/ui/overlay.ts", import.meta.url), "utf8");
+  assert.ok(OVERLAY_FILES.includes("overlay.ts") && OVERLAY_FILES.length > 10, "the overlay family is found");
+  const text = overlaySource();
   for (const name of ["startScreen", "startHero", "locationCard", "sceneCard", "endingCard", "toggleJournal"]) assert.ok(text.includes(name), name);
 });
 
@@ -1502,10 +1505,39 @@ test("clear and dismiss: everything goes, or only the kept ones", () => {
   assert.equal(q.view(), null);
 });
 
+test("a queue whose reading time is endless never closes by itself, and its clock stops once the page is printed", () => {
+  const { q } = makeQueue(20, 2, { reading: () => Number.POSITIVE_INFINITY });
+  q.setSpeed("instant");
+  q.push({ text: "You step out into the cold." });
+  assert.equal(q.tick(1).closed, false);
+  for (let i = 0; i < 20; i += 1) assert.equal(q.tick(3_600_000).closed, false, "an hour later it is still up");
+  assert.ok(q.view(), "the entry is still showing");
+  assert.equal(q.needsTick(), false, "nothing is counting down, so the clock need not run");
+  assert.equal(q.press(), "close", "only a press closes it");
+});
+
+test("a repeat entry is told again even a moment after the same words closed; a plain one is not", () => {
+  const { q, clock } = makeQueue(40, 3);
+  q.setSpeed("instant");
+  q.push({ speaker: "DM", text: "The cellar door is bolted." });
+  q.tick(1);
+  assert.equal(q.press(), "close");
+  clock.t += 500;
+  assert.equal(q.push({ speaker: "DM", text: "The cellar door is bolted." }), null, "a plain repeat within three seconds is dropped");
+  assert.ok(q.push({ speaker: "DM", text: "The cellar door is bolted.", repeat: true }) !== null, "a repeat answers a click on the locked door again");
+});
+
+test("a repeat does not stack on the same words still waiting", () => {
+  const { q } = makeQueue(40, 3);
+  q.push({ text: "The door is locked." });
+  assert.equal(q.push({ text: "The door is locked.", repeat: true }), null);
+  assert.equal(q.size(), 1);
+});
+
 // ---- hygiene ----------------------------------------------------------------
 
 test("the table UI files hold no em or en dash, import the engine for types only, and name no bench path", () => {
-  for (const file of ["pixelFont.ts", "overlay.ts", "tip.ts", "cast.ts"]) {
+  for (const file of ["pixelFont.ts", "tip.ts", "cast.ts", ...OVERLAY_FILES]) {
     const text = readFileSync(new URL(`../src/games/livingtable/table/ui/${file}`, import.meta.url), "utf8");
     assert.equal(text.includes(code(0x2014)), false, `${file} has an em dash`);
     assert.equal(text.includes(code(0x2013)), false, `${file} has an en dash`);

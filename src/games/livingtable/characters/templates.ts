@@ -208,7 +208,7 @@ export const ARCHETYPES: Archetype[] = [
   {
     id: "shadow",
     template: "fantasy",
-    displayName: "The Shadow",
+    displayName: "The Rogue",
     chassis: "rogue",
     // Stealth-and-cunning build: DEX and INT lead, CHA is a distant third tool.
     baseAbilityScores: { dex: 15, int: 14, con: 13, wis: 12, cha: 10, str: 8 },
@@ -277,7 +277,7 @@ export const ARCHETYPES: Archetype[] = [
   {
     id: "fireball-person",
     template: "fantasy",
-    displayName: "The Fireball Person",
+    displayName: "The Mage",
     chassis: "wizard",
     // Classic glass-cannon build: INT to cast, CON to survive being the priority target.
     baseAbilityScores: { int: 15, con: 14, dex: 13, wis: 12, cha: 10, str: 8 },

@@ -24,11 +24,11 @@
  *
  * HONESTY (equipmentTypes.ts rule 7): every note states what the thing is and
  * roughly what it is worth, and never implies an effect the engine does not
- * apply. Coins say the game does not track money.
+ * apply. Coins say there is nothing to spend them on yet.
  *
  * The ENGINE's own loot roll (rules/loot.ts `lootFor`, with its per-room
  * ledger) is NOT done here. `BodyState.engineLootRolled` only records that
- * the caller has already made it for this body; the bench calls `lootFor`
+ * the caller has already made it for this body; the table calls `lootFor`
  * when the body is looted.
  *
  * Everything here is pure. Randomness comes only from an injectable `rng`
@@ -280,7 +280,7 @@ function coinItem(coin: "copper" | "silver" | "gold", amount: number): CarriedIt
   const value = amount * (COPPER_VALUE[coin] ?? 1);
   return {
     name: `${amount} ${coin} ${amount === 1 ? "piece" : "pieces"}`,
-    note: `A handful of loose coins, about ${value} copper in all. The game does not track money yet; the DM does.`,
+    note: `A handful of loose coins, about ${value} copper in all. There is nothing to spend them on yet, so they are only something you carry.`,
     kind: "coins",
     pocketable: true,
   };
@@ -362,12 +362,21 @@ export function bodyFor(
  * What a creature's body can be harvested for, and the check to do it. Our
  * own short table by creature (SRD 5.1 has no harvesting rules): skin and
  * hide are Survival, glands and venom are Nature. `null` when there is
- * nothing worth taking (a rat, a person, an ooze). The DC is a flat number;
+ * nothing worth taking (a person, an ooze). The DC is a flat number;
  * the caller rolls the check and, on a success, hands the item over.
+ *
+ * A rat and a giant rat give a pelt worth next to nothing: the owner expected
+ * Harvest to work on the first thing the Rat Cellar makes you kill, so the
+ * table carries two small honest entries for them (a content choice, easy to
+ * veto by deleting the two cases).
  */
 export function harvestFor(beast: Beast): { item: CarriedItem; skill: "Survival" | "Nature"; dc: number } | null {
   const part = (name: string, note: string): CarriedItem => ({ name, note, kind: "part", pocketable: false });
   switch (beast.id) {
+    case "rat":
+      return { item: part("Rat pelt", "A tiny grey pelt, hardly bigger than a glove. Worth next to nothing, a copper at best."), skill: "Survival", dc: 8 };
+    case "giant-rat":
+      return { item: part("Giant rat pelt", "A coarse brown pelt the size of a cap, patchy where the mange got it. Worth a copper or two."), skill: "Survival", dc: 8 };
     case "wolf":
       return { item: part("Wolf pelt", "A thick grey pelt, a little torn. Worth about 2 gp to a tanner."), skill: "Survival", dc: 10 };
     case "dire-wolf":
@@ -391,6 +400,15 @@ export function harvestFor(beast: Beast): { item: CarriedItem; skill: "Survival"
     default:
       return null;
   }
+}
+
+/**
+ * `harvestFor` for a body: its token ("token_rat"), which is all a body keeps of what it was. Null when the token is not in the
+ * bestiary or the creature gives nothing, so a menu can offer Harvest only where it will really yield something.
+ */
+export function harvestForToken(token: string): { item: CarriedItem; skill: "Survival" | "Nature"; dc: number } | null {
+  const beast = BESTIARY.find((b) => b.tokenAssetId === token);
+  return beast ? harvestFor(beast) : null;
 }
 
 function sameName(a: string, b: string): boolean {

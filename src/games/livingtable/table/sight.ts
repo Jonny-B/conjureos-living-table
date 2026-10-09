@@ -37,7 +37,6 @@ import {
   type PlayState,
   same,
   SCENE_KIT,
-  sentence,
   type XY,
 } from "./state";
 
@@ -168,9 +167,9 @@ export function blockedWords(p: PlayState, to: XY): string {
   const kit = SCENE_KIT[p.template];
   if (sightLevel(p, to) === 0) return NOT_SEEN;
   const blocked = terrainBlocks(p, sceneTiles(p), to);
-  if (blocked === "door") return p.doorLocked ? `${sentenceCase(kit.doorLabel)} is locked.` : `${sentenceCase(kit.doorLabel)} is closed. Click it when you are next to it to open it.`;
+  if (blocked === "door") return p.doorLocked ? `${sentenceCase(kit.doorLabel)} is locked.` : `${sentenceCase(kit.doorLabel)} is closed. Right-click it (or press and hold) to open it.`;
   if (blocked === "container") return `${sentenceCase(kit.containerLabel)} is in the way.`;
-  if (blocked === "prop") return `${sentence(p.extraProps.find((e) => same(e, to))?.label ?? advPropWords(p, to) ?? "something")} is in the way.`;
+  if (blocked === "prop") return `${sentenceCase(p.extraProps.find((e) => same(e, to))?.label ?? advPropWords(p, to) ?? "something")} is in the way.`;
   if (blocked) return "A wall. You cannot walk through it.";
   const there = creatureAt(p, to);
   if (there && creatureInSight(p, there)) return `${sentenceCase(creatureLabel(p, there))} is in the way.`;

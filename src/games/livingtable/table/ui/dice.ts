@@ -2692,6 +2692,8 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
 
   // ---- size changes
   let ro: ResizeObserver | null = null;
+  /** The animation frame a relayout waits for, or 0. */
+  let roFrame = 0;
   function relayout(): void {
     if (destroyed) return;
     if (roll) finishRoll();
@@ -2701,8 +2703,15 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
     if (mode === "waiting") schedule();
   }
   if (typeof ResizeObserver === "function") {
+    // The relayout rewrites the canvas size, which changes the very box this observes. Doing that inside the callback makes the browser
+    // raise "ResizeObserver loop completed with undelivered notifications" as a window error (the shell paints it as a red banner), so
+    // the work waits for the next frame, and only runs when the width really changed.
     ro = new ResizeObserver(() => {
-      if (Math.floor(root.clientWidth) !== lastWidth) relayout();
+      if (roFrame || destroyed || typeof requestAnimationFrame !== "function") return;
+      roFrame = requestAnimationFrame(() => {
+        roFrame = 0;
+        if (!destroyed && Math.floor(root.clientWidth) !== lastWidth) relayout();
+      });
     });
     ro.observe(root);
   }
@@ -2806,6 +2815,8 @@ export function createDiceTray(host: HTMLElement, skinId?: string, opts: DiceTra
       endWait();
       destroyed = true;
       if (raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(raf);
+      if (roFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(roFrame);
+      roFrame = 0;
       ro?.disconnect();
       root.remove();
     },
@@ -2996,7 +3007,7 @@ const SHOP_MUTED = "#98a5d8";
 const SHOP_GOLD: PixelColor = ["#fff3ad", "#ffc72a"];
 const SHOP_GOOD: PixelColor = ["#c2ffd2", "#59dd82"];
 const SHOP_DARK = "#05061a";
-const SHOP_NOTE = "Preview only. Buying is not available yet.";
+const SHOP_NOTE = "These are previews. Pick one to try it on the tray.";
 /** The shelf d20 is drawn this big (sprite pixels) so its "20" has room inside its face. */
 const PREVIEW_SIZE = 48;
 
@@ -3046,7 +3057,7 @@ export function createSkinPicker(host: HTMLElement, tray: DiceTray, opts: { owne
     const nameRow = el("span", "ltd-row");
     nameRow.append(pixelText(skin.name, { scale: 2, color: SHOP_INK, outline: SHOP_DARK }));
     const priceRow = el("span", "ltd-row");
-    const price = isOwned ? "Owned" : skin.priceCredits > 0 ? `${skin.priceCredits} credits` : "Free";
+    const price = isOwned ? "Owned" : "Preview";
     priceRow.append(pixelText(price, { scale: 2, color: isOwned ? SHOP_GOOD : SHOP_GOLD, outline: SHOP_DARK }));
     card.append(badgeRow, art, nameRow, priceRow);
     for (const c of card.querySelectorAll("canvas")) c.setAttribute("aria-hidden", "true");
@@ -3067,7 +3078,7 @@ export function createSkinPicker(host: HTMLElement, tray: DiceTray, opts: { owne
       const on = skin.id === current;
       const isOwned = owned.has(skin.id);
       card.setAttribute("aria-pressed", String(on));
-      card.setAttribute("aria-label", `${skin.name}, ${isOwned ? "owned" : skin.priceCredits > 0 ? `${skin.priceCredits} credits` : "free"}${on ? (isOwned ? ", in use" : ", trying it") : ""}`);
+      card.setAttribute("aria-label", `${skin.name}, ${isOwned ? "owned" : "preview"}${on ? (isOwned ? ", in use" : ", trying it") : ""}`);
       const badge = card.querySelector<HTMLElement>("[data-ltd-badge]");
       if (!badge) continue;
       badge.replaceChildren();
@@ -3099,8 +3110,16 @@ export function createSkinPicker(host: HTMLElement, tray: DiceTray, opts: { owne
   refresh();
   layoutNote();
   let ro: ResizeObserver | null = null;
+  let noteFrame = 0;
   if (typeof ResizeObserver === "function") {
-    ro = new ResizeObserver(layoutNote);
+    // Deferred a frame for the same reason as the tray's: redrawing the note changes the box being observed.
+    ro = new ResizeObserver(() => {
+      if (noteFrame || destroyed || typeof requestAnimationFrame !== "function") return;
+      noteFrame = requestAnimationFrame(() => {
+        noteFrame = 0;
+        if (!destroyed) layoutNote();
+      });
+    });
     ro.observe(root);
   }
 
@@ -3108,6 +3127,8 @@ export function createSkinPicker(host: HTMLElement, tray: DiceTray, opts: { owne
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
+      if (noteFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(noteFrame);
+      noteFrame = 0;
       ro?.disconnect();
       root.remove();
     },

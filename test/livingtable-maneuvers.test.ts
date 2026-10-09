@@ -552,3 +552,43 @@ test("no em or en dash characters anywhere in the module or its tests", () => {
     assert.ok(!text.includes(en), `${rel} contains an en dash`);
   }
 });
+
+// ── harvest ─────────────────────────────────────────────────────────────
+
+test("resolveHarvest: a rat's pelt comes on a Survival success and not on a failure, with the hero's real modifier", async () => {
+  const { resolveHarvest } = await import("../src/games/livingtable/table/flows/maneuvers");
+  const { harvestForToken } = await import("../src/games/livingtable/rules/corpses");
+  const rat = harvestForToken("token_rat")!;
+  assert.ok(rat, "the rat has something to harvest");
+  const sheet = knight({ skills: [skill("Survival", "wis", 3)] });
+  // d20 = 12 + 3 = 15 against DC 8: the pelt.
+  const win = resolveHarvest(sheet, rat, d20s(12));
+  assert.equal(win.check.success, true);
+  assert.equal(win.check.modifier, 3);
+  assert.equal(win.item?.name, "Rat pelt");
+  assert.notEqual(win.item, rat.item, "a copy, not the table's own object");
+  // d20 = 2 + 3 = 5 against DC 8: nothing, and the carcass is the flow's to spoil.
+  const lose = resolveHarvest(sheet, rat, d20s(2));
+  assert.equal(lose.check.success, false);
+  assert.equal(lose.item, null);
+  // Exactly the DC is a success (a check meets or beats it).
+  assert.equal(resolveHarvest(sheet, rat, d20s(5)).item?.name, "Rat pelt");
+  // An untrained hero still rolls: Survival is an anyone-can-try skill, with the plain ability modifier.
+  const untrained = resolveHarvest(knight({ skills: [] }), rat, d20s(9));
+  assert.equal(untrained.check.modifier, knight().modifiers.wis);
+  assert.equal(untrained.check.success, true, "9 + 0 beats DC 8");
+});
+
+test("the harvest flow marks the body harvested on a success AND on a failure, and fills the pack only on a success (read from the source)", () => {
+  const src = readFileSync(join(ROOT, "src/games/livingtable/table/flows/maneuvers.ts"), "utf8");
+  const flow = src.slice(src.indexOf("async function harvestFlow"), src.indexOf("// What the other modules call or read."));
+  assert.match(flow, /harvestForToken\(body\.token\)/, "what a body yields comes from its token");
+  assert.match(flow, /resolveHarvest\(/);
+  assert.equal((flow.match(/harvested: true/g) ?? []).length, 2, "success and failure both spoil the carcass");
+  assert.match(flow, /takeIntoPack\(p, out\.item\.name, out\.item\.note\)/);
+  assert.match(flow, /tc\.spendCost\(p, act\.cost\)/);
+  assert.match(flow, /await tc\.afterManeuver\(\)/);
+  // The old stub is gone, and nothing a player reads names the bench.
+  assert.doesNotMatch(src, /nothing to harvest here: the bench|is not something the bench/);
+  assert.match(src, /is not something you can do here/);
+});

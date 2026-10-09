@@ -48,6 +48,28 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
       const m = manifest[template];
       return m ? { template, palette: m.palette, assets: m.assets } : null;
     };
+    // Window "error" events never reach Playwright's pageerror (a ResizeObserver loop error is one), yet the ConjureOS shell shows each as a red
+    // banner over the game. Record them in the page (window.__ltErrors) and here, so problems() fails any spec that raises one.
+    const windowErrors = [];
+    await page.exposeFunction("__ltReportError", (text) => {
+      windowErrors.push(String(text));
+    });
+    await page.addInitScript(() => {
+      const seen = (window.__ltErrors = window.__ltErrors || []);
+      window.addEventListener(
+        "error",
+        (ev) => {
+          const text = String((ev && ev.message) || (ev && ev.error && ev.error.message) || "error event");
+          seen.push(text);
+          try {
+            if (typeof window.__ltReportError === "function") window.__ltReportError(text);
+          } catch {
+            /* the page is going away */
+          }
+        },
+        true,
+      );
+    });
     const platform = await installPlatform(page, { latencyMs, extraInit, server: !!server, saves, who, assetManifest });
     platform.script(script);
 
@@ -79,6 +101,7 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
       platform,
       consoleErrors,
       pageErrors,
+      windowErrors,
       foreign,
       downloads,
       driver: new Driver(page, platform),
@@ -87,6 +110,7 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
         return [
           ...consoleErrors.map((t) => `console.error: ${t}`),
           ...pageErrors.map((t) => `pageerror: ${t}`),
+          ...windowErrors.map((t) => `window error event: ${t}`),
           ...foreign.map((u) => `request to a non-local host: ${u}`),
           ...platform.unmatched.map((c) => `unscripted AI call #${c.n}: ${c.system.slice(0, 80).replace(/\s+/g, " ")}`),
         ];

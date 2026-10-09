@@ -147,7 +147,7 @@ export const NOT_CARRYING_REASON = "You do not have that.";
 export const BAG_FULL_REASON = "Your bag is full.";
 export const ALREADY_OWN_REASON = "You already own one of those.";
 export const EQUIP_BAG_ONLY_REASON = "Only magic gear in your bag, or armour in your pack, can be equipped.";
-/** The slot name that stands for the class's body armour on a sheet whose chassis has no gear slot drawing it (a Shadow's leather armor). */
+/** The slot name that stands for the class's body armour on a sheet whose chassis has no gear slot drawing it (a Rogue's leather armor). */
 export const ARMOR_SLOT = "armor";
 export const NO_ARMOR_WORN_REASON = "You wear no armour.";
 

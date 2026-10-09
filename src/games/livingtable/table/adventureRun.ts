@@ -47,6 +47,7 @@ import { DEFAULT_MELEE_REACH_TILES, tileDistance } from "../world/reach";
 import { adventureById } from "./adventureCatalog";
 import { spriteName, walkableById } from "./catalog";
 import { foldItem, withoutCount } from "./gearLoot";
+import { footprintAt, groupWords, propGroupAt } from "./propGroups";
 import type { HudJournal } from "./ui/overlay";
 import { noteSight, creatureInSight } from "./sight";
 import {
@@ -161,7 +162,9 @@ export function featureAtSquare(p: PlayState, at: XY): AdventureFeature | undefi
   const board = advBoard(p);
   const loc = currentLocation(p);
   if (!board || !loc) return undefined;
-  const id = Object.keys(board.featuresAt).find((k) => same(board.featuresAt[k]!, at));
+  // A thing drawn in several squares (the well) has its feature on one of them: any part of it is that feature.
+  const squares = footprintAt(board.props, at);
+  const id = Object.keys(board.featuresAt).find((k) => squares.some((s) => same(board.featuresAt[k]!, s)));
   return id ? loc.features.find((f) => f.id === id) : undefined;
 }
 
@@ -189,8 +192,11 @@ export function featureNear(p: PlayState): { feature: AdventureFeature; at: XY }
 export function advPropWords(p: PlayState, at: XY): string | null {
   const f = featureAtSquare(p, at);
   if (f) return f.name.toLowerCase().startsWith("the ") ? f.name : `the ${f.name.toLowerCase()}`;
-  const prop = advBoard(p)?.props.find((q) => same(q, at));
+  const props = advBoard(p)?.props ?? [];
+  const prop = props.find((q) => same(q, at));
   if (!prop) return null;
+  // A part of something bigger is named for the whole ("the well", not "the well, back right").
+  if (propGroupAt(props, at).length > 1) return `the ${groupWords(prop.assetId)}`;
   const name = spriteName("fantasy", prop.assetId);
   return `the ${name.toLowerCase()}`;
 }
@@ -535,7 +541,7 @@ export function leaveBody(p: PlayState, c: Creature): PlayBody {
   const body: PlayBody = { ...bodyFor(`body-${p.bodies.length + 1}`, c.token, c.at, c.carried), token: c.token };
   p.bodies.push(body);
   c.carried = [];
-  p.log.push({ text: `${sentenceCase(creatureLabel(p, c))} lies where it fell. Click the body, or stand next to it and press E, to search it.`, tone: "plain" });
+  p.log.push({ text: `${sentenceCase(creatureLabel(p, c))} lies where it fell. Right-click the body (or press and hold) to search it.`, tone: "plain" });
   return body;
 }
 

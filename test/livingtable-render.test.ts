@@ -1037,7 +1037,7 @@ const SHADOW_MANIFEST = manifestWith({
 
 test("a token composites with the body in the middle: cloak behind, weapon and hood in front", () => {
   // The z-order is DATA on the slot, never derived from role or list position,
-  // which is what lets the Shadow's cloak sit behind her at 10 while the
+  // which is what lets the Rogue's cloak sit behind her at 10 while the
   // Knight's shield sits in front of him at 35 though both are the outer role.
   const draws = compositeToken(SHADOW_PLAN, lookupFrom(SHADOW_MANIFEST));
   assert.deepEqual(draws.map((d) => d.pixels[0]![0]), [3, 2, 4, 5], "cloak, body, blade, hood");
@@ -1113,8 +1113,8 @@ test("a remap can never dissolve a silhouette, whichever end of it names a prote
 //
 // IT USED TO BE A CLOSED RING, AND THAT WAS THE DEFECT A REVIEW MEASURED.
 // Both bands were dilated from the whole silhouette of every glowing layer,
-// including a cloak worn BEHIND the body, so a legendary Fireball Person
-// painted 175 ring pixels round a 139 pixel body and a rare Shadow 164 round
+// including a cloak worn BEHIND the body, so a legendary Mage
+// painted 175 ring pixels round a 139 pixel body and a rare Rogue 164 round
 // 74: an unbroken hard-edged saturated oval, larger than the character, which
 // at phone scale read as a gold letter O with a dark smear inside it. A closed
 // halo round a walking figure is the "this unit is selected" cursor of the
@@ -1158,7 +1158,7 @@ function block(index: number, left: number, top: number, width: number, height: 
 }
 
 test("gear worn behind the body never lights, because a rim grown from a body-sized silhouette is a selection cursor", () => {
-  // The Shadow's cloak and the Psion's barrier field are full-figure shapes at
+  // The Rogue's cloak and the Psion's barrier field are full-figure shapes at
   // LAYER_BEHIND. Dilating one of those produced the closed oval round the
   // whole character that a review sorted on before looking at any craft.
   const behind = compositeToken(glowPlan(2, false, LAYER_BEHIND), lookupFrom(GLOW_MANIFEST));

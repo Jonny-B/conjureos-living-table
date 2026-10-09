@@ -305,7 +305,7 @@ export function sheetWithGear(sheet: CharacterSheet, role: GearRole, tier: Equip
  * tier and two surfaces naming the same object differently is the defect this
  * function exists to end.
  *
- * An archetype whose armour is not in a gear slot at all (a Shadow's leather,
+ * An archetype whose armour is not in a gear slot at all (a Rogue's leather,
  * a wizard standing in their own clothes) keeps the chassis label, because
  * there is nothing on the panel for it to agree with and inventing an
  * agreement would be worse.
@@ -371,7 +371,7 @@ export function packItems(sheet: CharacterSheet): readonly string[] {
  * Every layer is the same 16-wide sprite drawn at the body's own origin, so
  * there is no per-layer offset arithmetic anywhere; the draw order is the
  * `layer` integer on the slot, which is what lets a Knight's shield sit in
- * front of him while a Shadow's cloak sits behind her even though both are
+ * front of him while a Rogue's cloak sits behind her even though both are
  * the same `outer` role. A missing sprite id skips its layer, so a gap in the
  * manifest reads as a missing hat during play rather than as a broken screen.
  */
@@ -459,7 +459,7 @@ export const RARITY_WORD: Readonly<Record<EquipmentTier, string>> = Object.freez
  * This label used to be one string per ROLE, and the `crown` string was
  * "Armour or headwear". That is a lie for six of the eight archetypes: the
  * crown slot is bonusKind "armor" only for the Knight's Plate Harness and the
- * Trooper's Carapace Vest. On the Shadow, Healer, Fireball Person,
+ * Trooper's Carapace Vest. On the Rogue, Healer, Mage,
  * Infiltrator, Medic and Psion it is bonusKind "save", which
  * `equipmentSaveBonus` routes into `saveModifierFor` and which never touches
  * AC at all. A first-time player reads the label, not the paragraph, and

@@ -308,10 +308,10 @@ test("spellSlotsForLevel: Wizard chassis levels 1-3 match the SRD full-caster ta
   assert.deepEqual(spellSlotsForLevel("wizard", 3), { 1: { max: 4, used: 0 }, 2: { max: 2, used: 0 } });
 });
 
-test("spellSlotsForLevel: a level-3 Wizard has no 3rd-level slot, so Fireball Person cannot cast Fireball yet", () => {
+test("spellSlotsForLevel: a level-3 Wizard has no 3rd-level slot, so Mage cannot cast Fireball yet", () => {
   // This locks in the SRD progression on purpose: the full-caster table does
   // not grant a 3rd-level slot until character level 5. A future "fix" that
-  // hands Fireball Person an early 3rd-level slot must fail this test, not
+  // hands Mage an early 3rd-level slot must fail this test, not
   // silently pass it.
   const slots = spellSlotsForLevel("wizard", 3);
   assert.equal(slots[3], undefined, "a level-3 Wizard must not have a 3rd-level spell slot bucket at all");
@@ -1449,7 +1449,7 @@ test("the item the bonus comes off and the weapon that was swung are reconciled,
   // questions. SLOTS_BY_ARCHETYPE says what is ENCHANTED (the object the rarity
   // ladder acts on); KIT_BY_ARCHETYPE says what the ENGINE ROLLS (the die, the
   // ability, the range band), and the fighting style can move it. For the
-  // Fireball Person and the Psion those are genuinely two objects, and naming
+  // Mage and the Psion those are genuinely two objects, and naming
   // only the enchanted one printed a dice log that was simply false: a
   // legendary staff logged "Sunstroke: 4 fire damage" beside an attack the
   // engine had resolved as a Fire Bolt, naming a weapon nobody swung.

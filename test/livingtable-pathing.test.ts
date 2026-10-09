@@ -38,6 +38,7 @@ import {
   type TileCoord,
   type World,
 } from "../src/games/livingtable/world";
+import { approachFootprint } from "../src/games/livingtable/world/pathing";
 import { resetTurnEconomy } from "../src/games/livingtable/rules/actionEconomy";
 import { tokenOrigin, type RenderManifest } from "../src/games/livingtable/render/canvasRenderer";
 import { headAnchor } from "../src/games/livingtable/render/anchors";
@@ -321,6 +322,55 @@ test("approachTile: a ranged attacker wants a square it can SEE from, and gets t
   // Without the sight test the answer is the square you already stand on: the
   // difference IS the sight rule.
   assert.deepEqual(approachTile(field, at(13, 3), 16), at(9, 3));
+});
+
+// ── approachFootprint: one thing drawn in several squares (a well, a cottage) ──
+
+const WELL = [at(8, 5), at(9, 5), at(8, 6), at(9, 6)];
+const wellProps = WELL.map((t, i) => ({ id: `well-${i}`, assetId: "door_closed", x: t.x, y: t.y }));
+
+test("approachFootprint: a single square is exactly approachTile", () => {
+  const layout = room([], [hero(2, 5), goblin(8, 5)]);
+  const field = movementField(layout, MANIFEST, "hero", at(2, 5), 30);
+  assert.deepEqual(approachFootprint(field, [at(8, 5)], 1), approachTile(field, at(8, 5), 1));
+});
+
+test("approachFootprint: the nearest square of the whole footprint wins, on the near side, never inside it", () => {
+  // The hero is west of a 2x2 well and level with its south half.
+  const layout = room([], [hero(2, 6)], wellProps);
+  const field = movementField(layout, MANIFEST, "hero", at(2, 6), Infinity);
+  const spot = approachFootprint(field, WELL, 1)!;
+  assert.deepEqual(spot, at(7, 6), "five squares east, beside the south-west part: the west edge is the near side");
+  assert.ok(!WELL.some((t) => t.x === spot.x && t.y === spot.y), "never a square of the thing");
+  assert.equal(fieldCostFt(field, spot), 25);
+  // Coming from the east instead, the other side is nearer.
+  const east = movementField(room([], [hero(14, 5)], wellProps), MANIFEST, "hero", at(14, 5), Infinity);
+  assert.deepEqual(approachFootprint(east, WELL, 1), at(10, 5));
+});
+
+test("approachFootprint: already beside any part of it gives your own square back at no cost", () => {
+  const layout = room([], [hero(7, 6)], wellProps);
+  const field = movementField(layout, MANIFEST, "hero", at(7, 6), 30);
+  assert.deepEqual(approachFootprint(field, WELL, 1), at(7, 6));
+});
+
+test("approachFootprint: null when no square beside it is in the field (out of budget, or walled in)", () => {
+  const far = movementField(room([], [hero(1, 1)], wellProps), MANIFEST, "hero", at(1, 1), 10);
+  assert.equal(approachFootprint(far, WELL, 1), null, "too far for 10 ft");
+  const ring = [];
+  for (let y = 4; y <= 7; y++) for (let x = 7; x <= 10; x++) if (x === 7 || x === 10 || y === 4 || y === 7) ring.push([x, y] as const);
+  const sealed = movementField(room(ring, [hero(2, 5)], wellProps), MANIFEST, "hero", at(2, 5), Infinity);
+  assert.equal(approachFootprint(sealed, WELL, 1), null);
+  assert.equal(approachFootprint(far, [], 1), null, "an empty footprint has nowhere to approach");
+});
+
+test("approachFootprint: a ranged reach wants a line to the nearest part of the footprint", () => {
+  const layout = divided([hero(9, 3)], [{ id: "t", assetId: "chest", x: 13, y: 3 }, { id: "t2", assetId: "chest", x: 13, y: 4 }]);
+  const sees = lineOfSightFor(layout, MANIFEST);
+  const field = movementField(layout, MANIFEST, "hero", at(9, 3), Infinity);
+  const spot = approachFootprint(field, [at(13, 3), at(13, 4)], 16, sees)!;
+  assert.ok(spot);
+  assert.ok(sees(spot, at(13, 3)) || sees(spot, at(13, 4)));
 });
 
 test("lineOfSightFor agrees with the game's own getVisible, wall for wall", () => {

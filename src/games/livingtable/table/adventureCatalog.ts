@@ -51,7 +51,7 @@ export interface BenchAdventure {
   /** Everything wrong with it, in plain words with a line or a path. Empty when it can be started. */
   problems: string[];
   warnings: string[];
-  /** How many items the file marks for review ("ADDED:" and "REVIEW:" comments): the card says "Draft: N items marked for review". */
+  /** How many items the file marks for review ("ADDED:" and "REVIEW:" comments); kept for the author, never drawn on the card. */
   draftMarks: number;
 }
 
