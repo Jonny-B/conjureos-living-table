@@ -1,10 +1,10 @@
 # Status
 
-Last updated: 2026-10-08, the bug bash is built and checked: 0.10.0 on branch `bugbash/13`, waiting for the owner's go to deploy.
+Last updated: 2026-10-09, 0.10.1 is live on the dev store (version 3) and the prod store (version 1): the standalone, sealed game with the bug bash and the fit-every-screen pass.
 
-## 0.10.0, the bug bash (issue #13, branch `bugbash/13`)
+## 0.10.0 and 0.10.1, the bug bash and the fit pass (issue #13, shipped)
 
-The owner's thirty items from playing 0.9.0 are built (item 7, the 3D art, is out of scope). What a player gets is in `CHANGELOG_NEXT.md`; the calls behind it are in DECISIONS.md (2026-10-08).
+The owner's thirty items from playing 0.9.0 are shipped (item 7, the 3D art, moved to the sealed-app work). 0.10.1 is a visual-review pass over nine screen sizes (pinned hero pager, a wrapping turn strip, no dead band on phones, 4K zoom). What a player gets is in `CHANGELOG_NEXT.md`; the calls behind it are in DECISIONS.md (2026-10-08).
 
 - **Layout and fit** (1, 2, 3, 26, 27): `table/stageFit.ts`; the board fills the stage at every size from 320 px to 4K and in full screen; the dice tray floats over the stage at 720 px and under; no text selection, no browser menu, no ResizeObserver window errors.
 - **Menus and actions** (8 to 11, 14, 20, 21, 23, 28): left click walks, right click or long press opens the actions menu with a text line; Talk and Look closer walk first; rats can be harvested; one game Menu with six tabs and a stat preview; End turn automatically in Settings.
@@ -15,11 +15,11 @@ The owner's thirty items from playing 0.9.0 are built (item 7, the 3D art, is ou
 - **Checks**: `npm test` all pass, `npm run typecheck` clean, `npm run adventures:check` ok, `npm run build` writes `dist/living-table.html`, `node scripts/e2e/run.mjs` all specs pass (new: layout, menu-actions, board, text, hero, start, menu, integration), and `node scripts/e2e/walk.mjs` tours the game at eight window sizes with a screenshot of every screen (`.cache/bench-shots/bb-<step>-<size>.png`).
 - **Not part of the e2e**: the bench play scripts in `.cache/*.cjs` that drive the removed ask box, the Sheet button or click-to-act no longer apply; the e2e specs replace them (see the integration notes on issue #13).
 
-Owner steps for 0.10.0: approve, then the orchestrator commits, pushes `dev` (the publish workflow stamps the dev target, so the test rooms show on the dev store) and later `main` (prod, no test rooms). Check on the dev store: Fullscreen, a long press on a real phone, and the splash.
+**Live:** dev store 0.10.1 (store version 3), prod store 0.10.1 (store version 1, first prod publish by dispatch from `dev`, then `main` brought level by PR #15 with `[skip ci]` so the push did not publish the same build twice). `main` publishes on its own from now on. Still unchecked on a real device: Fullscreen inside ConjureOS, a long press on a phone, and the sealed state in the App Sandbox.
 
-## The port (branch `port/table-window`, 0.9.0)
+## The port (shipped in 0.9.0)
 
-The bench game is now THE game. Branch `port/table-window` (cut from `5b09966`; not merged to `dev` yet, the orchestrator commits) holds:
+The bench game is now THE game. Merged to `dev` and `main` (see above). It holds:
 
 - **One window.** `src/games/livingtable/table/` (`mountTable.ts` and `host.ts` with its `TableHost`; `ui/`, `dmCore.ts`, `fightRules.ts`, `adventureRun.ts` and the rest) is the window the bench used to hold. The bench (`scripts/asset-bench/benchHost.ts`, `assets.ts`) is a thin host around it. The app (`src/games/livingtable/TableScreen.tsx`, `table/host/gameHost.ts`) is the other host. The nine re-export shims under `scripts/asset-bench/` are deleted and `test/livingtable-table-rules-parity.test.ts` with them; a guard test fails if anything under `src/` names `asset-bench`.
 - **Standalone and sealed.** The app opens straight into the window: a bar with Adventures and Fullscreen, the window, a save line and the licence panel. `package.json` declares `"editStyle": "locked"` with `"editable": false`, permissions `ai.complete` and `display.fullscreen`, and no `conjureGamesEntry` action. No hub, no back-to-hub exit.
@@ -28,7 +28,7 @@ The bench game is now THE game. Branch `port/table-window` (cut from `5b09966`; 
 - **Animated art as asset files.** The 6.3 MB cast and the 0.2 MB library load through `window.__conjureos.assets.load(url, sha256)` (`table/host/assetFiles.ts`). Until they are uploaded the table draws still figures and the hand-drawn art and says so.
 - **Checks.** `npm test` 1965 of 1965, `npm run typecheck` clean, `npm run build` writes `dist/living-table.html` (about 1.5 MB), `node scripts/e2e/run.mjs` 14 of 14 on the dev build and on `dist`. The bench type check has one known error (`scripts/assets/scifi.ts` GRATING_SLOTS; sci-fi is paused).
 
-Owner steps, in order (none done yet):
+Owner steps from the port (1 and 3 done 2026-10-03 and 2026-10-09; 2 and 4 open):
 
 1. Add the five Actions secrets in the repo (listed in the header of `.github/workflows/publish-store.yml`): `CONJUREOS_REPO_TOKEN`, `SUPABASE_DEV_PROJECT_REF`, `SUPABASE_PROD_PROJECT_REF`, `PUBLISH_BOT_DEV_PASSWORD`, `PUBLISH_BOT_PROD_PASSWORD`. Until then every publish run skips with a notice.
 2. Upload the asset files: `node scripts/assets/export-asset-files.mjs` prints each file's name, size and sha256; upload `living-table-cast.json` and `living-table-library.json` in ConjureOS Settings, Apps, Asset files (once per project, dev and prod); paste each address and hash into `ASSET_FILES` in `src/games/livingtable/table/host/assetFiles.ts`; rebuild and publish. A changed file has a new hash.
@@ -96,7 +96,9 @@ clothing drab, and the skeleton is near white in Cel bands and Plain.
 
 ## Next
 
-- Merge `port/table-window` to `dev` (the orchestrator commits it), then do the owner steps above.
+- Sealed-app work in ConjureOS (issue to be opened and claimed there): ship an app's asset files with each published version and install them for the player, so the animated art streams from Supabase with no upload by hand; then give The Living Table's asset files to it. Until then the game draws the hand-drawn art (issues #1 and #2 here wait on it).
+- Music and sound effects (#14): the owner picks six tracks (title, village, tavern, cellar, combat, victory); effects are procedural plus CC0 packs; an Audio tab on the bench first.
+- Open owner questions from the bug bash are listed on issue #13 (a bigger phone board by following the hero, the portrait tablet layout, the "AI written" tag).
 - Owner calls from the port: (1) a player with a save lands in their newest save on open, not the start screen, keep it? (2) the Adventures bar button mid-game opens the start screen with no confirm; saves are kept. (3) with no AI permission or outside ConjureOS the DM is off and says so, no stand-in answer; keep it? (4) the start screen's "Test rooms" heading, rename it "Example adventures for testing"? (5) prune the old CSS, and trim the hub and campaign code left in `src/bridge/gamesApi.ts` and `src/bridge/ai.ts`?
 - Stale text to clean: CLAUDE.md (the `actions.ts` and `Bits.tsx` lines and the "Conjure Games registration" section), README.md (the `conjureGamesEntry` sentence), and comments in about 15 `src` files that still name deleted files. The game window has no Rules or Bestiary tab yet (the bench has both).
 - Owner review of adventures/rat-cellar.md (30 marks) and the balance calls on #12 (the goblin is the hard fight unarmored; sleeper advantage and sneak attack are not in the engine).
