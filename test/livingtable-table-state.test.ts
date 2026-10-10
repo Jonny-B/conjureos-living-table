@@ -315,14 +315,15 @@ test("two windows keep two books: nothing is shared through the page", () => {
 test("the shipped adventures come from the host, are checked against its art, and are listed with their cards", () => {
   rebind(memoryHost());
   const list = benchAdventures();
-  assert.deepEqual(list.map((e) => e.file), ["rat-cellar.md", "TEMPLATE.md"], "the owner's files first, the template last");
-  assert.deepEqual(list.map((e) => e.problems), [[], []]);
-  assert.match(list[1]!.title, /^Template adventure \(/);
+  assert.deepEqual(list.map((e) => e.file), ["blackstone.md", "rat-cellar.md", "TEMPLATE.md"], "the owner's files first, the template last");
+  assert.deepEqual(list.map((e) => e.problems), [[], [], []]);
+  assert.match(list[2]!.title, /^Template adventure \(/);
   assert.equal(benchAdventures(), list, "the list is read once while the art is ready");
   const cards = startCardsFor(list);
-  assert.equal(cards[0]!.id, "rat-cellar");
-  assert.ok(cards[0]!.draftMarks! > 0);
-  assert.equal(cards[1]!.draftMarks, undefined);
+  assert.equal(cards[0]!.id, "blackstone");
+  assert.equal(cards[1]!.id, "rat-cellar");
+  assert.ok(cards[1]!.draftMarks! > 0);
+  assert.equal(cards[2]!.draftMarks, undefined);
 });
 
 test("a host whose art lacks the adventure's pictures lists it with problems and cannot start it; the list is read again when the art changes", () => {
@@ -366,7 +367,7 @@ test("an AI adventure goes to the host's storage, comes back after a new bind, a
 
   // A new window over the same host: the AI adventure is read from storage and checked again.
   rebind(h);
-  assert.deepEqual(benchAdventures().map((e) => e.file), ["rat-cellar.md", "TEMPLATE.md", "ai"]);
+  assert.deepEqual(benchAdventures().map((e) => e.file), ["blackstone.md", "rat-cellar.md", "TEMPLATE.md", "ai"]);
   assert.ok(adventureById("rat-cellar-ai"));
 
   // A game of it saves and loads like any other.

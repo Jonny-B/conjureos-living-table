@@ -1,6 +1,16 @@
 # Status
 
-Last updated: 2026-10-09, 0.11.1 is live on the dev listing (version 5) and the prod listing (version 2): the animated art ships as the app's own asset files (ConjureOS #1149) and the Mage is the Wizard.
+Last updated: 2026-10-10, 0.12.0 (days, the World and The Quiet Under Blackstone) is on branch `claude/dreamy-fermi-xg1ixr`, not merged; 0.11.1 is live on dev and prod.
+
+## 0.12.0 on branch `claude/dreamy-fermi-xg1ixr`: days, the World and Blackstone (not merged)
+
+Held on the branch by the owner ("we will merge when the others are done"). Re-take the version number at merge time if dev has moved.
+
+- **Days**: a long rest moves the day on; `it is day N or later` is a condition; the Journal shows "Day N" for an adventure that keeps time.
+- **World**: `## World` beats and ways out fire in any scene (the villain's clock). The brief tells the DM what comes next, DM ONLY.
+- **Blackstone**: `adventures/blackstone.md`, a three-act campaign with four endings and a clock; checker clean, 0 warnings.
+- **Fix**: a creature a world beat brings in is absent until it fires.
+- **Checks**: `npm test` all pass, typecheck clean, `adventures:check` ok, build ok, e2e run on the branch. Still REVIEW in the file: no faction attitudes, no creature turning hostile mid-scene, no forced ambush; untested on a device.
 
 ## 0.11.0 and 0.11.1, the art ships as asset files, and the Mage is the Wizard (ConjureOS #1149)
 

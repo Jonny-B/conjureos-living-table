@@ -2,6 +2,20 @@
 
 Cross-cutting calls, newest first. Terse: what, why, what it touches. STATUS.md says where the project is; this says why it is that way.
 
+## 2026-10-10 (days, the World and Blackstone, 0.12.0, branch claude/dreamy-fermi-xg1ixr)
+
+### Adventures keep time: a day passes each time the hero sleeps
+The owner's campaign framework writes the villain's plan as "Day 1 ... Day 10, if the player does nothing". So `AdventureProgress.day` starts at 1 and a long rest is the only thing that moves it (`{ type: "rest" }`, applied by `restFlow` after "Morning comes"). A condition reads `it is day N or later`; there is no "before day N", because "not" already says it. A save from before days reads as day 1. An adventure that never looks at the day shows and tells nothing about days (`adventureKeepsTime`). Sleep, not turns or hours, because a rest is the one moment the game already treats as time passing, and the DM never chooses it. Touches: `adventures/types.ts`, `progress.ts`, `markdown.ts`, `validate.ts`, `brief.ts`, `table/flows/turns.ts`, the Journal.
+
+### A ## World section holds what happens whatever scene the story is in
+A villain's clock is not part of any one scene, so `## World` takes beats and a Next that are checked after every event in every scene; world ways out are taken before the scene's own. The DM may declare a judgment flag a world condition names in any scene (so cutting off the silver can count in Act I), never a flag a beat sets. The brief tells the DM the day and each unfired world beat as "DM ONLY, what the world does next", to foreshadow and never announce. Touches: the same files plus `adventures/README.md`.
+
+### A creature a beat brings in is absent until that beat fires, world beats included
+Bug found by the e2e: `spawnIsPresent`, `dmGivableItemIds` and `beatFlags` read scene beats only, so Blackstone's day-6 skeletons stood in the square on day 1 and the game opened in a fight. All three now read `allBeats(a)`. Touches: `types.ts`, `validate.ts`, `progress.ts`, `table/dmScene.ts`.
+
+### The Quiet Under Blackstone is ported to the Markdown format, and the TypeScript campaign module is retired
+The old branch's campaign engine (Acts, Arcs, factions, a TypeScript module) lost to dev's adventure format at the merge. Blackstone is now `adventures/blackstone.md`: three act scenes, four endings, the clock in `## World` (days 2, 4, 6, 9; cutting off the silver moves the last three by three days; stopping Corvane stops it). Judgment calls are flags a beat reacts to; secrets are DM ONLY lines and the DM never list, because the format cannot gate what the DM says. Not carried over, and marked REVIEW in the file: faction attitudes, a creature that turns hostile mid-scene, and a DM-forced ambush. Blackstone sorts before the Rat Cellar on the start screen (the catalog is alphabetical). Touches: `adventures/blackstone.md`, `test/livingtable-adventure-blackstone.test.ts`.
+
 ## 2026-10-09 (asset files, ConjureOS #1149, 0.11.0)
 
 ### The animated art is the app's own asset files, committed in the repo and installed with the game

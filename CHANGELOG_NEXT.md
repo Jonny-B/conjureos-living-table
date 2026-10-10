@@ -1,7 +1,7 @@
-# 0.11.1
+# 0.12.0
 
-The animated art comes with the game, and the Mage is now the Wizard.
+A new adventure, The Quiet Under Blackstone, and days that pass while you sleep.
 
-- The painted board art and the animated 3D figures download with The Living Table when you install it from Discover, so they are ready the first time you open it. An update brings any new art before the new version replaces the old one.
-- If the art cannot be downloaded, the game still installs and plays with the still figures and the hand-drawn art, and tells you why.
-- The Mage is now called the Wizard everywhere: the hero choice, the character maker, the sheet, the rulebook and the board. Heroes you already saved read Wizard now. (The Shadow became the Rogue in 0.10.0.)
+- The Quiet Under Blackstone: missing villagers, a goblin clan with a grudge, a mayor with a secret, and the dead walking on the ridge. Three acts and four endings, for levels 1 to 3.
+- Time passes in Blackstone. Each time you make camp and sleep a new day begins, and what you have not stopped carries on without you.
+- The Journal shows the day for adventures that keep time.
