@@ -17,7 +17,8 @@ export const specs = [
       const d = g.driver;
       await d.ready();
       const adventures = await d.adventures();
-      assert.equal(adventures.length, 2, `two adventures are listed (${adventures.map((a) => a.id).join(", ")})`);
+      assert.equal(adventures.length, 3, `three adventures are listed (${adventures.map((a) => a.id).join(", ")})`);
+      assert.ok(adventures.some((a) => /The Quiet Under Blackstone/.test(a.text)), "The Quiet Under Blackstone is listed");
       assert.ok(adventures.some((a) => /The Rat Cellar/.test(a.text)), "The Rat Cellar is listed");
       assert.ok(adventures.some((a) => /Template adventure/.test(a.text)), "the template adventure is listed");
       const rooms = await d.rooms();
@@ -77,7 +78,7 @@ export const specs = [
       assert.notEqual(moved, still, "the board redrew with the hero somewhere new");
       assert.equal(g.platform.calls.length, 0, "walking never calls the model");
       await d.adventuresButton();
-      assert.equal((await d.adventures()).length, 2, "the start screen is back");
+      assert.equal((await d.adventures()).length, 3, "the start screen is back");
     },
   },
 
@@ -353,7 +354,7 @@ export const specs = [
       await g.page.waitForTimeout(600);
       assert.equal(await g.page.locator('[data-ltm-act="continue"]').isDisabled(), true, "the second player has nothing to continue");
       await d.toAdventureList();
-      assert.equal(await g.page.locator("[data-lto-adventure]").count(), 2, "the second player starts at the start screen");
+      assert.equal(await g.page.locator("[data-lto-adventure]").count(), 3, "the second player starts at the start screen");
       assert.equal(g.platform.saves.size, 0, "nothing of the first player's reached the second player's account");
       const kept = await g.page.evaluate(() => Object.keys(localStorage).filter((k) => k.includes(":backup:")));
       assert.ok(kept.length >= 1, "the first player's saves are kept aside on the device");

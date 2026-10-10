@@ -10,7 +10,7 @@ Held on the branch by the owner ("we will merge when the others are done"). Re-t
 - **World**: `## World` beats and ways out fire in any scene (the villain's clock). The brief tells the DM what comes next, DM ONLY.
 - **Blackstone**: `adventures/blackstone.md`, a three-act campaign with four endings and a clock; checker clean, 0 warnings.
 - **Fix**: a creature a world beat brings in is absent until it fires.
-- **Checks**: `npm test` all pass, typecheck clean, `adventures:check` ok, build ok, e2e run on the branch. Still REVIEW in the file: no faction attitudes, no creature turning hostile mid-scene, no forced ambush; untested on a device.
+- **Checks**: `npm test` all pass, typecheck clean, `adventures:check` ok, build ok; e2e 88 of 89, the one failure (the Fullscreen button still reads "Exit full screen" after leaving) fails the same way on `dev` and is not this branch's. Still REVIEW in the file: no faction attitudes, no creature turning hostile mid-scene, no forced ambush; untested on a device.
 
 ## 0.11.0 and 0.11.1, the art ships as asset files, and the Mage is the Wizard (ConjureOS #1149)
 
