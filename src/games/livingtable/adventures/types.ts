@@ -153,6 +153,12 @@ export type Condition =
   | { has: string }
   /** An objective id that is done. */
   | { objective: string }
+  /**
+   * It is this day of the adventure or later. The first day is day 1, and a
+   * day passes each time the hero sleeps (a long rest). Days only move
+   * forward, so "or later" is the only reading there is.
+   */
+  | { day: number }
   | { always: true };
 
 export interface AdventureObjective {
@@ -190,6 +196,18 @@ export interface AdventureScene {
   ending?: { text: string; outcome: "victory" | "defeat" | "continue" };
 }
 
+/**
+ * What happens in the world whatever scene the story is in: the villain's
+ * clock, a rumour that reaches the village, the night the dead walk. Its beats
+ * are checked in every scene, after the scene's own; its ways out are checked
+ * before the scene's own, so a clock that has run out ends the story wherever
+ * the party is standing.
+ */
+export interface AdventureWorld {
+  beats: AdventureBeat[];
+  next: { scene: string; when: Condition }[];
+}
+
 export interface Adventure {
   id: string;
   title: string;
@@ -210,6 +228,8 @@ export interface Adventure {
   npcs: AdventureNpc[];
   items: AdventureItem[];
   scenes: AdventureScene[];
+  /** Beats and ways out that belong to no one scene. Absent in an adventure that has none. */
+  world?: AdventureWorld;
   start: { sceneId: string; locationId: string; at: { x: number; y: number } };
 }
 
@@ -230,6 +250,8 @@ export interface AdventureProgress {
   has: string[];
   /** Spawn ids a beat has brought in. A spawn named by some beat is absent until then. */
   spawned: string[];
+  /** The adventure's day, from 1; one more each time the hero sleeps. Absent in a game saved before days existed, which reads as day 1. */
+  day?: number;
   ended?: "victory" | "defeat";
 }
 
@@ -246,7 +268,9 @@ export type AdventureEvent =
   | { type: "gain"; item: string }
   | { type: "lose"; item: string }
   | { type: "flag"; flag: string }
-  | { type: "dm"; step: DmProgressStep };
+  | { type: "dm"; step: DmProgressStep }
+  /** The hero slept the night (a long rest): a day passes. */
+  | { type: "rest" };
 
 /** One problem found while checking an adventure. `path` points at it, `message` says it in plain words. */
 export interface AdventureIssue {
@@ -277,6 +301,16 @@ export function allSpawns(a: Adventure): { spawn: AdventureSpawn; locationId: st
   const out: { spawn: AdventureSpawn; locationId: string }[] = [];
   for (const loc of a.locations) for (const spawn of loc.spawns) out.push({ spawn, locationId: loc.id });
   return out;
+}
+
+/** The adventure's world beats and ways out, empty when it has none. */
+export function worldOf(a: Adventure): AdventureWorld {
+  return { beats: a.world?.beats ?? [], next: a.world?.next ?? [] };
+}
+
+/** What day it is in this game of the adventure. */
+export function dayOf(p: AdventureProgress): number {
+  return p.day ?? 1;
 }
 
 /** The scene with this id, or undefined. */

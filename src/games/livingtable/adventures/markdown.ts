@@ -47,6 +47,7 @@ export const CONDITION_PHRASES: readonly string[] = [
   "the player talks to NPC",
   "the player has ITEM",
   "the objective OBJECTIVE is done",
+  "it is day N or later",
   "not CONDITION",
   "CONDITION and CONDITION",
   "CONDITION or CONDITION",
@@ -296,6 +297,17 @@ class CondParser {
       this.expectWords(["is"], "after the id");
       this.killedWord();
       return { killed: id };
+    }
+    if (w === "it" && this.lw(1) === "is" && this.lw(2) === "day") {
+      this.i += 3;
+      const n = this.toks[this.i] ?? "";
+      if (!/^\d+$/.test(n) || Number(n) < 1) this.fail(`expected the day as a whole number from 1 after "it is day", but found ${n ? `"${n}"` : "the end of the condition"}`);
+      this.i++;
+      if (this.lw() !== "or" || this.lw(1) !== "later") {
+        this.fail(`expected "or later" after "it is day ${n}": days only move forward, so write "it is day ${n} or later" (and "not it is day ${n} or later" for before it)`);
+      }
+      this.i += 2;
+      return { day: Number(n) };
     }
     const k = w === "the" ? 1 : 0;
     const who = this.lw(k);
@@ -1014,10 +1026,16 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
   const npcNodes: { node: Node; name: string }[] = [];
   const itemNodes: { node: Node; name: string }[] = [];
   const sceneNodes: { node: Node; name: string }[] = [];
+  let worldNode: Node | undefined;
 
-  const SECTION_LIST = "Summary, Truths, DM must, DM never, Hooks, Starting kit, Location: name, NPC: name, Item: name, Scene: name";
+  const SECTION_LIST = "Summary, Truths, DM must, DM never, Hooks, Starting kit, Location: name, NPC: name, Item: name, Scene: name, World";
   for (const sec of sections) {
     const key = sec.heading.toLowerCase().replace(/\s+/g, " ").replace(/:+$/, "").trim();
+    if (key === "world") {
+      if (worldNode) p.err(sec.line, `The section "${sec.heading}" appears twice (first on line ${worldNode.line}). Keep one.`);
+      else worldNode = sec;
+      continue;
+    }
     const st = STATIC_SECTIONS[key];
     if (st) {
       if (slots[st]) {
@@ -1038,7 +1056,7 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
       else sceneNodes.push(entry);
       continue;
     }
-    const hint = didYouMean(key.replace(/:.*$/, ""), ["summary", "truths", "dm must", "dm never", "hooks", "starting kit", "location", "npc", "item", "scene"]);
+    const hint = didYouMean(key.replace(/:.*$/, ""), ["summary", "truths", "dm must", "dm never", "hooks", "starting kit", "location", "npc", "item", "scene", "world"]);
     p.err(sec.line, `"${sec.heading}" is not a section I know.${hint ? ` Did you mean "${hint}"? (Locations, NPCs, items and scenes are written "Location: Name".)` : ""} The sections are: ${SECTION_LIST}.`);
   }
   const summaryNode = slots.summary;
@@ -1160,6 +1178,29 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
       }
     }
     scenes.push(raw);
+  }
+  // The world: beats and ways out that belong to no one scene. Beat ids share the scenes' namespace.
+  const worldRaw: { beats: RawScene["beats"]; next?: Node } = { beats: [] };
+  if (worldNode) {
+    for (const it of worldNode.items) {
+      if (it.t !== "blank") p.err(it.line, "## World holds only ### Beat: id and ### Next sub-sections; put any words in a comment or in a beat.");
+    }
+    for (const ch of worldNode.children) {
+      const key = ch.heading.toLowerCase().replace(/\s+/g, " ").replace(/:+$/, "").trim();
+      const sub = /^beat\s*:\s*(\S.*)$/i.exec(ch.heading);
+      if (sub) {
+        const f = readFields(ch.items, BEAT_FIELDS, "for a beat", p, { quote: true });
+        const bid = idFromHeading(sub[1]!.trim(), ch.line, p);
+        dup(beatSeen, bid, ch.line, "beat");
+        worldRaw.beats.push({ node: ch, id: bid, fm: f });
+      } else if (key === "next") {
+        if (worldRaw.next) p.err(ch.line, `## World already has a ### Next (line ${worldRaw.next.line}).`);
+        else worldRaw.next = ch;
+      } else {
+        const hint = didYouMean(key.replace(/:.*$/, ""), ["beat", "next"]);
+        p.err(ch.line, `"${ch.heading}" is not a sub-section of ## World.${hint ? ` Did you mean "${hint}"?` : ""} Use: Beat: id, Next.`);
+      }
+    }
   }
 
   // ---- registries ----
@@ -1401,7 +1442,52 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
     return loc;
   });
 
-  // ---- scenes ----
+  // ---- scenes and the world ----
+  const buildBeat = (b: RawScene["beats"][number]): AdventureBeat => {
+    const w = require1(b.fm, "when", b.node.line, "the flag rats_cleared is set", p);
+    const when = w ? cond(w) : undefined;
+    const beat: AdventureBeat = { id: b.id, when: when ?? { always: true } };
+    const narrate = paragraphs(b.node.items, "quote");
+    if (narrate) beat.narrate = narrate;
+    const flags = many(b.fm, "sets flag");
+    if (flags.length > 0) beat.setFlags = flags.map((f) => asWord(f, "A flag name", p) ?? "");
+    const gives = many(b.fm, "gives");
+    if (gives.length > 0) beat.give = gives.map((g) => g.value);
+    const sp = many(b.fm, "spawns");
+    if (sp.length > 0) beat.spawn = sp.map((s) => ref(spawnCands, s, "spawn", p) ?? "");
+    const once = asBool(one(b.fm, "once"), p);
+    if (once !== undefined) beat.once = once;
+    return beat;
+  };
+  const buildNext = (node: Node): { scene: string; when: Condition }[] => {
+    const out: { scene: string; when: Condition }[] = [];
+    for (const it of node.items) {
+      if (it.t === "blank") continue;
+      if (it.t !== "bullet") {
+        p.err(it.line, 'Under ### Next, write one bullet per way out, like: - Quiet at last when the flag goblin_gone is set');
+        continue;
+      }
+      const words = it.text.split(/\s+/);
+      let done = false;
+      for (let j = 1; j < words.length; j++) {
+        if (words[j]!.toLowerCase() !== "when") continue;
+        const r1 = lookup(sceneCands, words.slice(0, j).join(" "));
+        if (!r1.id) continue;
+        done = true;
+        const condText = words.slice(j + 1).join(" ");
+        if (!condText) {
+          p.err(it.line, 'Expected a condition after "when", like: when the flag goblin_gone is set');
+          break;
+        }
+        const c = cond({ line: it.line, value: condText });
+        if (c) out.push({ scene: r1.id, when: c });
+        break;
+      }
+      if (!done) p.err(it.line, `Expected "<scene> when <condition>" with a scene defined in this file. Scenes: ${listCands(sceneCands)}. Found "${it.text.slice(0, 60)}".`);
+    }
+    return out;
+  };
+
   const outScenes: AdventureScene[] = scenes.map((r) => {
     const scene: AdventureScene = { id: r.id, title: r.title, objectives: [], beats: [], next: [] };
     const locFV = one(r.fm, "location");
@@ -1420,48 +1506,8 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
       if (hid !== undefined) obj.hidden = hid;
       scene.objectives.push(obj);
     }
-    for (const b of r.beats) {
-      const w = require1(b.fm, "when", b.node.line, "the flag rats_cleared is set", p);
-      const when = w ? cond(w) : undefined;
-      const beat: AdventureBeat = { id: b.id, when: when ?? { always: true } };
-      const narrate = paragraphs(b.node.items, "quote");
-      if (narrate) beat.narrate = narrate;
-      const flags = many(b.fm, "sets flag");
-      if (flags.length > 0) beat.setFlags = flags.map((f) => asWord(f, "A flag name", p) ?? "");
-      const gives = many(b.fm, "gives");
-      if (gives.length > 0) beat.give = gives.map((g) => g.value);
-      const sp = many(b.fm, "spawns");
-      if (sp.length > 0) beat.spawn = sp.map((s) => ref(spawnCands, s, "spawn", p) ?? "");
-      const once = asBool(one(b.fm, "once"), p);
-      if (once !== undefined) beat.once = once;
-      scene.beats.push(beat);
-    }
-    if (r.next) {
-      for (const it of r.next.items) {
-        if (it.t === "blank") continue;
-        if (it.t !== "bullet") {
-          p.err(it.line, 'Under ### Next, write one bullet per way out, like: - Quiet at last when the flag goblin_gone is set');
-          continue;
-        }
-        const words = it.text.split(/\s+/);
-        let done = false;
-        for (let j = 1; j < words.length; j++) {
-          if (words[j]!.toLowerCase() !== "when") continue;
-          const r1 = lookup(sceneCands, words.slice(0, j).join(" "));
-          if (!r1.id) continue;
-          done = true;
-          const condText = words.slice(j + 1).join(" ");
-          if (!condText) {
-            p.err(it.line, 'Expected a condition after "when", like: when the flag goblin_gone is set');
-            break;
-          }
-          const c = cond({ line: it.line, value: condText });
-          if (c) scene.next.push({ scene: r1.id, when: c });
-          break;
-        }
-        if (!done) p.err(it.line, `Expected "<scene> when <condition>" with a scene defined in this file. Scenes: ${listCands(sceneCands)}. Found "${it.text.slice(0, 60)}".`);
-      }
-    }
+    for (const b of r.beats) scene.beats.push(buildBeat(b));
+    if (r.next) scene.next.push(...buildNext(r.next));
     if (r.ending) {
       const ef = readFields(r.ending.items, [{ key: "outcome" }], "under ### Ending", p, { quote: true });
       const oc = require1(ef, "outcome", r.ending.line, "victory", p);
@@ -1477,6 +1523,8 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
     }
     return scene;
   });
+  const worldBeats = worldRaw.beats.map(buildBeat);
+  const worldNext = worldRaw.next ? buildNext(worldRaw.next) : [];
 
   // ---- the start ----
   if (outLocations.length === 0) p.err(title.line, "Expected at least one ## Location: ... section.");
@@ -1530,6 +1578,7 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
   };
   if (levelRange) adventure.levelRange = levelRange;
   if (tone) adventure.tone = tone;
+  if (worldBeats.length > 0 || worldNext.length > 0) adventure.world = { beats: worldBeats, next: worldNext };
   return { adventure, errors: [], warnings: sortIssues(p.warnings) };
 }
 
@@ -1573,6 +1622,7 @@ function fmtCondition(c: Condition, names: NameFns): string {
   if ("talkedTo" in c) return `the player talks to ${names.npc(c.talkedTo)}`;
   if ("has" in c) return `the player has ${names.item(c.has)}`;
   if ("objective" in c) return `the objective ${names.obj(c.objective)} is done`;
+  if ("day" in c) return `it is day ${c.day} or later`;
   return "always";
 }
 
@@ -1759,6 +1809,26 @@ export function adventureToMarkdown(a: Adventure): string {
     }
   }
 
+  const writeBeat = (b: AdventureBeat): void => {
+    heading(3, `Beat: ${b.id}`);
+    field("when", cond(b.when));
+    for (const f of b.setFlags ?? []) field("sets flag", f);
+    for (const g of b.give ?? []) field("gives", g);
+    for (const sp of b.spawn ?? []) field("spawns", sp);
+    field("once", b.once);
+    endFields();
+    quote(b.narrate);
+  };
+  const writeNext = (next: { scene: string; when: Condition }[]): void => {
+    if (next.length === 0) return;
+    heading(3, "Next");
+    for (const n of next) {
+      const sn = nameOf(sceneCands)(n.scene);
+      push(`- ${/\bwhen\b/i.test(sn) ? n.scene : sn} when ${cond(n.when)}`);
+    }
+    push("");
+  };
+
   for (const s of a.scenes) {
     heading(2, `Scene: ${s.title}`);
     idField(s.id, s.title);
@@ -1772,30 +1842,20 @@ export function adventureToMarkdown(a: Adventure): string {
       field("done when", cond(o.doneWhen));
       endFields();
     }
-    for (const b of s.beats) {
-      heading(3, `Beat: ${b.id}`);
-      field("when", cond(b.when));
-      for (const f of b.setFlags ?? []) field("sets flag", f);
-      for (const g of b.give ?? []) field("gives", g);
-      for (const sp of b.spawn ?? []) field("spawns", sp);
-      field("once", b.once);
-      endFields();
-      quote(b.narrate);
-    }
-    if (s.next.length > 0) {
-      heading(3, "Next");
-      for (const n of s.next) {
-        const sn = nameOf(sceneCands)(n.scene);
-        push(`- ${/\bwhen\b/i.test(sn) ? n.scene : sn} when ${cond(n.when)}`);
-      }
-      push("");
-    }
+    for (const b of s.beats) writeBeat(b);
+    writeNext(s.next);
     if (s.ending) {
       heading(3, "Ending");
       field("outcome", s.ending.outcome);
       endFields();
       quote(s.ending.text);
     }
+  }
+
+  if (a.world && (a.world.beats.length > 0 || a.world.next.length > 0)) {
+    heading(2, "World");
+    for (const b of a.world.beats) writeBeat(b);
+    writeNext(a.world.next);
   }
 
   while (out.length > 0 && out[out.length - 1] === "") out.pop();

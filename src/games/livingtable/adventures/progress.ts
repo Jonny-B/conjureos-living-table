@@ -3,9 +3,10 @@
  *
  * The progress record is plain JSON. `applyEvent` is the ONLY thing that
  * changes it: the game reports what happened (the party entered a place, a
- * creature died, someone was spoken to) and the engine re-evaluates the
- * adventure's objectives, beats and scene transitions until nothing more
- * changes. The dungeon master never edits progress; it can only PROPOSE a
+ * creature died, someone was spoken to, the hero slept and a day passed) and
+ * the engine re-evaluates the
+ * adventure's objectives, beats and scene transitions, the world's included,
+ * until nothing more changes. The dungeon master never edits progress; it can only PROPOSE a
  * `DmProgressStep`, and the engine accepts one only when the adventure allows
  * it right now (see `allowedDmSteps`). That is what makes the adventure gospel
  * rather than a suggestion: no proposal can skip a kill, walk past a locked
@@ -13,6 +14,7 @@
  */
 import {
   allSpawns,
+  dayOf,
   itemOf,
   locationOf,
   sceneOf,
@@ -25,6 +27,7 @@ import {
   type AdventureScene,
   type Condition,
   type DmProgressStep,
+  worldOf,
 } from "./types";
 
 /** What one event did. */
@@ -60,6 +63,7 @@ export function startProgress(a: Adventure): AdventureProgress {
     talkedTo: [],
     has: [],
     spawned: [],
+    day: 1,
   };
 }
 
@@ -99,6 +103,7 @@ export function evaluate(a: Adventure, p: AdventureProgress, c: Condition): bool
   if ("talkedTo" in c) return p.talkedTo.includes(c.talkedTo);
   if ("has" in c) return p.has.includes(c.has);
   if ("objective" in c) return p.objectivesDone.includes(c.objective);
+  if ("day" in c) return Number.isInteger(c.day) && dayOf(p) >= c.day;
   return false;
 }
 
@@ -113,6 +118,28 @@ function killedHolds(a: Adventure, p: AdventureProgress, ref: string): boolean {
   const spawn = allSpawns(a).find((s) => s.spawn.id === ref);
   if (spawn) return spawnInstanceIds(spawn.spawn).every((id) => p.killed.includes(id));
   return p.killed.includes(ref);
+}
+
+/** Whether a condition looks at the day anywhere inside it. */
+export function conditionMentionsDay(c: Condition | undefined): boolean {
+  if (!c || typeof c !== "object") return false;
+  if ("day" in c) return true;
+  if ("all" in c) return Array.isArray(c.all) && c.all.some(conditionMentionsDay);
+  if ("any" in c) return Array.isArray(c.any) && c.any.some(conditionMentionsDay);
+  if ("not" in c) return conditionMentionsDay(c.not);
+  return false;
+}
+
+/** Whether any condition in the adventure looks at the day, which is when the day is worth showing anyone. */
+export function adventureKeepsTime(a: Adventure): boolean {
+  const world = worldOf(a);
+  const conds: (Condition | undefined)[] = [
+    ...a.scenes.flatMap((s) => [...s.objectives.map((o) => o.doneWhen), ...s.beats.map((b) => b.when), ...s.next.map((n) => n.when)]),
+    ...world.beats.map((b) => b.when),
+    ...world.next.map((n) => n.when),
+    ...a.locations.flatMap((l) => [...l.exits.map((e) => e.requires), ...l.spawns.map((s) => s.appearsWhen)]),
+  ];
+  return conds.some(conditionMentionsDay);
 }
 
 /** Every flag a condition names, any depth. */
@@ -151,6 +178,7 @@ export function describeCondition(a: Adventure, c: Condition): string {
     }
     return `the objective "${c.objective}" is done`;
   }
+  if ("day" in c) return `it is day ${c.day} or later`;
   return "something the adventure does not define";
 }
 
@@ -160,7 +188,7 @@ export function describeCondition(a: Adventure, c: Condition): string {
 /** Flags set by some beat. Those are the adventure's own machinery, so the DM may not declare them. */
 function beatFlags(a: Adventure): Set<string> {
   const out = new Set<string>();
-  for (const s of a.scenes) for (const b of s.beats) for (const f of b.setFlags ?? []) out.add(f);
+  for (const b of [...a.scenes.flatMap((s) => s.beats), ...worldOf(a).beats]) for (const f of b.setFlags ?? []) out.add(f);
   return out;
 }
 
@@ -181,6 +209,10 @@ export function dmSettableFlags(a: Adventure, p: AdventureProgress): string[] {
     for (const b of scene.beats) if (b.once === false || !p.beatsFired.includes(b.id)) conditionFlags(b.when, seen);
     for (const n of scene.next) conditionFlags(n.when, seen);
   }
+  // The world's beats and ways out are live in every scene, so their judgment calls are too.
+  const world = worldOf(a);
+  for (const b of world.beats) if (b.once === false || !p.beatsFired.includes(b.id)) conditionFlags(b.when, seen);
+  for (const n of world.next) conditionFlags(n.when, seen);
   if (loc) {
     for (const e of loc.exits) conditionFlags(e.requires, seen);
     for (const s of loc.spawns) conditionFlags(s.appearsWhen, seen);
@@ -281,6 +313,27 @@ export function settleProgress(a: Adventure, start: AdventureProgress): Adventur
   let sceneChanged: AdventureStepResult["sceneChanged"];
   let ended: AdventureScene["ending"];
 
+  const world = worldOf(a);
+  const fire = (b: AdventureBeat): boolean => {
+    const once = b.once !== false;
+    if (once ? p.beatsFired.includes(b.id) : firedNow.has(b.id)) return false;
+    if (!evaluate(a, p, b.when)) return false;
+    if (once) p.beatsFired.push(b.id);
+    firedNow.add(b.id);
+    applyBeat(a, p, b);
+    fired.push(b);
+    return true;
+  };
+  const go = (fromScene: AdventureScene, target: AdventureScene): void => {
+    const from = sceneChanged ? sceneChanged.from : fromScene.id;
+    p.sceneId = target.id;
+    sceneChanged = { from, to: target.id, opening: target.opening };
+    if (target.ending) {
+      ended = target.ending;
+      if (target.ending.outcome === "victory" || target.ending.outcome === "defeat") p.ended = target.ending.outcome;
+    }
+  };
+
   for (let pass = 0; pass < SETTLE_LIMIT; pass++) {
     if (p.ended) break;
     const scene = sceneOf(a, p.sceneId);
@@ -296,31 +349,31 @@ export function settleProgress(a: Adventure, start: AdventureProgress): Adventur
       }
     }
 
-    for (const b of scene.beats) {
-      const once = b.once !== false;
-      if (once ? p.beatsFired.includes(b.id) : firedNow.has(b.id)) continue;
-      if (!evaluate(a, p, b.when)) continue;
-      if (once) p.beatsFired.push(b.id);
-      firedNow.add(b.id);
-      applyBeat(a, p, b);
-      fired.push(b);
-      changed = true;
-    }
+    for (const b of scene.beats) if (fire(b)) changed = true;
+    for (const b of world.beats) if (fire(b)) changed = true;
 
-    for (const n of scene.next) {
-      if (!evaluate(a, p, n.when)) continue;
+    // The world's ways out first: a clock that has run out ends the story
+    // wherever the party is. A link to the scene already in play is no move.
+    let moved = false;
+    for (const n of world.next) {
+      if (n.scene === scene.id || !evaluate(a, p, n.when)) continue;
       const target = sceneOf(a, n.scene);
       if (!target) continue;
-      const from = sceneChanged ? sceneChanged.from : scene.id;
-      p.sceneId = target.id;
-      sceneChanged = { from, to: target.id, opening: target.opening };
-      if (target.ending) {
-        ended = target.ending;
-        if (target.ending.outcome === "victory" || target.ending.outcome === "defeat") p.ended = target.ending.outcome;
-      }
-      changed = true;
+      go(scene, target);
+      moved = true;
       break;
     }
+    if (!moved) {
+      for (const n of scene.next) {
+        if (!evaluate(a, p, n.when)) continue;
+        const target = sceneOf(a, n.scene);
+        if (!target) continue;
+        go(scene, target);
+        moved = true;
+        break;
+      }
+    }
+    if (moved) changed = true;
 
     if (!changed) break;
   }
@@ -414,6 +467,10 @@ export function applyEvent(a: Adventure, progress: AdventureProgress, e: Adventu
       const verdict = judgeDmStep(a, p, e.step);
       if (verdict.refused) return unchanged(progress, verdict.refused);
       if (verdict.setFlag) p.flags[verdict.setFlag] = true;
+      break;
+    }
+    case "rest": {
+      p.day = dayOf(p) + 1;
       break;
     }
   }

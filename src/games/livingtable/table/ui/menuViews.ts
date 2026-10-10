@@ -135,6 +135,11 @@ export function journalView(kit: ViewKit, j: HudJournal, prevScroll: number): HT
     scene.dataset.journalScene = "";
     story.append(scene);
   }
+  if (j.day !== undefined) {
+    const day = row(kit.text(`Day ${j.day}`, "line", 18));
+    day.dataset.journalDay = String(j.day);
+    story.append(day);
+  }
   list.append(story);
   const objs = journalObjectives(j.objectives);
   const sec = el("div", "lto-hud-sec");

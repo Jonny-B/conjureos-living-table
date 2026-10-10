@@ -23,6 +23,7 @@ import {
   spawnInstanceIds,
   type Adventure,
   type AdventureAssets,
+  type AdventureBeat,
   type AdventureIssue,
   type AdventureLocation,
   type AdventureProgress,
@@ -466,8 +467,10 @@ export function validateAdventure(
     else objIds.add(o.id);
   });
   const beatIds = new Set<string>();
-  for (const s of scenes) for (const b of arr(s.beats)) {
-    const p = `scenes.${s.id}.beats.${b?.id}`;
+  const worldBeats = arr(a.world?.beats);
+  const worldNext = arr(a.world?.next);
+  const beatPlaces = [...scenes.flatMap((s) => arr(s.beats).map((b) => ({ b, p: `scenes.${s.id}.beats.${b?.id}` }))), ...worldBeats.map((b) => ({ b, p: `world.beats.${b?.id}` }))];
+  for (const { b, p } of beatPlaces) {
     if (!nonEmpty(b?.id) || !ID_RE.test(b.id)) err(p, "This beat needs an id of letters, digits, hyphens and underscores.");
     else if (beatIds.has(b.id)) err(p, `Two beats share the id "${b.id}". Beat ids are unique across the whole adventure.`);
     else beatIds.add(b.id);
@@ -502,7 +505,7 @@ export function validateAdventure(
     if (depth > MAX_CONDITION_DEPTH) return void err(path, "This condition is nested too deeply to follow.");
     const keys = Object.keys(c);
     if (keys.length !== 1) {
-      return void err(path, `A condition has exactly one of flag, all, any, not, killed, entered, talkedTo, has, objective, always. This one has ${keys.length === 0 ? "none" : keys.join(", ")}.`);
+      return void err(path, `A condition has exactly one of flag, all, any, not, killed, entered, talkedTo, has, objective, day, always. This one has ${keys.length === 0 ? "none" : keys.join(", ")}.`);
     }
     if ("always" in c) {
       if (c.always !== true) err(path, "always must be true.");
@@ -533,6 +536,8 @@ export function validateAdventure(
       if (!itemIds.has(c.has)) err(path, `"${c.has}" is not an item in this adventure.`);
     } else if ("objective" in c) {
       if (!objIds.has(c.objective)) err(path, `"${c.objective}" is not an objective in this adventure.`);
+    } else if ("day" in c) {
+      if (!Number.isInteger(c.day) || c.day < 1) err(path, `A day is a whole number from 1 (the first day), not ${JSON.stringify(c.day)}.`);
     } else {
       err(path, "This is not a condition the adventure understands.");
     }
@@ -802,7 +807,26 @@ export function validateAdventure(
     }
   }
 
-  // ---- scenes ----
+  // ---- scenes and the world ----
+  const checkBeat = (b: AdventureBeat, bp: string): void => {
+    checkCond(b?.when, `${bp}.when`);
+    for (const f of arr(b?.setFlags)) {
+      if (!nonEmpty(f)) err(`${bp}.setFlags`, "A flag name is empty.");
+      else flagsSet.add(f);
+    }
+    for (const sid of arr(b?.spawn)) if (!spawnIds.has(sid)) err(`${bp}.spawn`, `"${sid}" is not a spawn in this adventure.`);
+    noteGiven(b?.give);
+    if (!nonEmpty(b?.narrate) && arr(b?.setFlags).length === 0 && arr(b?.give).length === 0 && arr(b?.spawn).length === 0) {
+      warn(bp, "This beat does nothing: no narration, flags, items or spawns.");
+    }
+  };
+  const checkNext = (n: { scene: string; when: Condition }, np: string): void => {
+    if (!sceneIds.has(n?.scene)) err(`${np}.scene`, `"${n?.scene}" is not a scene in this adventure.`);
+    checkCond(n?.when, `${np}.when`);
+  };
+  worldBeats.forEach((b) => checkBeat(b, `world.beats.${b?.id}`));
+  worldNext.forEach((n, i) => checkNext(n, `world.next[${i}]`));
+
   scenes.forEach((s) => {
     const sp = `scenes.${s?.id}`;
     if (!nonEmpty(s?.title)) err(`${sp}.title`, "This scene needs a title.");
@@ -811,24 +835,8 @@ export function validateAdventure(
       if (!nonEmpty(o?.text)) err(`${sp}.objectives.${o?.id}.text`, "This objective needs text.");
       checkCond(o?.doneWhen, `${sp}.objectives.${o?.id}.doneWhen`);
     }
-    for (const b of arr(s?.beats)) {
-      const bp = `${sp}.beats.${b?.id}`;
-      checkCond(b?.when, `${bp}.when`);
-      for (const f of arr(b?.setFlags)) {
-        if (!nonEmpty(f)) err(`${bp}.setFlags`, "A flag name is empty.");
-        else flagsSet.add(f);
-      }
-      for (const sid of arr(b?.spawn)) if (!spawnIds.has(sid)) err(`${bp}.spawn`, `"${sid}" is not a spawn in this adventure.`);
-      noteGiven(b?.give);
-      if (!nonEmpty(b?.narrate) && arr(b?.setFlags).length === 0 && arr(b?.give).length === 0 && arr(b?.spawn).length === 0) {
-        warn(bp, "This beat does nothing: no narration, flags, items or spawns.");
-      }
-    }
-    arr(s?.next).forEach((n, i) => {
-      const np = `${sp}.next[${i}]`;
-      if (!sceneIds.has(n?.scene)) err(`${np}.scene`, `"${n?.scene}" is not a scene in this adventure.`);
-      checkCond(n?.when, `${np}.when`);
-    });
+    for (const b of arr(s?.beats)) checkBeat(b, `${sp}.beats.${b?.id}`);
+    arr(s?.next).forEach((n, i) => checkNext(n, `${sp}.next[${i}]`));
     if (s?.ending !== undefined) {
       if (!nonEmpty(s.ending.text)) err(`${sp}.ending.text`, "The ending needs text.");
       if (!["victory", "defeat", "continue"].includes(s.ending.outcome)) err(`${sp}.ending.outcome`, 'The outcome must be "victory", "defeat" or "continue".');
@@ -844,8 +852,9 @@ export function validateAdventure(
 
   // reachability of scenes and locations
   if (sceneIds.has(a.start?.sceneId)) {
-    const reach = new Set<string>([a.start.sceneId]);
-    const queue = [a.start.sceneId];
+    // The world's ways out can be taken from any scene, so their targets are reachable from the start.
+    const reach = new Set<string>([a.start.sceneId, ...worldNext.map((n) => n?.scene).filter((id) => sceneIds.has(id))]);
+    const queue = [...reach];
     while (queue.length > 0) {
       const id = queue.shift();
       const cur = scenes.find((s) => s.id === id);

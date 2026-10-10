@@ -78,6 +78,8 @@ export interface HudJournal {
   title: string;
   /** The scene now. */
   scene: string;
+  /** The adventure's day, present only in an adventure that keeps time. */
+  day?: number;
   objectives: readonly { text: string; done: boolean }[];
   /** The last beats of the story, oldest first. */
   recent?: readonly string[];
