@@ -203,6 +203,30 @@ test("a save the table cannot read is refused whole: another adventure, another 
   assert.equal(fromSnapshot({ v: 2 }), null);
 });
 
+test("a hero saved as the Mage (or the Shadow) reads Wizard (or Rogue) when the save is loaded and listed", () => {
+  for (const [archetype, oldName, oldClass, newName, newClass] of [
+    ["fireball-person", "Mage", "The Mage", "Wizard", "The Wizard"],
+    ["shadow", "Shadow", "The Shadow", "Rogue", "The Rogue"],
+  ] as const) {
+    const p = game(archetype);
+    // What a build before the rename wrote: the old class label and, for a quick start, the same label as the hero's name.
+    p.hero = { ...p.hero, name: oldName, displayName: oldClass };
+    p.start = { ...p.start, name: oldName, displayName: oldClass };
+    const snap = JSON.parse(JSON.stringify(toSnapshot(p)));
+    assert.match(saveDetail({ data: snap } as never), new RegExp(`^${newName}, `), "the Saves tab lists the new name");
+    const q = fromSnapshot(snap)!;
+    assert.equal(q.hero.displayName, newClass, "the DM's brief and the sheet read the class by its current name");
+    assert.equal(q.hero.name, newName);
+    assert.equal(q.start.displayName, newClass);
+    assert.equal(q.start.name, newName);
+    // A hero the player named keeps the name.
+    const named = JSON.parse(JSON.stringify(toSnapshot({ ...p, hero: { ...p.hero, name: "Merlin" } })));
+    const r = fromSnapshot(named)!;
+    assert.equal(r.hero.name, "Merlin");
+    assert.equal(r.hero.displayName, newClass);
+  }
+});
+
 test("a save from before creatures (one monster) is read as a scene with that creature", () => {
   const p = newPlay("fantasy", knight, "floor_stone");
   const snap = JSON.parse(JSON.stringify(toSnapshot(p)));

@@ -225,7 +225,7 @@ const KNIGHT_BARE = createCharacter({ archetypeId: "knight", name: "Example", ap
 const KNIGHT_IN_MAIL = sampleHero("knight", { fightingStyle: "dueling" });
 const KNIGHT_PERCEPTION = skillModifierFor(KNIGHT, "Perception");
 /**
- * Fire Bolt twice over. Through the Attack button the Mage swings it as a weapon (session/combat.ts
+ * Fire Bolt twice over. Through the Attack button the Wizard swings it as a weapon (session/combat.ts
  * weaponDamageNotationFor: the die plus the Intelligence modifier, plus a magic weapon's bonus); through Cast it is
  * the spell (menu/casting.ts SPELL_EFFECTS: the die alone).
  */
@@ -371,7 +371,7 @@ const YOUR_CHARACTER: RuleSection = {
         ["Strength", SKILLS_BY_ABILITY.str.join(", "), `The Knight's attack and damage. Chain mail needs Strength ${CHAIN_MAIL_STRENGTH}, or your speed drops by ${HEAVY_ARMOR_SPEED_PENALTY_FT} ft.`],
         ["Dexterity", SKILLS_BY_ABILITY.dex.join(", "), "Initiative, Armor Class in light armor or none, the Rogue's attack and damage."],
         ["Constitution", SKILLS_BY_ABILITY.con.join(", ") || "none", "Hit points at every level, and what a short rest heals."],
-        ["Intelligence", SKILLS_BY_ABILITY.int.join(", "), "The Mage's attack, damage, spell attack and spell save DC."],
+        ["Intelligence", SKILLS_BY_ABILITY.int.join(", "), "The Wizard's attack, damage, spell attack and spell save DC."],
         ["Wisdom", SKILLS_BY_ABILITY.wis.join(", "), "Perception, which Search uses."],
         ["Charisma", SKILLS_BY_ABILITY.cha.join(", "), "Skills only. Nothing else on the sheet reads it yet."],
       ],
@@ -592,7 +592,7 @@ const EQUIPMENT: RuleSection = {
       EQUIPMENT_TIERS.map((tier) => [tierWord(tier), signed(BONUS_BY_TIER[tier])]),
     ),
     p(`A weapon's bonus adds to both its attack roll and its damage. An armor piece's bonus adds to your Armor Class. A saving-throw piece's bonus adds to every saving throw. All the bonuses to Armor Class from your gear together never add more than ${signed(MAX_TOTAL_AC_BONUS)}, and to saving throws never more than ${signed(MAX_TOTAL_SAVE_BONUS)}. Bonuses to skill checks never add more than ${signed(MAX_TOTAL_CHECK_BONUS)}. No magic bonus is above ${signed(MAGIC_ITEM_BONUS_MAX)}.`),
-    p("A legendary weapon also rolls extra damage dice of its own type on every hit (radiant for the Knight's, poison for the Rogue's, fire for the Mage's). The extra dice are doubled on a critical hit."),
+    p("A legendary weapon also rolls extra damage dice of its own type on every hit (radiant for the Knight's, poison for the Rogue's, fire for the Wizard's). The extra dice are doubled on a critical hit."),
     p("A shield needs a free hand. A two-handed weapon leaves none, so a shield's bonus does not apply with one. Heavy armor that needs more Strength than you have slows you."),
     p(`A hero can wear no armor at all, and an adventure can start them that way. With no armor and no shield, Armor Class is 10 plus your Dexterity modifier and nothing slows you: a Knight with Dexterity ${KNIGHT_BARE.abilities.dex} is Armor Class ${KNIGHT_BARE.armorClass} bare and ${KNIGHT_IN_MAIL.armorClass} in chain mail. The armor-kind gear rows (a shield, a cloak, body armor) then read Nothing worn, and a bare hero is not drawn wearing them. Armor you find goes in your pack: Equip puts it on and your Armor Class is worked out from it, Unequip takes it off again. Both are free, and like any gear change they are refused with something hostile in the room. A magic piece worn in an armor row is real and adds its bonus whether or not you wear armor. Defense, the fighting style, is a point of Armor Class only while you wear armor, so a hero who starts bare is not offered it.`),
     p("Ring, amulet and boots are shared by every hero. Each does one thing, from its SRD text, and the number is on the item:"),
@@ -661,7 +661,7 @@ const SPELL_ROWS = WIZARD_SPELLS.map((spell) => {
 const MAGIC: RuleSection = {
   id: "magic",
   title: "Magic",
-  summary: "Spells cost slots, take your action and have a reach. Only the Mage casts today.",
+  summary: "Spells cost slots, take your action and have a reach. Only the Wizard casts today.",
   blocks: [
     p(`Spell slots are how many leveled spells you can cast before a long rest. A cantrip is a spell of level 0: it is free and you can cast it as often as you like. A leveled spell spends one slot of its own level. There is no casting it at a higher level. Wizard slots by level: ${Array.from({ length: LEVEL_CAP }, (_, i) => `level ${i + 1} has ${slotsWords(i + 1)}`).join("; ")}.`),
     p("Casting takes your action in a fight, and the spell must reach its target. Reach is a distance only: unlike the Attack button, Cast does not check line of sight. A spell hits one target; the area of a cone is not modelled. The engine works out a cast the way it works out an attack. It is free and never asks the DM."),

@@ -2988,7 +2988,7 @@ const TOKEN_NAMES: Record<string, string> = {
   token_knight: "The Knight",
   token_shadow: "The Rogue",
   token_healer: "The Healer",
-  token_fireball_person: "The Mage",
+  token_fireball_person: "The Wizard",
   token_goblin: "Goblin",
   token_skeleton: "Skeleton",
   token_villager: "Villager",

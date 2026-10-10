@@ -291,7 +291,7 @@ test("gear caps, attunement and the bag are the engine's numbers", () => {
 test("a legendary weapon's rider damage types are the ones the book names", () => {
   const riders = (["knight", "shadow", "fireball-person"] as const).map((id) => SLOTS_BY_ARCHETYPE[id as ArchetypeId].weapon.legendaryRider?.damageType);
   assert.deepEqual(riders, ["radiant", "poison", "fire"]);
-  assert.ok(sectionText("equipment").includes("radiant for the Knight's, poison for the Rogue's, fire for the Mage's"));
+  assert.ok(sectionText("equipment").includes("radiant for the Knight's, poison for the Rogue's, fire for the Wizard's"));
 });
 
 test("magic: slots by level, and every spell on the list is in the table with its real reach", () => {

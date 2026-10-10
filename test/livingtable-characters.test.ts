@@ -16,7 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ARCHETYPES, PLAYABLE_ARCHETYPE_IDS, getArchetype } from "../src/games/livingtable/characters/templates";
 import { ARCHETYPE_LABEL } from "../src/games/livingtable/table/state";
-import { createCharacter, creationChoicesFor, normalizeSheet, type CharacterSheet } from "../src/games/livingtable/characters/creation";
+import { createCharacter, creationChoicesFor, normalizeSheet, refreshRetiredNames, type CharacterSheet } from "../src/games/livingtable/characters/creation";
 import { addMilestone, applyLevelUpChoice, canLevelUp, levelUpChoices, milestonesRemaining, MILESTONES_PER_LEVEL } from "../src/games/livingtable/characters/leveling";
 import { applyDamage, applyDeathSave, applyHealing, longRest, longRestBlockedReason, newAdventuringDay, shortRest, shortRestBlockedReason } from "../src/games/livingtable/characters/health";
 import { abilityModifier, computeAC, type ArmorCategory } from "../src/games/livingtable/rules";
@@ -55,21 +55,21 @@ function numericSignature(sheet: CharacterSheet): string {
 
 // ── templates.ts ────────────────────────────────────────────────────────
 
-test("the three playable classes are called Knight, Rogue and Mage; the ids stay as they were (item 6)", () => {
+test("the three playable classes are called Knight, Rogue and Wizard; the ids stay as they were (item 6)", () => {
   assert.deepEqual(
     PLAYABLE_ARCHETYPE_IDS.map((id) => [id, ARCHETYPE_LABEL[id as keyof typeof ARCHETYPE_LABEL], getArchetype(id).displayName]),
     [
       ["knight", "Knight", "The Knight"],
       ["shadow", "Rogue", "The Rogue"],
-      ["fireball-person", "Mage", "The Mage"],
+      ["fireball-person", "Wizard", "The Wizard"],
     ],
   );
   // Nothing a player reads still uses the old names.
-  for (const a of ARCHETYPES) assert.doesNotMatch(a.displayName, /Shadow|Fireball/);
+  for (const a of ARCHETYPES) assert.doesNotMatch(a.displayName, /Shadow|Fireball|Mage/);
 });
 
-test("normalizeSheet refreshes a stored class name, so an old save no longer says Shadow (item 6)", () => {
-  for (const [id, old, now] of [["shadow", "The Rogue", "The Rogue"], ["fireball-person", "The Mage", "The Mage"]] as const) {
+test("normalizeSheet refreshes a stored class name, so an old save no longer says Shadow or Mage (item 6)", () => {
+  for (const [id, old, now] of [["shadow", "The Rogue", "The Rogue"], ["fireball-person", "The Mage", "The Wizard"], ["fireball-person", "The Fireball Person", "The Wizard"], ["shadow", "The Shadow", "The Rogue"]] as const) {
     const sheet = makeDefault(id);
     const stored = { ...sheet, displayName: old } as CharacterSheet;
     assert.equal(normalizeSheet(stored).displayName, now, id);
@@ -78,6 +78,26 @@ test("normalizeSheet refreshes a stored class name, so an old save no longer say
   // A sheet whose class is unknown to this build keeps what it had.
   const odd = { ...makeDefault("knight"), archetypeId: "from-the-future", displayName: "The Oddity" } as CharacterSheet;
   assert.equal(normalizeSheet(odd).displayName, "The Oddity");
+});
+
+test("refreshRetiredNames: the class reads its current name, a retired default NAME follows it, a typed name stays", () => {
+  const old = (archetypeId: string, name: string, displayName: string) => ({ ...makeDefault(archetypeId), name, displayName }) as CharacterSheet;
+  const mage = refreshRetiredNames(old("fireball-person", "Mage", "The Mage"));
+  assert.equal(mage.displayName, "The Wizard");
+  assert.equal(mage.name, "Wizard", "the quick start's old default name follows the class");
+  assert.equal(refreshRetiredNames(old("fireball-person", "Fireball Person", "The Fireball Person")).name, "Wizard");
+  assert.equal(refreshRetiredNames(old("shadow", "Shadow", "The Shadow")).name, "Rogue");
+  const typed = refreshRetiredNames(old("fireball-person", "Merlin", "The Mage"));
+  assert.equal(typed.displayName, "The Wizard");
+  assert.equal(typed.name, "Merlin", "a name a player typed is kept");
+  assert.equal(refreshRetiredNames(old("knight", "Mage", "The Knight")).name, "Mage", "only the class that carried the label is renamed");
+  const odd = { ...old("knight", "Mage", "The Oddity"), archetypeId: "from-the-future" } as CharacterSheet;
+  assert.equal(refreshRetiredNames(odd), odd, "a class this build does not know is left alone");
+  const fresh = makeDefault("fireball-person");
+  assert.equal(refreshRetiredNames(fresh), fresh, "nothing to change is the same object");
+  const once = refreshRetiredNames(mage);
+  assert.equal(once, mage, "and a second pass changes nothing");
+  assert.deepEqual({ ...mage, name: "x", displayName: "x" }, { ...old("fireball-person", "Mage", "The Mage"), name: "x", displayName: "x" }, "no other field is touched");
 });
 
 test("there are exactly eight archetypes, four fantasy and four sci-fi", () => {
@@ -383,7 +403,7 @@ test("levelUpChoices keeps a caster's spell slots in sync with the new level", (
 //
 // The failure this guards, measured across all eight archetypes through the
 // real createCharacter: the item-usable inventory was Knight none, Rogue
-// none, Healer none, Mage none, Psion none. Only three archetypes
+// none, Healer none, Wizard none, Psion none. Only three archetypes
 // carried anything the old name-substring heuristic matched, which means one
 // of the five command-menu verbs was guaranteed to fail for the entire
 // Fantasy template -- and the failure message advised using a potion that

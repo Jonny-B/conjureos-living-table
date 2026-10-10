@@ -277,7 +277,7 @@ export const ARCHETYPES: Archetype[] = [
   {
     id: "fireball-person",
     template: "fantasy",
-    displayName: "The Mage",
+    displayName: "The Wizard",
     chassis: "wizard",
     // Classic glass-cannon build: INT to cast, CON to survive being the priority target.
     baseAbilityScores: { int: 15, con: 14, dex: 13, wis: 12, cha: 10, str: 8 },

@@ -142,7 +142,7 @@ export interface CastableSpell {
  * Every spell this character knows, each marked castable or not. A cantrip
  * (level 0) is always castable and costs no slot, per SRD 5.1; a levelled
  * spell needs a remaining slot OF THAT LEVEL, which is exactly the rule that
- * makes a level-3 "Mage" unable to cast Fireball and is why the
+ * makes a level-3 "Wizard" unable to cast Fireball and is why the
  * launch list stops where it does (see rules/spells.ts's own note).
  */
 export function castableSpells(sheet: CharacterSheet): CastableSpell[] {
@@ -232,7 +232,7 @@ export function cantripNameFor(sheet: CharacterSheet): string | null {
  * The reconciled `identity.label` is used only once the weapon slot is
  * actually AT a magic tier (`itemName !== baseItemName`): at common there is
  * nothing enchanted to disambiguate, and printing the parenthetical anyway
- * would have every Mage's Attack button read "Fire Bolt
+ * would have every Wizard's Attack button read "Fire Bolt
  * (Quarterstaff)" from level one, never just "Fire Bolt".
  */
 function isMagicWeaponTier(sheet: CharacterSheet): boolean {

@@ -216,7 +216,7 @@ export function compositeToken(
 //
 // IT USED TO BE A CLOSED RING AND THAT WAS THE DEFECT. The first version
 // dilated every glowing layer's whole silhouette in both bands, so a legendary
-// Mage painted 175 ring pixels round a 139 pixel body: an unbroken
+// Wizard painted 175 ring pixels round a 139 pixel body: an unbroken
 // hard-edged saturated oval, larger than the character, which at phone scale
 // read as a gold letter O with a dark smear inside it. The era signalled
 // enchantment with a sparkle over the item, a rim light along one edge of the

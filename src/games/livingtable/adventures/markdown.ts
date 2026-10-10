@@ -672,6 +672,7 @@ const CLASS_NAMES: Record<string, Chassis | "default"> = {
   rogue: "rogue",
   shadow: "rogue",
   wizard: "wizard",
+  mage: "wizard",
   "fireball person": "wizard",
   "fireball-person": "wizard",
   cleric: "cleric",
@@ -851,7 +852,7 @@ const HOOK_FIELDS: FieldDef[] = [
   { key: "default" },
   { key: "fighter", aliases: ["knight"] },
   { key: "rogue", aliases: ["shadow"] },
-  { key: "wizard", aliases: ["fireball person"] },
+  { key: "wizard", aliases: ["mage", "fireball person"] },
   { key: "cleric", aliases: ["healer"] },
 ];
 
@@ -1232,7 +1233,7 @@ export function parseAdventureMarkdown(text: string, opts: { file?: string } = {
     for (const ch of kitNode.children) {
       const cls = CLASS_NAMES[ch.heading.toLowerCase().replace(/\s+/g, " ").trim()];
       if (!cls) {
-        p.err(ch.line, `"${ch.heading}" is not a class. Use fighter, rogue, wizard, cleric or default (knight, shadow, fireball person and healer also work).`);
+        p.err(ch.line, `"${ch.heading}" is not a class. Use fighter, rogue, wizard, cleric or default (knight, shadow, mage, fireball person and healer also work).`);
         continue;
       }
       if (startingKit[cls]) {
