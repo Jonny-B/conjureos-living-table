@@ -9,6 +9,9 @@
 //
 // root: the checkout to build (default: the cwd). Pass a clean snapshot to test
 //       an older commit, or the working tree to test the port.
+// The committed asset files (asset-files/*.json: the cast and the KayKit library) are served from the checkout's own folder at
+// /asset-files/<name>, so a spec can give the page a ConjureOS asset bridge (lib/assets.mjs) that loads them from here.
+//
 // mode: "dev"  esbuild bundle of src/main.tsx plus /livingtable-assets.json
 //       "dist" the already built dist/living-table.html (npm run build). It
 //              loads React from a CDN, so it needs network access.
@@ -90,13 +93,17 @@ function copyDevManifest(root, outDir, log) {
   log(`dev manifest: ${(fs.statSync(made).size / 1024).toFixed(0)} KB`);
 }
 
-function serveDir(outDir, indexFile) {
+const ASSET_URL = "/asset-files/";
+
+function serveDir(outDir, indexFile, assetDir = null) {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     let rel = decodeURIComponent(url.pathname);
     if (rel === "/" || rel === "") rel = "/" + indexFile;
-    const file = path.normalize(path.join(outDir, rel));
-    if (!file.startsWith(outDir)) {
+    // The checkout's asset files, by name, from their own folder (not copied into the build).
+    const fromAssets = assetDir !== null && rel.startsWith(ASSET_URL);
+    const file = fromAssets ? path.normalize(path.join(assetDir, rel.slice(ASSET_URL.length))) : path.normalize(path.join(outDir, rel));
+    if (!file.startsWith(fromAssets ? assetDir : outDir)) {
       res.writeHead(403).end();
       return;
     }
@@ -136,7 +143,8 @@ export async function startServer({ root = process.cwd(), mode = "dev", log = ()
     outDir = temp;
     await buildDev(root, outDir, log);
   }
-  const server = await serveDir(path.resolve(outDir), indexFile);
+  const assetDir = path.join(root, "asset-files");
+  const server = await serveDir(path.resolve(outDir), indexFile, fs.existsSync(assetDir) ? path.resolve(assetDir) : null);
   const { port } = server.address();
   return {
     url: `http://127.0.0.1:${port}`,

@@ -40,7 +40,13 @@ export function installSheetViews(tc: TableCtx): void {
   tc.lootTarget = null;
   const overlayOpen = (): boolean => tc.gameMenuOpen() || tc.creationView !== null || screenOpen() || storyUp();
   const portrait = (archetypeId: string): HTMLCanvasElement | null => portraitCanvas(tc.host.art.render("fantasy"), archetypeId);
-  const sheetExtras = (p: PlayState): SheetExtras => ({ potions: p.potions, notes: p.itemNotes, portrait: portrait(p.archetypeId) });
+  const sheetExtras = (p: PlayState): SheetExtras => ({
+    potions: p.potions,
+    notes: p.itemNotes,
+    portrait: portrait(p.archetypeId),
+    // The header's picture is the cast figure in the gear the hero wears when the cast is loaded; it is made when the sheet draws its header.
+    picture: () => tc.pictures.picture({ sheet: p.hero, still: () => portrait(p.archetypeId) }),
+  });
 
   /** Something over the board opened or closed: loose marks go, the stage measures its room again, and the readout redraws. */
   function viewsChanged(): void {

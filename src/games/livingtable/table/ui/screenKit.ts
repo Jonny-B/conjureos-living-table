@@ -34,6 +34,8 @@ import { injectScreenStyle } from "./screenStyle";
     rebuild: () => void;
     /** What Escape does. */
     onEscape?: () => void;
+    /** Run `fn` when the screen closes however it closes (its own close, another screen replacing it, the overlay going). At once if it is closed already. */
+    onClose: (fn: () => void) => void;
   }
 
 export function installScreenKit(oc: OverlayCtx): void {
@@ -191,7 +193,19 @@ export function installScreenKit(oc: OverlayCtx): void {
     scroll.append(body);
     node.append(scroll);
     const prevFocus = document.activeElement;
-    const s: Scr = { kind, node, scroll, body, closed: false, rebuild: () => {} };
+    const closeHooks: Array<() => void> = [];
+    const s: Scr = {
+      kind,
+      node,
+      scroll,
+      body,
+      closed: false,
+      rebuild: () => {},
+      onClose: (fn) => {
+        if (s.closed) fn();
+        else closeHooks.push(fn);
+      },
+    };
     s.rebuild = () => {
       if (s.closed || oc.destroyed) return;
       const at = document.activeElement as HTMLElement | null;
@@ -249,6 +263,13 @@ export function installScreenKit(oc: OverlayCtx): void {
       s.closed = true;
       screens.delete(s);
       node.remove();
+      for (const fn of closeHooks.splice(0)) {
+        try {
+          fn();
+        } catch {
+          // a cleanup that fails must not leave the screen half closed
+        }
+      }
       if ((had || document.activeElement === document.body) && prevFocus instanceof HTMLElement && prevFocus.isConnected) prevFocus.focus({ preventScroll: true });
     });
     screens.add(s);

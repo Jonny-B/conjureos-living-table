@@ -42,6 +42,7 @@ import type { BenchBundle } from "./flows/exportFlow";
 import type { TableOptions, TableSession, TableWindow } from "./mountTable";
 import type { PlayStage } from "./stage";
 import type { MenuTab } from "./ui/gameMenu";
+import type { HeroPictures } from "./ui/heroPicture";
 import type { AskState } from "./flows/dmFlow";
 
 export interface TableCtx {
@@ -109,6 +110,8 @@ export interface TableCtx {
   sheetSig: string;
   overlayOpen: () => boolean;
   portrait: (archetypeId: string) => HTMLCanvasElement | null;
+  /** Live pictures of a hero for the screens off the board (the hero choice, the maker, the character sheet): the cast figure when it is loaded, the still art otherwise. */
+  pictures: HeroPictures;
   sheetExtras: (p: PlayState) => SheetExtras;
   sheetSigFor: (p: PlayState) => string;
   viewsChanged: () => void;

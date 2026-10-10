@@ -1,6 +1,10 @@
 /**
- * What the hero screen shows for a class before it is chosen: the class drawn in its basic gear (the hand-made pixel doll, never the 3D art)
- * and its default numbers. Built from the same sheet the quick start would play, so what is shown is what the player gets.
+ * What the hero screen shows for a class before it is chosen: the class drawn in its basic gear and its default numbers. Built from the same
+ * sheet the quick start would play, so what is shown is what the player gets.
+ *
+ * The picture is the KayKit cast figure (the board's own, in the sheet's gear, idling and facing the viewer) when the cast is loaded, and the
+ * hand-made pixel doll when it is not (outside ConjureOS, the phone app, a failed load, before the file arrives). It is one canvas that
+ * switches in place when the cast lands (ui/heroPicture.ts). Without a picture service the doll is drawn once and stays.
  */
 import type { Adventure } from "../../adventures/types";
 import { renderPlanFor } from "../../menu/equipment";
@@ -13,6 +17,7 @@ import { adventureHero } from "../adventureCatalog";
 import { renderManifest } from "../catalog";
 import { PLAYABLE_HEROES } from "../state";
 import { signed } from "./domKit";
+import type { HeroPicture, HeroPictures } from "./heroPicture";
 
 export interface HeroPreviewStat {
   label: string;
@@ -20,8 +25,13 @@ export interface HeroPreviewStat {
 }
 
 export interface HeroPreview {
-  /** The class in its basic gear, 32 source pixels a side at DOLL_SCALE canvas pixels each. Null when there is no page or no art to draw it from. */
+  /**
+   * The class in its basic gear. The doll is 32 source pixels a side at DOLL_SCALE canvas pixels each; the cast figure is drawn to the canvas's own
+   * box. `data-art` on it says which ("doll" or "cast"). Null when there is no page or no art to draw it from.
+   */
   canvas: HTMLCanvasElement | null;
+  /** The live picture behind `canvas`, when there is a picture service: the screen disposes it when it closes. */
+  picture?: HeroPicture;
   /** The six abilities, then AC, HP, To hit and Damage. Empty for a class the game does not have. */
   stats: readonly HeroPreviewStat[];
 }
@@ -60,13 +70,18 @@ function drawDoll(sheet: CharacterSheet): HTMLCanvasElement | null {
   }
 }
 
-/** The picture and default numbers of the playable class with this chassis ("fighter", "rogue", "wizard"), under the adventure's own starting kit. */
-export function heroPreview(adventure: Adventure, chassis: string): HeroPreview {
+/**
+ * The picture and default numbers of the playable class with this chassis ("fighter", "rogue", "wizard"), under the adventure's own starting kit.
+ * With `pictures` the picture is live (the cast figure when the cast is loaded, the doll otherwise); without it, the doll.
+ */
+export function heroPreview(adventure: Adventure, chassis: string, pictures?: HeroPictures): HeroPreview {
   const id = PLAYABLE_HEROES.find((h) => getArchetype(h).chassis === chassis);
   if (!id) return { canvas: null, stats: [] };
   try {
     const sheet = adventureHero(adventure, id);
-    return { canvas: drawDoll(sheet), stats: defaultStats(sheet) };
+    const picture = pictures?.picture({ sheet, still: drawDoll }) ?? null;
+    if (picture) return { canvas: picture.canvas, picture, stats: defaultStats(sheet) };
+    return { canvas: pictures ? null : drawDoll(sheet), stats: defaultStats(sheet) };
   } catch {
     return { canvas: null, stats: [] };
   }
