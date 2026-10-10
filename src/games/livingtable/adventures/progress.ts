@@ -13,6 +13,7 @@
  * door or jump to a scene the story does not link to.
  */
 import {
+  allBeats,
   allSpawns,
   dayOf,
   itemOf,
@@ -188,7 +189,7 @@ export function describeCondition(a: Adventure, c: Condition): string {
 /** Flags set by some beat. Those are the adventure's own machinery, so the DM may not declare them. */
 function beatFlags(a: Adventure): Set<string> {
   const out = new Set<string>();
-  for (const b of [...a.scenes.flatMap((s) => s.beats), ...worldOf(a).beats]) for (const f of b.setFlags ?? []) out.add(f);
+  for (const b of allBeats(a)) for (const f of b.setFlags ?? []) out.add(f);
   return out;
 }
 

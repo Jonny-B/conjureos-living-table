@@ -308,6 +308,11 @@ export function worldOf(a: Adventure): AdventureWorld {
   return { beats: a.world?.beats ?? [], next: a.world?.next ?? [] };
 }
 
+/** Every beat in the adventure, the scenes' and the world's, in file order. Anything that asks "does some beat do X" asks this. */
+export function allBeats(a: Adventure): AdventureBeat[] {
+  return [...a.scenes.flatMap((s) => s.beats), ...worldOf(a).beats];
+}
+
 /** What day it is in this game of the adventure. */
 export function dayOf(p: AdventureProgress): number {
   return p.day ?? 1;

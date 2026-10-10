@@ -17,6 +17,7 @@ import { evaluate, startProgress } from "./progress";
 import {
   ADVENTURE_CHASSIS,
   PLAYABLE_CHASSIS,
+  allBeats,
   allSpawns,
   itemOf,
   locationOf,
@@ -217,7 +218,7 @@ function nearestFree(from: XY, canStand: (x: number, y: number) => boolean, bloc
 
 /** Whether a spawn is in play for this progress: not gated behind a beat that has not fired, and its own condition holds. Individual deaths are handled per creature by the caller. */
 export function spawnIsPresent(a: Adventure, p: AdventureProgress, spawn: AdventureSpawn): boolean {
-  const gated = a.scenes.some((s) => s.beats.some((b) => (b.spawn ?? []).includes(spawn.id)));
+  const gated = allBeats(a).some((b) => (b.spawn ?? []).includes(spawn.id));
   if (gated && !(p.spawned ?? []).includes(spawn.id)) return false;
   if (spawn.appearsWhen && !evaluate(a, p, spawn.appearsWhen)) return false;
   return true;

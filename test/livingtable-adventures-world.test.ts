@@ -208,3 +208,18 @@ test("an adventure that never looks at the day says nothing about days", () => {
   assert.doesNotMatch(adventureBrief(plain, settleProgress(plain, startProgress(plain)).progress), /It is day/);
   assert.equal(adventureKeepsTime(A), true);
 });
+
+test("a creature a world beat brings in is absent until that beat fires, like one a scene beat brings in", async () => {
+  const { spawnIsPresent } = await import("../src/games/livingtable/adventures/validate");
+  const withSpawn = parse(
+    (TEMPLATE + WORLD)
+      .replace("- sets flag: goblin_fled\n", "- sets flag: goblin_fled\n- spawns: goblin\n")
+      .replace("### Spawn: goblin\n", "### Spawn: goblin\n"),
+  );
+  const goblin = withSpawn.locations.flatMap((l) => l.spawns).find((s) => s.id === "goblin")!;
+  const start = settleProgress(withSpawn, startProgress(withSpawn)).progress;
+  assert.equal(spawnIsPresent(withSpawn, start, goblin), false, "named by the world's goblin_flees beat, so not there yet");
+  const later = applyEvent(withSpawn, applyEvent(withSpawn, start, { type: "rest" }).progress, { type: "rest" }).progress;
+  assert.ok(later.spawned.includes("goblin"));
+  assert.equal(spawnIsPresent(withSpawn, later, goblin), true);
+});

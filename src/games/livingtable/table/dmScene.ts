@@ -14,7 +14,7 @@
  */
 import { adventureBrief } from "../adventures/brief";
 import { allowedDmSteps } from "../adventures/progress";
-import { type Adventure, type Chassis, itemOf, sceneOf } from "../adventures/types";
+import { type Adventure, type Chassis, allBeats, itemOf, sceneOf } from "../adventures/types";
 import { GEAR_ROLES, LOOT_CAP_LINE } from "../characters/equipmentTypes";
 import type { TemplateGenre } from "../characters/templates";
 import { packInfo } from "../inventory/itemInfo";
@@ -262,7 +262,7 @@ export function dmGivableItemIds(a: Adventure): string[] {
   // A feature or a beat names an item by id or by its name (itemOf takes either).
   const give = (ref: string): void => void engineGives.add(itemOf(a, ref)?.id ?? ref);
   for (const loc of a.locations) for (const f of loc.features) for (const g of f.gives ?? []) give(g);
-  for (const s of a.scenes) for (const b of s.beats) for (const g of b.give ?? []) give(g);
+  for (const b of allBeats(a)) for (const g of b.give ?? []) give(g);
   return a.items.filter((i) => !engineGives.has(i.id)).map((i) => i.id);
 }
 
