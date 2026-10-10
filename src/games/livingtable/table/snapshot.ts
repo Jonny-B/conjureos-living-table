@@ -16,6 +16,7 @@
  * (catalog.ts) and the adventure it names against the bound adventures
  * (adventureCatalog.ts), so both must be bound before a save is read.
  */
+import { refreshRetiredNames } from "../characters/creation";
 import { type ArchetypeId } from "../characters/equipmentTypes";
 import type { CombatRound } from "../menu/combatRound";
 import { bodyFor, carriedBy, type BodyState, type CarriedItem } from "../rules/corpses";
@@ -281,6 +282,9 @@ export function fromSnapshot(data: unknown): PlayState | null {
     explored: decodeExplored(explored),
     exploredRev: 1,
   };
+  // A hero saved before a class was renamed (the Mage, now the Wizard) reads by the current names everywhere: the HUD, the DM's brief, the log.
+  p.hero = refreshRetiredNames(p.hero);
+  p.start = refreshRetiredNames(p.start);
   noteSight(p);
   // A knocked-down creature is drawn lying there, as it was.
   for (const c of p.creatures) if (c.prone) playClips(c.actor, ["death"], performance.now());
@@ -334,6 +338,6 @@ export function createSaveBook(store: TableStorage["saves"]): SaveBook {
 
 /** A line under a save in the Saves tab: who, how hurt, what is in the pack. */
 export function saveDetail(save: SavedGame): string {
-  const h = save.data.hero;
+  const h = refreshRetiredNames(save.data.hero);
   return `${h.name}, ${h.currentHp}/${h.maxHp} HP, ${save.data.potions} potion${save.data.potions === 1 ? "" : "s"}`;
 }

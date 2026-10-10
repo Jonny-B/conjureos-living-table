@@ -1233,6 +1233,25 @@ function archetypeDisplayName(archetypeId: string): string | undefined {
   }
 }
 
+/** The names a quick-started hero carried before the classes were renamed (the default name was the class label, and a save kept it). */
+const RETIRED_CLASS_NAMES: Partial<Record<string, readonly string[]>> = {
+  shadow: ["Shadow", "The Shadow"],
+  "fireball-person": ["Mage", "The Mage", "Fireball Person", "The Fireball Person"],
+};
+
+/**
+ * A stored hero as this build names it, for the load path: the class reads its current name, and a hero whose NAME is exactly
+ * a retired class label takes the current one ("Mage" becomes "Wizard"). A name a player typed is kept, and nothing else
+ * changes, which is why this and not `normalizeSheet` (that one fills in fields a stored sheet predates) is what a save goes
+ * through. Returns the same object when there is nothing to change.
+ */
+export function refreshRetiredNames<S extends Pick<CharacterSheet, "archetypeId" | "displayName" | "name">>(sheet: S): S {
+  const current = archetypeDisplayName(sheet.archetypeId);
+  if (current === undefined) return sheet;
+  const name = RETIRED_CLASS_NAMES[sheet.archetypeId]?.includes(sheet.name) ? current.replace(/^The\s+/i, "") : sheet.name;
+  return current === sheet.displayName && name === sheet.name ? sheet : { ...sheet, displayName: current, name };
+}
+
 /**
  * Fill in any field a stored sheet predates.
  *
