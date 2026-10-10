@@ -283,7 +283,7 @@ export interface GameArtOptions {
 // ---- the animated art (asset files) ----------------------------------------------------
 
 /** The result `assets.load` hands back; it never rejects. */
-export type AssetLoadResult = { ok: true; objectUrl: string } | { ok: false; reason: string; error?: string };
+export type AssetLoadResult = { ok: true; objectUrl: string; blob?: Blob } | { ok: false; reason: string; error?: string };
 
 /**
  * The part of `window.__conjureos.assets` this adapter uses. `load(name)` reads one of the app's own asset files;
@@ -503,6 +503,23 @@ function fingerprint(m: LoadedManifest): string {
 }
 
 /** Fetch a loaded file's object URL and parse it, then give the URL back (the bytes are in memory by then). */
+/**
+ * The file's JSON from the Blob `assets.load` handed over, read in place. Preferred over fetching the blob: address,
+ * which a runner whose CSP `connect-src` does not list blob: refuses ("CSP blocked connect-src (blob)", ConjureOS
+ * apphost before 0.1.8): that refusal is what kept every web build on the old art. The address is let go either way.
+ */
+async function readBlobJson(blob: Blob, objectUrl: string): Promise<unknown> {
+  try {
+    return JSON.parse(await blob.text());
+  } finally {
+    try {
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // nothing to free outside a browser
+    }
+  }
+}
+
 async function defaultReadJson(objectUrl: string): Promise<unknown> {
   try {
     const res = await fetch(objectUrl);
@@ -632,7 +649,7 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
     if (!r || r.ok !== true) return no(assetReason(what, r ?? { reason: "no answer" }));
     let json: unknown;
     try {
-      json = await readJson(r.objectUrl);
+      json = r.blob && typeof r.blob.text === "function" ? await readBlobJson(r.blob, r.objectUrl) : await readJson(r.objectUrl);
     } catch (e) {
       return no(`The ${what} file could not be read (${errText(e)}).`);
     }

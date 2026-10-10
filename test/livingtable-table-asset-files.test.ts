@@ -305,6 +305,34 @@ test("gameArt: another look picks its own parts and cast style", async () => {
   assert.match(art.signature(), /kaykit:lit-toon-16/);
 });
 
+test("gameArt: the Blob assets.load hands over is read in place, never by fetching the blob: address (a runner CSP can refuse that)", async () => {
+  const blobFor = (v: unknown) => new Blob([JSON.stringify(v)], { type: "application/json" });
+  const bridge: AssetsBridge = {
+    async load(name) {
+      return { ok: true, objectUrl: `blob:${name}`, blob: blobFor(name === FILES.cast ? CAST : library()) };
+    },
+    async list() {
+      return [];
+    },
+  };
+  // What a runner whose connect-src does not list blob: does to a fetch of the address.
+  const refused = async (): Promise<unknown> => {
+    throw new Error("CSP blocked connect-src (blob)");
+  };
+  const art = artWith({ assets: bridge, readJson: refused });
+  await art.load();
+  await art.loadAssets();
+  assert.equal(art.assetStatus().cast.state, "ready", art.assetStatus().summary);
+  assert.equal(art.assetStatus().library.state, "ready", art.assetStatus().summary);
+  assert.ok(art.cast());
+
+  // A bridge that hands over only the address still goes through readJson.
+  const old = artWith({ assets: fakeBridge().bridge, readJson: refused });
+  await old.load();
+  await old.loadAssets();
+  assert.match(old.assetStatus().cast.reason ?? "", /could not be read \(CSP blocked connect-src \(blob\)\)/);
+});
+
 test("gameArt: a cast style the file lacks falls to the first one", async () => {
   const cast = { ...CAST, styles: [CAST.styles[0]!] };
   const art = artWith({ assets: fakeBridge().bridge, readJson: reader(blobs({ "blob:cast": cast })) });
