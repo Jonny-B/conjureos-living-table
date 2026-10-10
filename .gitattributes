@@ -1,0 +1,2 @@
+# The asset files are hashed byte for byte at publish: never let git convert their line endings.
+asset-files/* -text

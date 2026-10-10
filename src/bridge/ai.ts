@@ -24,12 +24,46 @@ export interface CompleteRequest {
   maxTokens?: number;
   tier?: ModelTier;
   temperature?: number;
+  /**
+   * Opt in to streaming. Called with each new piece of text and the whole text
+   * so far. The final reply is still returned in full. Streaming also keeps the
+   * bridge's 60 second idle timer alive on a long answer, so a call that may
+   * run for minutes (a whole written adventure) should always set it. A
+   * throwing listener is ignored.
+   */
+  onChunk?: (delta: string, text: string) => void;
+}
+
+/** Why the model stopped; "max_tokens" means the answer was cut off. */
+export type StopReason = "end_turn" | "max_tokens" | "stop_sequence" | "tool_use";
+
+/** What the host reports about a call, only to an app that declared `credits.read`. */
+export interface CompleteUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  model?: string;
+}
+
+/** A reply with what the host said about it. `credits` and `usage` stay undefined unless the app has `credits.read`. */
+export interface CompleteResult {
+  content: string;
+  stopReason?: StopReason;
+  /** Credits the call really cost (a number), or null on the user's own key. */
+  credits?: number | null;
+  usage?: CompleteUsage;
 }
 
 declare global {
   interface ConjureosBridge {
     ai?: {
-      complete: (req: CompleteRequest) => Promise<{ content: string }>;
+      complete: (req: CompleteRequest) => Promise<{
+        content: string;
+        stopReason?: StopReason;
+        credits?: number | null;
+        usage?: CompleteUsage;
+      }>;
     };
   }
   interface Window {
@@ -46,7 +80,7 @@ declare global {
  */
 export const THINKING_HEADROOM_TOKENS = 8000;
 
-const bridge = () => window.__conjureos?.ai?.complete;
+const bridge = () => (typeof window === "undefined" ? undefined : window.__conjureos?.ai?.complete);
 
 /** True when we're running inside ConjureOS with the AI permission granted. */
 export function isAiAvailable(): boolean {
@@ -54,10 +88,29 @@ export function isAiAvailable(): boolean {
 }
 
 export async function complete(req: CompleteRequest): Promise<string> {
+  return (await completeDetailed(req)).content;
+}
+
+/**
+ * `complete`, keeping what the host said besides the text: why the model
+ * stopped (so a cut-off answer can be told from a finished one) and, only when
+ * the app declared `credits.read`, what the call really cost. Same bridge, same
+ * dev mock, same errors: a rejection is an Error whose message is the host's
+ * words (it carries no code).
+ */
+export async function completeDetailed(req: CompleteRequest): Promise<CompleteResult> {
   const fn = bridge();
-  if (!fn) return mockComplete(req);
+  if (!fn) {
+    const content = await mockComplete(req);
+    await mockStream(content, req.onChunk);
+    return { content, stopReason: "end_turn" };
+  }
   const res = await fn(req);
-  return res.content;
+  const out: CompleteResult = { content: res.content };
+  if (res.stopReason !== undefined) out.stopReason = res.stopReason;
+  if (res.credits !== undefined) out.credits = res.credits;
+  if (res.usage !== undefined) out.usage = res.usage;
+  return out;
 }
 
 /**
@@ -255,6 +308,14 @@ function mockComplete(req: CompleteRequest): Promise<string> {
         ? "Oh. Well, since you asked nicely. It's amber-lantern. ...You won't tell anyone I said that, will you?"
         : "I really shouldn't. It's my first day and they were very clear about it.",
     );
+  }
+
+  // The table window's DM (the adventure mode): its prompt may be split between
+  // system and the first user message, so look for its own markers in either.
+  const first = req.messages[0]?.content ?? "";
+  if (first.includes("=== THE ASK ===") || sys.includes("=== THE ASK ===")) return delay(MOCK_TABLE_DM_REPLY);
+  if (first.includes("You are writing ONE complete adventure")) {
+    return Promise.reject(new Error("The adventure writer needs ConjureOS. Nothing was written."));
   }
 
   if (sys.includes("LIVINGTABLE_ARC_GENERATOR")) return delay(mockArcOutline(last));
@@ -492,6 +553,33 @@ function mockConversationTurn(sys: string, userMessage: string, fantasy: boolean
     actions: [],
     menuHint: ["Talk", "Move", "Search"],
   };
+}
+
+/** One valid answer in the table DM's own reply shape (table/dmCore.ts), so the window plays under `npm run dev`. */
+const MOCK_TABLE_DM_REPLY = JSON.stringify({
+  narration: "The DM is not connected, so this is a stand-in answer. Nothing around you changes.",
+  cost: "free",
+  effects: [],
+  options: [
+    { label: "Look around", say: "I look around the room." },
+    { label: "Wait", say: "I wait and listen." },
+  ],
+});
+
+/** Feed a finished mock reply to a stream listener in small pieces, the way the real bridge would. */
+async function mockStream(text: string, onChunk: CompleteRequest["onChunk"]): Promise<void> {
+  if (!onChunk) return;
+  let acc = "";
+  for (let i = 0; i < text.length; i += 24) {
+    const piece = text.slice(i, i + 24);
+    acc += piece;
+    try {
+      onChunk(piece, acc);
+    } catch {
+      // a throwing listener must never break the call
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+  }
 }
 
 const delay = (s: string): Promise<string> =>

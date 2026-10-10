@@ -13,7 +13,7 @@
  * exactly one place a test has to watch.
  *
  * It lives beside the command menu because that is this game's player-facing
- * layer: `commandMenu.ts` decides which verb costs a credit, this file decides
+ * layer: `commandMenu.ts` decides which verbs need the DM, this file decides
  * what the player is told about what happened. Both are pure, both are unit
  * tested without a canvas or a DOM.
  *
@@ -51,61 +51,11 @@ export const DM_NAME = "the dungeon master";
 /** The campaign-list subtitle, and the game's whole claim in one line. */
 export const GAME_TAGLINE = "Real dice and the real SRD 5.1 tabletop rules, run by a dungeon master (the DM) that remembers your campaign.";
 
-/**
- * The New campaign card. Two jobs: previewing the flow's TOTAL price instead
- * of wearing a badge of its own (a card badge plus a button badge on the next
- * screen made one judge count three charges and start counting instead of
- * playing), and naming the half of the game that never costs anything, since
- * that is the half the pricing taught both readers to skip.
- *
- * "Throughline" and "beats" are gone from here on purpose: both judges named
- * them as the most jargony words in the whole product, and neither is even a
- * D&D word, so they were the two nouns the game never explained.
- */
-export const NEW_CAMPAIGN_BLURB =
-  "Two credits to get playing: one for the DM to plan the story, one for it to build and open your first scene. A written campaign needs no planning, so it takes one. Everything after that, moving and fighting and searching, is free.";
-
-/** The heading over the written campaigns on the new-campaign screen (campaign/library.ts). */
-export const WRITTEN_CAMPAIGNS_HEADING = "Or start a written campaign";
-
-/** The busy line while a written campaign is being opened. No planning happens, so it must not say it does. */
-export const WRITTEN_CAMPAIGN_BUSY_LABEL = "Opening the campaign...";
-
-/** The sub-line under the planning spinner. Same no-jargon rule as the blurb above. */
+/** The sub-line under the planning spinner. No jargon: a story, its places, someone worth meeting. */
 export const CAMPAIGN_PLANNING_SUB = "A story, the places it runs through, and someone worth meeting.";
 
 /** The character-creation spinner. It used to say "Rolling up your character...", which made a cold reader brace for a stat block they had not chosen and start planning a reroll. Scores are a fixed standard array per archetype; nothing is randomised here. */
 export const CREATION_BUSY_LABEL = "Building your character...";
-
-/**
- * What one credit actually buys, in the player's own terms.
- *
- * The shared CostBadge's hover read "Uses 1 AI call from your credits", which
- * a judge correctly called a phrase from behind the curtain: "It tells me
- * what the company is being billed for, not what I'm getting." Every paid
- * surface in this game now carries one of these instead, on the button, next
- * to the badge that already shows the price.
- */
-export const CREDIT_BUYS = {
-  planCampaign:
-    "1 credit, once per campaign: the DM writes the story you are walking into, the places it runs through, and the people worth meeting.",
-  beginScene: "1 credit: the DM builds the room you are standing in and starts the story.",
-  buildRoom:
-    "1 credit: the DM builds the room on the other side of this wall. Walking back into a room it has already built is free, forever.",
-  talk: "1 credit: the DM reads what you typed and the world answers.",
-  startWritten:
-    "No credit to start: this story is already written, its places and its people waiting. Opening your first scene is 1 credit.",
-} as const;
-
-/**
- * The counterweight, on screen, once. Both cold readers derived the identical
- * degenerate strategy from the badges alone ("stand in one room, hit things,
- * camp, hit things, camp") because nothing anywhere said which verbs were
- * free. DESIGN.md prices all of these at nothing forever; the screen had
- * simply never mentioned it.
- */
-export const FREE_FOREVER_LINE =
-  "Moving, fighting, casting, searching, using items, resting and levelling up never cost a credit.";
 
 // ── naming things ────────────────────────────────────────────────────────
 
@@ -455,21 +405,7 @@ export function neighbourLine(dir: Edge, view: NeighbourView): string {
   return `${where}: unexplored, the DM will build it`;
 }
 
-/**
- * The Move button's own words. The repo rule is that every paid action wears
- * its price before the click; the CostBadge does that, but a bare price glyph
- * on one of four identical arrows reads as "north is special" rather than
- * "you are standing at the edge of what has been built", so the reason goes
- * in words too, on hover and on tap.
- */
-export function moveButtonTitle(dir: Edge, crossesIntoFog: boolean): string {
-  const where = DIRECTION_WORD[dir];
-  return crossesIntoFog
-    ? `Step ${where}, into a room nobody has built yet. ${CREDIT_BUYS.buildRoom}`
-    : `Step ${where}. One step is 5 feet. Free.`;
-}
-
-// ── the glossary, and the SRD credit that has to ship with it ────────────
+// ── the glossary, and the SRD attribution that has to ship with it ────────────
 
 export interface GlossaryEntry {
   term: string;
@@ -504,7 +440,6 @@ export const GLOSSARY: GlossaryEntry[] = [
   { term: "hit die", short: "One die you can spend on a short rest to get hit points back. You have one per level, and a night's camp gives them all back." },
   { term: "cantrip", short: "A spell you can cast as often as you like. It costs no spell slot, and it is the one spell a caster never runs out of." },
   { term: "superiority dice", short: "A Battle Master's pool of four d8s. Spend one on a hit for extra damage and a chance to knock the target flat or disarm it; any rest gives them all back." },
-  { term: "credit", short: "What one message to the dungeon master, or one new room it builds, costs. Fighting, moving, searching, resting and levelling up cost none." },
   { term: "movement", short: "How far you can go on your turn, in feet. One tile on this board is one step and costs 5 feet, so 30 feet is 6 steps." },
   // ── "rarity" IS BACK (issue #15) ─────────────────────────────────────
   //
@@ -532,7 +467,7 @@ export function explain(term: string): string | undefined {
 }
 
 /**
- * The SRD 5.1 credit, carrying all six things CC BY 4.0 actually requires:
+ * The SRD 5.1 attribution, carrying all six things CC BY 4.0 actually requires:
  * the creator, the copyright notice, the licence notice, the disclaimer
  * notice, a link to the licence text, and an indication that the material was
  * modified. Kept as data rather than as JSX so the same words can be rendered

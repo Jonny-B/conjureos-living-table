@@ -2,6 +2,8 @@
 
 Moved from Conjure Games' DESIGN.md (the "The Living Table (fifth game)" section) when the game got its own repo on 2026-09-30. Headings are one level up; the text is unchanged. Where it says "the fifth game" or refers to the hub's other games, read it as history.
 
+**Current scope (2026-09-30).** The art is moving to Kay Lousberg's free KayKit packs, so only what they can draw is playable: the Fantasy template with the Knight, the Rogue and the Wizard (shown to players as Knight, Rogue and Mage since 0.10.0 and as Knight, Rogue and Wizard since 0.11.1; the archetype ids stay knight, shadow and fireball-person). Sci-fi is paused and the Healer is out of play; both remain in the code and in the notes below. `PLAYABLE_TEMPLATES` and `PLAYABLE_ARCHETYPE_IDS` in `characters/templates.ts` are the switch.
+
 
 **The pitch.** A real AI dungeon master, d20s, ability scores, saves,
 initiative, spell slots, the actual rules, on a top-down sprite grid, playable
@@ -18,7 +20,7 @@ https://claude.ai/code/artifact/77d47818-2167-45b7-aea3-f83eca98f9e6
 
 | Game | Why it needs AI | What it costs |
 |---|---|---|
-| **The Living Table** | The dungeon master's narration, the scenes it builds, and what it remembers about your campaign are all model reasoning; nothing here is a fixed content tree. The dice aren't: hit-or-miss, damage, and saves are the rules engine, never the model. | 1 credit to plan a campaign; 1 credit per new scene the DM builds; 1 credit per message you send it. Combat, movement, and leveling never cost anything. |
+| **The Living Table** | The dungeon master's narration, the scenes it builds, and what it remembers about your campaign are all model reasoning; nothing here is a fixed content tree. The dice aren't: hit-or-miss, damage, and saves are the rules engine, never the model. | The platform's credit display shows what AI use costs; the game never states a price. Planning a campaign, building a new scene and sending the DM a message use the AI. Combat, movement, and leveling never do. |
 
 Passes the repo's own filter (would someone rather have this than a free
 download?) on both counts that matter here: a DM that remembers your specific
@@ -194,9 +196,9 @@ Four archetypes per template, same mechanical chassis reskinned, proof that
 | Fantasy | Sci-fi | Chassis |
 |---|---|---|
 | The Knight | The Trooper | Fighter |
-| The Shadow | The Infiltrator | Rogue |
+| The Rogue (id shadow) | The Infiltrator | Rogue |
 | The Healer | The Medic | Cleric |
-| The Fireball Person | The Psion | Wizard |
+| The Wizard (id fireball-person) | The Psion | Wizard |
 
 Pick a template, then name it, pick an appearance from the tile set, pick one
 or two flavour choices, then play, under two minutes, no point-buy, no
@@ -275,76 +277,38 @@ attuned-but-carried state (here, only worn items are attuned).
 Move / Attack / Talk / Search / Item, plus free text as the escape hatch.
 
 - **Move**: pure engine (pathfind within the known playspace). Only crosses
-  into the DM when it targets an unassembled cell (`assembleCell`, 1 credit).
+  into the DM when it targets an unassembled cell (`assembleCell`, an AI call).
 - **Attack**: the roll is pure engine, always, free. What the *target* does
   in response (flee, retaliate, call for help) is the DM's call on its next turn.
 - **Search**: pure engine, a Perception/Investigation check against a DC set
   when the cell was assembled, revealing pre-authored flavour text on the
   prop it was checked against. No AI call; search spam must not be a way to
-  farm credits out of the player, and it doesn't need one to feel fair.
+  run up the player's AI use, and it doesn't need one to feel fair.
 - **Item**: pure engine (apply a known item's effect).
-- **Talk** / **free text**: always the DM, always 1 credit; this is the
-  thing free text exists to pay for.
+- **Talk** / **free text**: always the DM, always an AI call; this is the
+  thing free text exists for.
 
 ## Cost model
 
-Extends the repo's existing rule (credits buy "more" and "mine", never
-"finish what you started"):
+**The game never states a price.** No credit amounts, no "costs N credits", no
+estimates, no badge with a number, no price in a hover, a button, a note or a
+release line. The platform's credit display (the credit icon at the top of
+every ConjureOS app) shows what AI use costs, and that is the only place it is
+said. The code does not work out money either: `table/cost.ts` holds only the
+call settings (model tier, token ceiling, repair rounds, cache lifetime).
 
-- **Plan a campaign**, 1 credit, once per campaign. Not free like the daily:
-  a campaign is personal, not a shared-globally puzzle, so there's no "first
-  player of the day" to amortise it across.
-- **Start a written campaign**: free. Nothing is generated; the first paid
-  turn is the same "Begin the scene" every campaign has.
-- **A new scene the DM builds** (`assembleCell` on a stub), 1 credit.
+What does and does not use the AI, which is a design fact and not a price:
+
+- **Plan a campaign**: an AI call, once per campaign.
+- **A new scene the DM builds** (`assembleCell` on a stub): an AI call.
   Re-entering an already-built cell is free, forever.
-- **A message you send the DM** (Talk / free text), 1 credit, same shape as
-  the Vault: you're paying for the thing you're there to do.
-- **Combat, movement, search, items, levelling**: free, always. The tactical
-  layer is what makes this not read as a toll booth wearing a dice icon.
-- **Never charge for losing.** A character going down doesn't cost anything
-  and doesn't end the campaign; SRD death saves apply.
-
-## Written campaigns: run, not recited
-
-Alongside the one-credit AI plan, a campaign can be written by hand
-(`src/games/livingtable/campaign/`, authoring guide in `CAMPAIGN_TEMPLATE.md`,
-worked example `modules/blackstone.ts`). The shape is
-Campaign, Acts, Arcs, Scenes, Encounters, plus State, and the rule is that a
-campaign is written as facts, situations and possible outcomes, never as a
-story:
-
-- **Truths** say what is true and who may know it: known, discoverable
-  (through listed routes), or secret (behind a gate the engine enforces).
-- **Beats** are things that must happen eventually; the DM chooses how, from
-  what the player is doing, once the beat's gate opens.
-- **Arcs** are problems with several **outcomes**, each setting flags and
-  shifting attitudes.
-- **The villain's clock** moves the world while the player is busy: steps
-  fire on scene count (DM turns) unless the player has stopped them first.
-
-The loop is Truth, Situation, Player Action, Resolution, State Change, and
-the split is the same as the dice: the DM narrates and reports what happened
-by id in an optional `story` field on its turn; `campaign/engine.ts` checks
-each id against the module and its gate, keeps the state, fires the clock,
-ends acts and reaches endings, and tells the DM what it did (or refused) as
-engine notes on the next turn. No extra model call and no extra charge.
-
-What the DM reads is `campaign/brief.ts`: every truth with its gate, the
-villain and what his clock does next, the factions, and only the current act
-in full. Detail follows the player: the people and scenes where they stand
-are printed in full, everything else in one line or less, and a truth's
-routes print only where it can come out, which keeps the brief to roughly
-16 to 24 KB a turn. Each fact has one home in the format (who is where lives
-on the person, what happens where on the scene), so nothing is paid for
-twice.
-
-Storage: the campaign row stores a pointer (`arcOutline.module`) plus an
-ordinary plan as a fallback; the module ships in the app, so its ids are
-permanent once played. Story state rides the player character's `stats` blob
-like `position` does, and a character rolled in after a death inherits it.
-`test/livingtable-campaign.test.ts` validates every module (references,
-unreachable gates, dashes) and plays Blackstone through to each ending.
+- **A message you send the DM** (Talk / free text): an AI call, the thing
+  you're there to do.
+- **Combat, movement, search, items, levelling**: no AI call, always. The
+  tactical layer is what makes this not read as a toll booth wearing a dice
+  icon.
+- **Never charge for losing.** A character going down doesn't use the AI and
+  doesn't end the campaign; SRD death saves apply.
 
 ## Assets: a code-defined library, not painted files
 

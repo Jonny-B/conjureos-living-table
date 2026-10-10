@@ -137,7 +137,9 @@ function validate(bench) {
   if (typeof bench !== "object" || bench === null) die("the assets module's default export is not an object");
   if (!bench.title) die('registry.title is required (a 2-4 word name, used as the page <title>)');
   if (!bench.source) die("registry.source is required (a footer line: where the assets live and which script built the page)");
-  if (!Array.isArray(bench.assets) || bench.assets.length === 0) die("registry.assets must be a non-empty array");
+  // This project's addition: a bench with library: false is all panels, so it may carry no assets.
+  if (!Array.isArray(bench.assets) || (bench.assets.length === 0 && bench.library !== false)) die("registry.assets must be a non-empty array");
+  if (bench.library === false && !(bench.panels || []).length) die("a bench with no library needs at least one panel");
 
   const seenAssetIds = new Set();
   for (const a of bench.assets) {

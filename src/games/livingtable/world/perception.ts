@@ -18,6 +18,7 @@ import {
 import type { AssetManifest, CellLayout, Exit, PlacedProp, PlacedToken, TileId } from "./cell";
 import { stakesFor, type StakeMap } from "./connectivity";
 import type { Edge } from "./coordinates";
+import { sightBlockers, visibleFrom } from "./visibility";
 
 /** Assembled cells plus whatever exits are still owed to cells that don't exist yet. */
 export interface World {
@@ -45,6 +46,12 @@ export interface Playspace {
   cell: CellCoord;
   tiles: TileId[][];
   walkable: boolean[][];
+  /**
+   * [y][x]: true where a square stops a LOOK (world/visibility.ts). Separate
+   * from `walkable` on purpose: a closed door stops both, a chest and a river
+   * stop only a foot. Line of sight reads this grid and never `walkable`.
+   */
+  opaque: boolean[][];
   props: PlacedProp[];
   tokens: PlacedToken[];
   exits: Exit[];
@@ -55,7 +62,9 @@ export interface Playspace {
  * dense terrain (what's there, is it walkable) plus the sparse, identity-
  * bearing lists on top of it. `walkable` is derived from the manifest here,
  * never hand-authored, so it can never drift from what the manifest actually
- * says is passable.
+ * says is passable. `opaque` is derived the same way, from the tiles AND the
+ * props (a closed door is a prop, which is why `walkable` could never answer
+ * "can I see through it").
  */
 export function getPlayspace(world: World, cx: number, cy: number, manifest: AssetManifest): Playspace | undefined {
   const layout = getCell(world, { cx, cy });
@@ -67,6 +76,7 @@ export function getPlayspace(world: World, cx: number, cy: number, manifest: Ass
     cell: { cx, cy },
     tiles: layout.tiles,
     walkable,
+    opaque: sightBlockers(layout, manifest),
     props: layout.props,
     tokens: layout.tokens,
     exits: layout.exits,
@@ -134,12 +144,14 @@ function summarize(layout: CellLayout): string {
 
 /**
  * Real line of sight from one token, for stealth/ranged checks: a Bresenham
- * line to every other tile in the cell, blocked by the first non-walkable
- * tile strictly between the two (the wall itself is visible, you just can't
- * see past it). `manifest` isn't in DESIGN.md's abbreviated getVisible(tokenId)
- * signature, but walkability -- what actually blocks a line -- only exists by
- * looking a tile id up in the manifest, so there's no way to answer this
- * question without it; every other lookup in this file takes it too.
+ * line to every other tile in the cell (world/visibility.ts), blocked by the
+ * first OPAQUE square strictly between the two (the wall itself is visible, you
+ * just can't see past it). Opaque is not "not walkable": a closed door stops a
+ * look, a chest, a river or an open door does not. `manifest` isn't in
+ * DESIGN.md's abbreviated getVisible(tokenId) signature, but what stops a line
+ * only exists by looking a tile or prop id up in the manifest, so there's no
+ * way to answer this question without it; every other lookup in this file takes
+ * it too.
  */
 export function getVisible(world: World, cx: number, cy: number, tokenId: string, manifest: AssetManifest): TileCoord[] {
   const space = getPlayspace(world, cx, cy, manifest);
@@ -149,56 +161,22 @@ export function getVisible(world: World, cx: number, cy: number, tokenId: string
 
 /**
  * The same line of sight, computed from a Playspace rather than the World.
- * `Playspace.walkable` is already derived from the manifest (see
- * getPlayspace), so this needs no manifest of its own -- which is what lets
- * the DM-turn path, which holds a Playspace and not a World, run the exact
- * same visibility rule the world-level `getVisible` does instead of a second,
- * subtly different one.
+ * `Playspace.opaque` is already derived from the manifest (see getPlayspace),
+ * so this needs no manifest of its own -- which is what lets the DM-turn path,
+ * which holds a Playspace and not a World, run the exact same visibility rule
+ * the world-level `getVisible` does instead of a second, subtly different one.
+ * The rule itself (symmetric, corner gaps blocked) lives in visibility.ts.
  */
 export function visibleTilesFrom(playspace: Playspace, tokenId: string): TileCoord[] {
   const from = playspace.tokens.find((t) => t.id === tokenId);
   if (!from) return [];
 
+  const sight = visibleFrom(playspace.opaque, from);
   const visible: TileCoord[] = [];
   for (let y = 0; y < CELL_HEIGHT; y++) {
     for (let x = 0; x < CELL_WIDTH; x++) {
-      if (x === from.x && y === from.y) {
-        visible.push({ x, y });
-        continue;
-      }
-      if (hasLineOfSight(playspace.walkable, from.x, from.y, x, y)) visible.push({ x, y });
+      if (sight[y]?.[x]) visible.push({ x, y });
     }
   }
   return visible;
-}
-
-/**
- * Bresenham's line algorithm, walked one tile at a time, stopping at the
- * first non-walkable tile strictly between the two endpoints. The loop
- * breaks the instant it reaches (x1,y1) -- the destination doesn't block
- * itself, so a wall is visible even though nothing beyond it is.
- */
-function hasLineOfSight(walkable: boolean[][], x0: number, y0: number, x1: number, y1: number): boolean {
-  const dx = Math.abs(x1 - x0);
-  const dy = -Math.abs(y1 - y0);
-  const sx = x0 < x1 ? 1 : -1;
-  const sy = y0 < y1 ? 1 : -1;
-  let err = dx + dy;
-  let x = x0;
-  let y = y0;
-
-  while (x !== x1 || y !== y1) {
-    const e2 = 2 * err;
-    if (e2 >= dy) {
-      err += dy;
-      x += sx;
-    }
-    if (e2 <= dx) {
-      err += dx;
-      y += sy;
-    }
-    if (x === x1 && y === y1) break;
-    if (walkable[y]?.[x] !== true) return false;
-  }
-  return true;
 }

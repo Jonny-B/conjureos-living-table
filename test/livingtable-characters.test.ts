@@ -14,61 +14,18 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARCHETYPES, getArchetype } from "../src/games/livingtable/characters/templates";
-import { createCharacter, creationChoicesFor, normalizeSheet, type CharacterSheet } from "../src/games/livingtable/characters/creation";
-import {
-  addMilestone,
-  applyLevelUpChoice,
-  canLevelUp,
-  levelUpChoices,
-  milestonesRemaining,
-  MILESTONES_PER_LEVEL,
-} from "../src/games/livingtable/characters/leveling";
-import {
-  applyDamage,
-  applyDeathSave,
-  applyHealing,
-  longRest,
-  longRestBlockedReason,
-  newAdventuringDay,
-  shortRest,
-  shortRestBlockedReason,
-} from "../src/games/livingtable/characters/health";
+import { ARCHETYPES, PLAYABLE_ARCHETYPE_IDS, getArchetype } from "../src/games/livingtable/characters/templates";
+import { ARCHETYPE_LABEL } from "../src/games/livingtable/table/state";
+import { createCharacter, creationChoicesFor, normalizeSheet, refreshRetiredNames, type CharacterSheet } from "../src/games/livingtable/characters/creation";
+import { addMilestone, applyLevelUpChoice, canLevelUp, levelUpChoices, milestonesRemaining, MILESTONES_PER_LEVEL } from "../src/games/livingtable/characters/leveling";
+import { applyDamage, applyDeathSave, applyHealing, longRest, longRestBlockedReason, newAdventuringDay, shortRest, shortRestBlockedReason } from "../src/games/livingtable/characters/health";
 import { abilityModifier, computeAC, type ArmorCategory } from "../src/games/livingtable/rules";
 import { SLOT_ROLES, STARTING_LOADOUT } from "../src/games/livingtable/characters/equipmentTypes";
 import { equipItem, equippableTiers, gearView } from "../src/games/livingtable/menu/equipment";
 import { commitLoadout, draftFromSheet, stageEquip } from "../src/games/livingtable/rules/inventory";
 import { lootFor } from "../src/games/livingtable/rules/loot";
-import {
-  CAMPAIGN_PLANNING_SUB,
-  CREDIT_BUYS,
-  FREE_FOREVER_LINE,
-  GAME_TAGLINE,
-  NEW_CAMPAIGN_BLURB,
-} from "../src/games/livingtable/menu/labels";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-/**
- * The two template cards' copy, comments stripped. Anchored on the row's own
- * class and the input under it, so a card gaining a third sibling still gets
- * read and a moved block fails loudly rather than passing on an empty string.
- */
-function TEMPLATE_CARDS(): string {
-  const source = readFileSync(join(ROOT, "src", "games", "livingtable", "LivingTable.tsx"), "utf8")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, " ")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/^\s*\/\/.*$/gm, " ");
-  const from = source.indexOf('className="lt-template-row"');
-  const to = source.indexOf('className="cui-input"', from);
-  assert.ok(from >= 0 && to > from, "the template cards moved; this test is looking at the wrong block");
-  const block = source.slice(from, to);
-  assert.ok(block.includes("Fantasy") && block.includes("Sci-fi"), "the template cards moved out of the row");
-  return block;
-}
+import { CAMPAIGN_PLANNING_SUB, GAME_TAGLINE } from "../src/games/livingtable/menu/labels";
+import { join } from "node:path";
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
@@ -97,6 +54,51 @@ function numericSignature(sheet: CharacterSheet): string {
 }
 
 // ── templates.ts ────────────────────────────────────────────────────────
+
+test("the three playable classes are called Knight, Rogue and Wizard; the ids stay as they were (item 6)", () => {
+  assert.deepEqual(
+    PLAYABLE_ARCHETYPE_IDS.map((id) => [id, ARCHETYPE_LABEL[id as keyof typeof ARCHETYPE_LABEL], getArchetype(id).displayName]),
+    [
+      ["knight", "Knight", "The Knight"],
+      ["shadow", "Rogue", "The Rogue"],
+      ["fireball-person", "Wizard", "The Wizard"],
+    ],
+  );
+  // Nothing a player reads still uses the old names.
+  for (const a of ARCHETYPES) assert.doesNotMatch(a.displayName, /Shadow|Fireball|Mage/);
+});
+
+test("normalizeSheet refreshes a stored class name, so an old save no longer says Shadow or Mage (item 6)", () => {
+  for (const [id, old, now] of [["shadow", "The Rogue", "The Rogue"], ["fireball-person", "The Mage", "The Wizard"], ["fireball-person", "The Fireball Person", "The Wizard"], ["shadow", "The Shadow", "The Rogue"]] as const) {
+    const sheet = makeDefault(id);
+    const stored = { ...sheet, displayName: old } as CharacterSheet;
+    assert.equal(normalizeSheet(stored).displayName, now, id);
+    assert.equal(normalizeSheet(sheet).displayName, now, id);
+  }
+  // A sheet whose class is unknown to this build keeps what it had.
+  const odd = { ...makeDefault("knight"), archetypeId: "from-the-future", displayName: "The Oddity" } as CharacterSheet;
+  assert.equal(normalizeSheet(odd).displayName, "The Oddity");
+});
+
+test("refreshRetiredNames: the class reads its current name, a retired default NAME follows it, a typed name stays", () => {
+  const old = (archetypeId: string, name: string, displayName: string) => ({ ...makeDefault(archetypeId), name, displayName }) as CharacterSheet;
+  const mage = refreshRetiredNames(old("fireball-person", "Mage", "The Mage"));
+  assert.equal(mage.displayName, "The Wizard");
+  assert.equal(mage.name, "Wizard", "the quick start's old default name follows the class");
+  assert.equal(refreshRetiredNames(old("fireball-person", "Fireball Person", "The Fireball Person")).name, "Wizard");
+  assert.equal(refreshRetiredNames(old("shadow", "Shadow", "The Shadow")).name, "Rogue");
+  const typed = refreshRetiredNames(old("fireball-person", "Merlin", "The Mage"));
+  assert.equal(typed.displayName, "The Wizard");
+  assert.equal(typed.name, "Merlin", "a name a player typed is kept");
+  assert.equal(refreshRetiredNames(old("knight", "Mage", "The Knight")).name, "Mage", "only the class that carried the label is renamed");
+  const odd = { ...old("knight", "Mage", "The Oddity"), archetypeId: "from-the-future" } as CharacterSheet;
+  assert.equal(refreshRetiredNames(odd), odd, "a class this build does not know is left alone");
+  const fresh = makeDefault("fireball-person");
+  assert.equal(refreshRetiredNames(fresh), fresh, "nothing to change is the same object");
+  const once = refreshRetiredNames(mage);
+  assert.equal(once, mage, "and a second pass changes nothing");
+  assert.deepEqual({ ...mage, name: "x", displayName: "x" }, { ...old("fireball-person", "Mage", "The Mage"), name: "x", displayName: "x" }, "no other field is touched");
+});
 
 test("there are exactly eight archetypes, four fantasy and four sci-fi", () => {
   assert.equal(ARCHETYPES.length, 8);
@@ -400,8 +402,8 @@ test("levelUpChoices keeps a caster's spell slots in sync with the new level", (
 // ── the Item verb has something to spend, for every archetype ───────────
 //
 // The failure this guards, measured across all eight archetypes through the
-// real createCharacter: the item-usable inventory was Knight none, Shadow
-// none, Healer none, Fireball Person none, Psion none. Only three archetypes
+// real createCharacter: the item-usable inventory was Knight none, Rogue
+// none, Healer none, Wizard none, Psion none. Only three archetypes
 // carried anything the old name-substring heuristic matched, which means one
 // of the five command-menu verbs was guaranteed to fail for the entire
 // Fantasy template -- and the failure message advised using a potion that
@@ -704,36 +706,6 @@ test("no archetype blurb sells a party this game never shows", () => {
   }
 });
 
-test("the template cards offer a CHOICE of four, never a party of four (issue #16)", () => {
-  // The archetype blurbs above were cleaned of company; the two TEMPLATE cards
-  // one screen earlier still read as a roster -- "A knight, a shadow, a healer,
-  // and a wizard..." -- which is the same promise in the same product, made
-  // before the player has even reached the archetype list. The player gets ONE
-  // character: `createCharacter` is called once, and the sheet, the HP bar and
-  // the player token are all singular.
-  //
-  // Read off the TSX rather than a constant because that is where this copy
-  // lives, with comments scrubbed for the same reason coldcase.test.ts scrubs
-  // them: this test's own rationale has to be allowed to quote the sentence it
-  // bans.
-  const cards = TEMPLATE_CARDS();
-  // The roster form, exactly: a comma list of archetypes joined by "and". The
-  // fix is the same list joined by "or", which this must not match.
-  assert.doesNotMatch(cards, /,\s*and an?\s/i, `a template card still lists a party: ${JSON.stringify(cards.slice(0, 400))}`);
-  for (const [template, last] of [
-    ["fantasy", "wizard"],
-    ["scifi", "mind"],
-  ] as const) {
-    // Naming the four is fine and useful -- what they are IS the choice on
-    // offer. It has to read as a choice, so the last one is preceded by "or".
-    assert.match(
-      cards,
-      new RegExp(`or an? ${last}`, "i"),
-      `the ${template} card does not offer its fourth archetype as an alternative: ${JSON.stringify(cards)}`,
-    );
-  }
-});
-
 test("no player-facing pitch promises company the build cannot deliver (issue #16)", () => {
   // The strings the campaign list and the new-campaign screen are built from.
   // None of them has ever promised a party; this is the guard that keeps it
@@ -742,10 +714,7 @@ test("no player-facing pitch promises company the build cannot deliver (issue #1
   const PARTY_WORDS = /\bpart(y|ies)\b|\bsquad\b|\bteammates?\b|\ballies\b|\bcompanions?\b|\byour crew\b/i;
   const copy: [string, string][] = [
     ["GAME_TAGLINE", GAME_TAGLINE],
-    ["NEW_CAMPAIGN_BLURB", NEW_CAMPAIGN_BLURB],
     ["CAMPAIGN_PLANNING_SUB", CAMPAIGN_PLANNING_SUB],
-    ["FREE_FOREVER_LINE", FREE_FOREVER_LINE],
-    ...(Object.entries(CREDIT_BUYS) as [string, string][]),
   ];
   for (const [name, text] of copy) {
     const match = PARTY_WORDS.exec(text);

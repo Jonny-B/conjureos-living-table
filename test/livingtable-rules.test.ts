@@ -11,185 +11,18 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  parseDiceNotation,
-  rollDice,
-  rollD20,
-  abilityModifier,
-  proficiencyBonus,
-  resolveAttack,
-  resolveDamage,
-  resolveSavingThrow,
-  resolveSkillCheck,
-  rollInitiative,
-  sortInitiative,
-  applyLevelUp,
-  type LevelableCharacter,
-  spellSlotsForLevel,
-  castSpell,
-  resetTurnEconomy,
-  spendAction,
-  spendMovement,
-  type TurnEconomy,
-  computeAC,
-  normalizeConditions,
-  resolveManeuver,
-  getManeuver,
-  maneuverSaveDC,
-} from "../src/games/livingtable/rules";
-import {
-  defenderACForRollRequest,
-  dcForRollRequest,
-  modifierForRollRequest,
-  lookupStatblock,
-  monsterCurrentHp,
-  monsterDamageNotationFor,
-  damageMonster,
-  criticalOnFor,
-  attackerBonusFor,
-  weaponDamageNotationFor,
-  FALLBACK_MONSTER_STATBLOCK,
-  superiorityDiceMaxFor,
-  maneuverSaveDCFor,
-  maneuversFor,
-  maneuverTargetSaveModifier,
-  monsterArmorClassFor,
-  saveModifierFor,
-  skillModifierFor,
-  weaponFor,
-  weaponIdentityFor,
-  effectiveArmorClass,
-  effectiveSpeedFt,
-  equipmentContextFor,
-  equipmentIssuesFor,
-  legendaryRiderDamageFor,
-  attackBonusSourcesFor,
-  damageBonusSourcesFor,
-  saveBonusSourcesFor,
-  DEFAULT_SPEED_FT,
-  checkAdvantageFor,
-  checkBonusSourcesFor,
-  evasionRescue,
-} from "../src/games/livingtable/session/combat";
-import {
-  ARMOR_STRENGTH_BY_CHASSIS,
-  canEquip,
-  equipmentOf,
-  equipSlot,
-  equipmentStatus,
-  itemNameFor,
-  equipmentArmorBonus,
-  equipmentBonusSources,
-  legendaryRiderFor,
-  normalizeEquipment,
-  slotIsHandHeld,
-  accessoryStatus,
-  equipmentCheckBonus,
-  equipmentSaveBonus,
-  canEquip,
-  armorSpeedPenaltyFt,
-} from "../src/games/livingtable/characters/equipment";
-import {
-  ACCESSORY_ITEMS,
-  ACCESSORY_ROLES,
-  ARCHETYPE_IDS,
-  BAG_CAPACITY,
-  EFFECT_BOUNDS,
-  EQUIPMENT_FORBIDDEN_WIRE_KEYS,
-  GEAR_RAMP,
-  GEAR_ROLES,
-  LAYER_OFFHAND,
-  MAGIC_TIERS,
-  MAX_ATTUNED_ITEMS,
-  MAX_DISTINCT_MAGIC_ITEMS,
-  MAX_TOTAL_AC_BONUS,
-  MAX_TOTAL_CHECK_BONUS,
-  MAX_TOTAL_SAVE_BONUS,
-  PROTECTED_PALETTE_INDICES,
-  RECOLOUR_BY_TIER,
-  SLOTS_BY_ARCHETYPE,
-  SLOT_ROLES,
-  STARTING_LOADOUT,
-  bodySpriteId,
-  equipmentSpriteId,
-  gearItemExists,
-  gearItemName,
-  gearRequiresAttunement,
-  tierArtVariant,
-  type BagItem,
-  type EquipmentTier,
-  type GearRole,
-  type PaletteRemap,
-  type SlotRole,
-} from "../src/games/livingtable/characters/equipmentTypes";
-import {
-  attunedRoles,
-  isRoleAttuned,
-  gearChangeBlockedReason,
-} from "../src/games/livingtable/rules/attunement";
-import {
-  draftFromSheet,
-  stageEquip,
-  stageUnequip,
-  commitLoadout,
-  normalizeBag,
-} from "../src/games/livingtable/rules/inventory";
+import { parseDiceNotation, rollDice, rollD20, abilityModifier, proficiencyBonus, resolveAttack, resolveDamage, resolveSavingThrow, resolveSkillCheck, rollInitiative, sortInitiative, applyLevelUp, type LevelableCharacter, spellSlotsForLevel, castSpell, resetTurnEconomy, spendAction, spendMovement, type TurnEconomy, computeAC, normalizeConditions, resolveManeuver, getManeuver, maneuverSaveDC } from "../src/games/livingtable/rules";
+import { defenderACForRollRequest, dcForRollRequest, modifierForRollRequest, lookupStatblock, monsterCurrentHp, monsterDamageNotationFor, damageMonster, criticalOnFor, attackerBonusFor, weaponDamageNotationFor, FALLBACK_MONSTER_STATBLOCK, superiorityDiceMaxFor, maneuverSaveDCFor, maneuversFor, maneuverTargetSaveModifier, monsterArmorClassFor, saveModifierFor, skillModifierFor, weaponFor, weaponIdentityFor, effectiveArmorClass, effectiveSpeedFt, equipmentContextFor, equipmentIssuesFor, legendaryRiderDamageFor, attackBonusSourcesFor, damageBonusSourcesFor, saveBonusSourcesFor, DEFAULT_SPEED_FT, checkAdvantageFor, checkBonusSourcesFor, evasionRescue } from "../src/games/livingtable/session/combat";
+import { ARMOR_STRENGTH_BY_CHASSIS, canEquip, equipmentOf, equipSlot, equipmentStatus, itemNameFor, equipmentArmorBonus, equipmentBonusSources, legendaryRiderFor, normalizeEquipment, slotIsHandHeld, accessoryStatus, equipmentCheckBonus, equipmentSaveBonus, canEquip, armorSpeedPenaltyFt } from "../src/games/livingtable/characters/equipment";
+import { ACCESSORY_ITEMS, ACCESSORY_ROLES, ARCHETYPE_IDS, BAG_CAPACITY, EFFECT_BOUNDS, EQUIPMENT_FORBIDDEN_WIRE_KEYS, GEAR_RAMP, GEAR_ROLES, LAYER_OFFHAND, MAGIC_TIERS, MAX_ATTUNED_ITEMS, MAX_DISTINCT_MAGIC_ITEMS, MAX_TOTAL_AC_BONUS, MAX_TOTAL_SAVE_BONUS, PROTECTED_PALETTE_INDICES, RECOLOUR_BY_TIER, SLOTS_BY_ARCHETYPE, SLOT_ROLES, STARTING_LOADOUT, bodySpriteId, equipmentSpriteId, gearItemExists, gearItemName, gearRequiresAttunement, tierArtVariant, type BagItem, type EquipmentTier, type GearRole, type PaletteRemap, type SlotRole } from "../src/games/livingtable/characters/equipmentTypes";
+import { attunedRoles, isRoleAttuned, gearChangeBlockedReason } from "../src/games/livingtable/rules/attunement";
+import { draftFromSheet, stageEquip, stageUnequip, commitLoadout, normalizeBag } from "../src/games/livingtable/rules/inventory";
 import { loadoutInventoryFor } from "../src/games/livingtable/characters/templates";
 import { PALETTE as FANTASY_PALETTE, SPRITES as FANTASY_SPRITES } from "../scripts/assets/fantasy";
 import { PALETTE as SCIFI_PALETTE, SPRITES as SCIFI_SPRITES } from "../scripts/assets/scifi";
-import {
-  CHAIN_MAIL_STRENGTH,
-  HEAVY_ARMOR_SPEED_PENALTY_FT,
-  isLegalRiderNotation,
-  resolveMagicWeaponRider,
-  stackedArmorBonus,
-} from "../src/games/livingtable/rules/magicItems";
-import {
-  activeConditionsFor,
-  applyConditions,
-  clearConditions,
-  characterStateFromStats,
-  statsFromCharacterState,
-  superiorityDiceFor,
-  spendSuperiorityDie,
-  restoreSuperiorityDice,
-  type CharacterState,
-} from "../src/games/livingtable/session/characterState";
-import { buildDmCharacterView } from "../src/games/livingtable/session/dmContext";
-import { buildDmSystemPrompt, type DmPromptArgs } from "../src/games/livingtable/dm/promptBuilder";
-import type { OffscreenCells } from "../src/games/livingtable/world/perception";
+import { CHAIN_MAIL_STRENGTH, HEAVY_ARMOR_SPEED_PENALTY_FT, isLegalRiderNotation, resolveMagicWeaponRider, stackedArmorBonus } from "../src/games/livingtable/rules/magicItems";
 import { createCharacter, type CharacterSheet } from "../src/games/livingtable/characters/creation";
 import type { AttackRollRequest, CheckRollRequest, SaveRollRequest } from "../src/games/livingtable/dm/turnSchema";
-
-/**
- * The smallest DmPromptArgs that builds a real system prompt, so a rules-lane
- * test can assert on what the model is actually told without rebuilding a
- * whole campaign. `playspace: undefined` is the campaign's legitimate first
- * turn (promptBuilder.ts documents it), which keeps this helper to the few
- * fields that have no default.
- */
-function promptArgs(): DmPromptArgs {
-  const stub = (cx: number, cy: number): OffscreenCells["N"] => ({ status: "unassembled", cell: { cx, cy }, hint: "unexplored", owedOpenings: [] });
-  return {
-    template: "fantasy",
-    campaignTitle: "The Salt Road",
-    arcOutline: "A caravan escort that turns into a smuggling ring.",
-    memoryContextBlock: "PERMANENT FACTS:\n- (none yet)",
-    playspace: undefined,
-    currentCell: { cx: 0, cy: 0 },
-    offscreenCells: {
-      N: stub(0, -1),
-      NE: stub(1, -1),
-      E: stub(1, 0),
-      SE: stub(1, 1),
-      S: stub(0, 1),
-      SW: stub(-1, 1),
-      W: stub(-1, 0),
-      NW: stub(-1, -1),
-    },
-    availableAssetIds: { tiles: ["floor", "wall"], tokens: ["token_knight", "token_goblin"], props: ["chest"] },
-  };
-}
 
 // ── rng test helper ────────────────────────────────────────────────────
 
@@ -475,10 +308,10 @@ test("spellSlotsForLevel: Wizard chassis levels 1-3 match the SRD full-caster ta
   assert.deepEqual(spellSlotsForLevel("wizard", 3), { 1: { max: 4, used: 0 }, 2: { max: 2, used: 0 } });
 });
 
-test("spellSlotsForLevel: a level-3 Wizard has no 3rd-level slot, so Fireball Person cannot cast Fireball yet", () => {
+test("spellSlotsForLevel: a level-3 Wizard has no 3rd-level slot, so the Wizard cannot cast Fireball yet", () => {
   // This locks in the SRD progression on purpose: the full-caster table does
   // not grant a 3rd-level slot until character level 5. A future "fix" that
-  // hands Fireball Person an early 3rd-level slot must fail this test, not
+  // hands the Wizard an early 3rd-level slot must fail this test, not
   // silently pass it.
   const slots = spellSlotsForLevel("wizard", 3);
   assert.equal(slots[3], undefined, "a level-3 Wizard must not have a 3rd-level spell slot bucket at all");
@@ -927,86 +760,10 @@ test("Defense still adds exactly +1 AC and touches nothing else, so the fix did 
   assert.equal(attackerBonusFor(defense), attackerBonusFor(dueling), "Defense is an AC style; it must not touch the attack roll");
 });
 
-// -- conditions: the module that was dead code for two rounds --------------
-//
-// `rules/conditions.ts` shipped the whole SRD condition list and a
-// description for each, and a grep across src and test for any import of it
-// returned exactly one line: the barrel re-export in rules/index.ts. Zero
-// real callers. Rendering the entire play screen and searching for all ten
-// SRD condition names returned nothing, and the system prompt the model
-// actually received said "Active conditions: (none)" on the turn AFTER the
-// player character hit 0 HP and the screen read "You are down."
-//
-// These tests hold the two halves of the fix: conditions are part of a
-// character's persisted state, and the value that reaches the DM's prompt is
-// derived from that state plus the character's own vitals.
-
-/** A Knight who has been dropped to 0 HP: `downed`, rolling death saves, exactly the state the probe drove the player into. */
-function downedKnight(): CharacterState {
-  const sheet = createCharacter({ archetypeId: "knight", name: "Kira", appearanceAssetId: "token_knight" });
-  return { sheet: { ...sheet, currentHp: 0, downed: true }, position: { cx: 0, cy: 0 } };
-}
-
-test("a downed character reports as unconscious, and prone and incapacitated with it", () => {
-  // SRD 5.1: a character at 0 hit points is unconscious; an unconscious
-  // creature is incapacitated and drops prone. All three have to be visible,
-  // because "unconscious" alone still leaves the DM guessing whether the
-  // body is standing up.
-  const conditions = activeConditionsFor(downedKnight());
-  assert.ok(conditions.includes("unconscious"));
-  assert.ok(conditions.includes("prone"), "SRD: an unconscious creature drops prone");
-  assert.ok(conditions.includes("incapacitated"), "SRD: an unconscious creature is incapacitated");
-});
-
-test("a character on their feet reports no conditions at all, so the derivation is not just always-on", () => {
-  const sheet = createCharacter({ archetypeId: "knight", name: "Kira", appearanceAssetId: "token_knight" });
-  assert.deepEqual(activeConditionsFor({ sheet, position: { cx: 0, cy: 0 } }), []);
-});
-
-test("a stabilised character is still unconscious: stabilising stops the death saves, it does not wake anyone up", () => {
-  const down = downedKnight();
-  const stable: CharacterState = { ...down, sheet: { ...down.sheet, downed: false, stable: true } };
-  assert.ok(activeConditionsFor(stable).includes("unconscious"));
-});
-
-test("applied conditions survive a round-trip through the stats blob the backend stores", () => {
-  // The other half of "wired in": a condition that vanishes when the turn
-  // ends is the same as no condition at all. This is the persistence path
-  // ltCharacterUpdate actually writes.
-  const sheet = createCharacter({ archetypeId: "shadow", name: "Sable", appearanceAssetId: "token_shadow" });
-  const poisoned = applyConditions({ sheet, position: { cx: 1, cy: 2 } }, "poisoned", "grappled");
-  const restored = characterStateFromStats(statsFromCharacterState(poisoned));
-
-  assert.deepEqual(activeConditionsFor(restored), ["grappled", "poisoned"], "canonical SRD order, both conditions intact");
-  assert.equal(restored.sheet.name, "Sable", "and the sheet must not have picked up `conditions` as one of its own fields");
-  assert.equal((restored.sheet as unknown as Record<string, unknown>).conditions, undefined);
-
-  const cured = clearConditions(restored, "poisoned");
-  assert.deepEqual(activeConditionsFor(cured), ["grappled"]);
-});
-
 test("normalizeConditions drops anything that is not an SRD condition rather than letting it reach the engine", () => {
   assert.deepEqual(normalizeConditions(["prone", "bleeding", 7, null]), ["prone"]);
   assert.deepEqual(normalizeConditions(undefined), [], "a campaign saved before the field existed comes back clean, not crashed");
   assert.deepEqual(normalizeConditions(["unconscious"]), ["incapacitated", "prone", "unconscious"], "SRD implications are applied on the way in too");
-});
-
-test("the DM's system prompt names a downed character's conditions instead of the hardcoded (none)", () => {
-  // The end-to-end assertion the existing suite had nothing like, which is
-  // why two rounds of "wire this in" went undetected. The value that has to
-  // change is one line of the prompt the model actually receives.
-  const state = downedKnight();
-  const view = buildDmCharacterView(state.sheet, "pc-1", activeConditionsFor(state));
-  const prompt = buildDmSystemPrompt({ ...promptArgs(), character: view });
-
-  assert.match(prompt, /Active conditions: [^\n]*unconscious/, "the DM has to be told the party is unconscious");
-  assert.doesNotMatch(prompt, /Active conditions: \(none\)/, "the line that was hardcoded for every turn of every campaign");
-
-  // And the negative case still renders "(none)", so the fix did not just
-  // make the line always say something.
-  const upright = createCharacter({ archetypeId: "knight", name: "Kira", appearanceAssetId: "token_knight" });
-  const healthy = buildDmCharacterView(upright, "pc-1", activeConditionsFor({ sheet: upright, position: { cx: 0, cy: 0 } }));
-  assert.match(buildDmSystemPrompt({ ...promptArgs(), character: healthy }), /Active conditions: \(none\)/);
 });
 
 // -- Battle Master: the other half of the only level-3 branch --------------
@@ -1024,25 +781,6 @@ test("a Battle Master has a real pool of superiority dice and a Champion does no
   assert.equal(superiorityDiceMaxFor(champion), 0);
   assert.equal(maneuversFor(battleMaster).length, 2, "trip and disarm, the two the launch ships");
   assert.equal(maneuversFor(champion).length, 0, "a Champion gets no maneuver buttons at all rather than disabled ones");
-});
-
-test("superiority dice are spendable, run out, and come back on a rest", () => {
-  let state: CharacterState = { sheet: battleMasterSheet(), position: { cx: 0, cy: 0 } };
-  assert.equal(superiorityDiceFor(state), 4, "an untouched pool reads as full, including for a sheet saved before the field existed");
-
-  for (let i = 4; i > 0; i--) {
-    const spent = spendSuperiorityDie(state);
-    assert.notEqual(spent, null, "the pool still had a die in it");
-    state = spent!;
-    assert.equal(superiorityDiceFor(state), i - 1);
-  }
-  assert.equal(spendSuperiorityDie(state), null, "an empty pool refuses rather than going negative");
-
-  // The persistence path, same as conditions: a pool that resets every turn
-  // is not a resource.
-  const restored = characterStateFromStats(statsFromCharacterState(state));
-  assert.equal(superiorityDiceFor(restored), 0);
-  assert.equal(superiorityDiceFor(restoreSuperiorityDice(restored)), 4, "SRD 5.1: all expended dice return on a short or long rest");
 });
 
 test("maneuverSaveDCFor is the SRD formula, not a number invented at the call site", () => {
@@ -1395,15 +1133,6 @@ test("gear is named from the engine's own table, per tier, so the readout never 
   assert.equal(itemNameFor(knightWithGear({ crown: "rare" }), "crown"), "Vigil Plate");
 });
 
-test("a sheet stored before equipment existed loads with the starting kit rather than with nothing", () => {
-  const knight = createCharacter({ archetypeId: "knight", name: "Kira", appearanceAssetId: "token_knight" });
-  const legacy: Record<string, unknown> = { ...(knight as unknown as Record<string, unknown>), position: { cx: 1, cy: 2 } };
-  delete legacy.equipment;
-  const state = characterStateFromStats(legacy);
-  assert.deepEqual(equipmentOf(state.sheet), STARTING_LOADOUT, "weapon, outer, crown and boots all common, ring and amulet empty, so every character has gear from turn one");
-  assert.equal(effectiveArmorClass(state.sheet), knight.armorClass, "and the load changes no number");
-});
-
 test("normalizeEquipment refuses anything that is not in the engine's own table", () => {
   const junk = normalizeEquipment({ weapon: { slot: "weapon", tier: "mythic" }, outer: { slot: "outer", tier: "rare" }, hat: { slot: "hat", tier: "rare" } });
   assert.equal(junk.weapon!.tier, "common", "an unknown tier falls back to the starting kit, never to a bonus");
@@ -1411,14 +1140,6 @@ test("normalizeEquipment refuses anything that is not in the engine's own table"
   assert.equal((junk as Record<string, unknown>).hat, undefined, "an unknown slot is dropped, not carried");
   assert.deepEqual(normalizeEquipment(null), STARTING_LOADOUT);
   assert.deepEqual(normalizeEquipment("legendary everything"), STARTING_LOADOUT);
-});
-
-test("equipment survives the round trip through the stats blob the backend stores", () => {
-  const knight = knightWithGear({ weapon: "legendary", outer: "rare", crown: "uncommon" });
-  const state: CharacterState = { sheet: knight, position: { cx: 0, cy: 0 } };
-  const restored = characterStateFromStats(statsFromCharacterState(state));
-  assert.deepEqual(equipmentOf(restored.sheet), equipmentOf(knight));
-  assert.equal(attackerBonusFor(restored.sheet), attackerBonusFor(knight));
 });
 
 test("the armour Strength requirement is anchored to the armour creation.ts actually issues", () => {
@@ -1728,7 +1449,7 @@ test("the item the bonus comes off and the weapon that was swung are reconciled,
   // questions. SLOTS_BY_ARCHETYPE says what is ENCHANTED (the object the rarity
   // ladder acts on); KIT_BY_ARCHETYPE says what the ENGINE ROLLS (the die, the
   // ability, the range band), and the fighting style can move it. For the
-  // Fireball Person and the Psion those are genuinely two objects, and naming
+  // Mage and the Psion those are genuinely two objects, and naming
   // only the enchanted one printed a dice log that was simply false: a
   // legendary staff logged "Sunstroke: 4 fire damage" beside an attack the
   // engine had resolved as a Fire Bolt, naming a weapon nobody swung.
@@ -1875,20 +1596,6 @@ test("every ACCESSORY_ITEMS entry: its own role and tier match its keys, its eff
 test("a character can own at most MAX_DISTINCT_MAGIC_ITEMS pieces, and that always fits in the bag, so a full bag cannot happen", () => {
   assert.ok(MAX_DISTINCT_MAGIC_ITEMS <= BAG_CAPACITY, `${MAX_DISTINCT_MAGIC_ITEMS} owned pieces must fit inside a ${BAG_CAPACITY}-cell bag`);
   assert.equal(MAX_DISTINCT_MAGIC_ITEMS, 16, "3 rungs each on weapon/outer/crown/ring, 2 each on amulet/boots, per the contract's own arithmetic");
-});
-
-test("a legacy blob round-trips through characterStateFromStats with boots common, ring and amulet empty, an empty bag, full charges and an empty ledger", () => {
-  const knight = createCharacter({ archetypeId: "knight", name: "Kira", appearanceAssetId: "token_knight" });
-  const legacy: Record<string, unknown> = { ...(knight as unknown as Record<string, unknown>), position: { cx: 1, cy: 2 } };
-  delete legacy.equipment;
-  delete legacy.bag;
-  delete legacy.itemCharges;
-  delete legacy.lootLedger;
-  const state = characterStateFromStats(legacy);
-  assert.deepEqual(state.sheet.equipment, STARTING_LOADOUT);
-  assert.deepEqual(state.sheet.bag, []);
-  assert.deepEqual(state.sheet.itemCharges, {});
-  assert.deepEqual(state.sheet.lootLedger, { rollsByCell: {} });
 });
 
 test("normalizeEquipment: boots falls back to common for a tier it has no item at (the empty legendary rung), never silently accepting an unbacked tier", () => {

@@ -30,7 +30,6 @@ open `dist/living-table.html` before anything is published.
 - `scripts/asset-bench/`: the asset bench (see its `BENCH.md`).
 - `scripts/kaykit/`: the 3D-to-pixel trial with KayKit models in Blender (see its `README.md`).
 - `DESIGN.md`: how the game works and why.
-- `CAMPAIGN_TEMPLATE.md`: how to write a campaign by hand, as a fillable template.
 
 ## Licence
 

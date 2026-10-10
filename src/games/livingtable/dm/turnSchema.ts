@@ -100,7 +100,6 @@ import type { CheckResult } from "../rules/checks";
 import { resetTurnEconomy, spendAction, type TurnEconomy } from "../rules/actionEconomy";
 import { EQUIPMENT_FORBIDDEN_WIRE_KEYS, GEAR_ASSET_ID_PREFIX, isMagicGearName, MAGIC_GEAR_NAMES } from "../characters/equipmentTypes";
 import { parseDiceNotation } from "../rules/dice";
-import { ATTITUDES, type StoryUpdate } from "../campaign/types";
 
 // ── world actions ──────────────────────────────────────────────────────
 //
@@ -427,15 +426,6 @@ export interface DmTurn {
   rollRequests?: RollRequest[];
   menuHint?: string[];
   memoryFacts?: DmMemoryFact[];
-  /**
-   * A written campaign's state changes, by id: the beats, clues, truths and
-   * outcomes that happened this turn. Shape only here; whether each id
-   * exists and whether its gate has opened is campaign/engine.ts's call,
-   * made against the module, and a refused id comes back to the DM as an
-   * engine note rather than costing the turn. Optional, and ignored on a
-   * campaign the AI planned.
-   */
-  story?: StoryUpdate;
 }
 
 // ── small validation helpers ────────────────────────────────────────────
@@ -497,9 +487,6 @@ const ATTACK_RANGES: readonly AttackRange[] = ["melee", "ranged"];
 const MEMORY_FACT_CATEGORIES: readonly MemoryFactCategory[] = ["npc", "promise", "item", "event", "thread"];
 /** At most this many facts per turn, so an optional field can never balloon a turn the player paid for. */
 const MAX_MEMORY_FACTS = 6;
-/** At most this many ids in any one list of a turn's `story`; one turn of play does not resolve more than a handful of things. */
-const MAX_STORY_IDS = 8;
-const STORY_ID_LISTS = ["beats", "clues", "learned", "outcomes", "dead"] as const;
 /**
  * At most this many rolls one turn may ask the engine for.
  *
@@ -743,27 +730,6 @@ function validateMemoryFact(v: unknown, what: string): DmMemoryFact {
   }
 
   return { category, key, fact, status };
-}
-
-/** The shape of a turn's `story` report: lists of short ids, and attitude shifts on the one scale campaign/types.ts defines. */
-function validateStoryUpdate(v: unknown): StoryUpdate {
-  const rec = asRecord(v, "story");
-  const out: StoryUpdate = {};
-  for (const key of STORY_ID_LISTS) {
-    if (rec[key] === undefined) continue;
-    const raw = asArray(rec[key], `story.${key}`);
-    if (raw.length > MAX_STORY_IDS) throw new Error(`story.${key} has ${raw.length} entries, at most ${MAX_STORY_IDS}. Report only what happened this turn.`);
-    out[key] = raw.map((id, i) => asString(id, `story.${key}[${i}]`, 60));
-  }
-  if (rec.attitudes !== undefined) {
-    const raw = asArray(rec.attitudes, "story.attitudes");
-    if (raw.length > MAX_STORY_IDS) throw new Error(`story.attitudes has ${raw.length} entries, at most ${MAX_STORY_IDS}.`);
-    out.attitudes = raw.map((a, i) => {
-      const entry = asRecord(a, `story.attitudes[${i}]`);
-      return { id: asString(entry.id, `story.attitudes[${i}].id`, 60), attitude: asEnum(entry.attitude, `story.attitudes[${i}].attitude`, ATTITUDES) };
-    });
-  }
-  return out;
 }
 
 function validateExit(v: unknown, what: string): Exit {
@@ -1483,13 +1449,6 @@ export function validateDmTurn(value: unknown, context: DmTurnContext = {}): DmT
       }
     });
     if (facts.length > 0) turn.memoryFacts = facts;
-  }
-  if (root.story !== undefined && root.story !== null) {
-    try {
-      turn.story = validateStoryUpdate(root.story);
-    } catch (e) {
-      note(e);
-    }
   }
 
   // Batched, not fail-fast, and this is the whole point: `completeJson` gives

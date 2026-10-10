@@ -50,7 +50,20 @@ export function rollDie(sides: number, rng: () => number = Math.random): number 
   return Math.floor(rng() * sides) + 1;
 }
 
+/**
+ * A flat amount written as a bare whole number ("1"), the way an SRD statblock
+ * writes damage with no dice in it (the Rat's bite: "Hit: 1 piercing damage").
+ * Null for anything else. parseDiceNotation stays strict, so dice validators
+ * still refuse a bare number where dice are required; only rolling accepts it.
+ */
+export function flatAmount(notation: string): number | null {
+  const cleaned = notation.replace(/\s+/g, "");
+  return /^\d+$/.test(cleaned) ? Number(cleaned) : null;
+}
+
 export function rollDice(notation: string, rng: () => number = Math.random): DiceResult {
+  const flat = flatAmount(notation);
+  if (flat !== null) return { total: flat, rolls: [], notation };
   const { count, sides, modifier } = parseDiceNotation(notation);
   const rolls: number[] = [];
   for (let i = 0; i < count; i++) rolls.push(rollDie(sides, rng));

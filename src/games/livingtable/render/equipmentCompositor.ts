@@ -41,7 +41,7 @@ import {
   type PaletteRemap,
   type TokenRenderPlan,
 } from "../characters/equipmentTypes";
-import { spriteDimensions, TRANSPARENT, type SpriteGrid } from "./spritePixels";
+import { BASE_SPRITE_SIZE, glowUnit, spriteDimensions, TRANSPARENT, type SpriteGrid } from "./spritePixels";
 
 /**
  * One thing to paint, in the order it must be painted.
@@ -50,7 +50,8 @@ import { spriteDimensions, TRANSPARENT, type SpriteGrid } from "./spritePixels";
  * own top-left corner. They are 0/0 for the body and for every same-height gear
  * layer, which is the case the art contract promises; the glow raster is the
  * one draw that is deliberately bigger than the sprite and sits at
- * -GLOW_MARGIN on both axes.
+ * -GLOW_MARGIN on both axes (-GLOW_MARGIN source pixels per LOGICAL pixel, so
+ * -2 at 16 px per tile and -4 at 32; see `spriteSize` on `compositeToken`).
  */
 export interface CompositeDraw {
   pixels: SpriteGrid;
@@ -131,15 +132,23 @@ export interface ResolvedLayer extends EquipmentLayerPlan {
  *
  * Layers are sorted by their `layer` integer, which is DATA on the slot rather
  * than derived from the slot's role. That is exactly what lets the Knight's
- * shield sit in FRONT of him at 35 while the Shadow's cloak sits BEHIND her at
+ * shield sit in FRONT of him at 35 while the Rogue's cloak sits BEHIND her at
  * 10 even though both are the `outer` role. The sort is stable and the array is
  * built in plan order, so a tie (which the shipped table never produces) is
  * broken by the order the slots were listed in.
+ *
+ * `spriteSize` is the library's source resolution (source pixels per tile edge,
+ * default 16) and matters to exactly one thing here: the glow. Every layer is
+ * aligned by its own grid size and so is resolution-blind, but the rim is
+ * authored as a two-band gradient one LOGICAL pixel per band, so it is built
+ * `spriteSize / 16` source pixels thick, and its raster margin grows with it.
+ * At the default this is the ring it has always been.
  */
 export function compositeToken(
   plan: TokenRenderPlan,
   lookup: SpriteLookup,
   frame: GlowFrame = 0,
+  spriteSize: number = BASE_SPRITE_SIZE,
 ): readonly CompositeDraw[] {
   const body = lookup(plan.bodySpriteId);
   if (!body) return [];
@@ -161,7 +170,7 @@ export function compositeToken(
   const draws: CompositeDraw[] = [];
 
   // ONLY GEAR DRAWN IN FRONT OF THE BODY MAY CATCH THE LIGHT. A rim rastered
-  // from a layer BEHIND the body (the Shadow's cloak at 10, the Psion's barrier
+  // from a layer BEHIND the body (the Rogue's cloak at 10, the Psion's barrier
   // field) is grown from a full-body silhouette, so it comes out as a closed
   // outline round the whole figure, which is what a strategy game of this era
   // used to mean "this unit is selected" and not what it used to mean
@@ -171,8 +180,9 @@ export function compositeToken(
   // know what a role is.
   const glowing = resolved.filter((layer) => layer.glowBands > 0 && layer.layer >= LAYER_BODY);
   if (glowing.length > 0) {
-    const ring = glowRaster(glowing, width, height, frame);
-    draws.push({ pixels: ring, offsetX: -GLOW_MARGIN, offsetY: -GLOW_MARGIN, remap: null });
+    const ring = glowRaster(glowing, width, height, frame, spriteSize);
+    const margin = GLOW_MARGIN * glowUnit(spriteSize);
+    draws.push({ pixels: ring, offsetX: -margin, offsetY: -margin, remap: null });
   }
 
   const toDraw = (layer: ResolvedLayer): CompositeDraw => ({
@@ -206,7 +216,7 @@ export function compositeToken(
 //
 // IT USED TO BE A CLOSED RING AND THAT WAS THE DEFECT. The first version
 // dilated every glowing layer's whole silhouette in both bands, so a legendary
-// Fireball Person painted 175 ring pixels round a 139 pixel body: an unbroken
+// Wizard painted 175 ring pixels round a 139 pixel body: an unbroken
 // hard-edged saturated oval, larger than the character, which at phone scale
 // read as a gold letter O with a dark smear inside it. The era signalled
 // enchantment with a sparkle over the item, a rim light along one edge of the
@@ -279,17 +289,37 @@ function subtract(mask: Mask, hole: Mask, width: number, height: number): Mask {
  * point. Band 2 passes the band-1 SET as `inside` rather than the silhouette,
  * so the two bands stay parallel and the rim is two pixels of gradient rather
  * than two disconnected arcs.
+ *
+ * `reach` is how far, in source pixels, to look along the row and down the
+ * column for the shape the pixel was grown from. It is 1 at 16 px per tile,
+ * which is the test above, and `glowUnit(spriteSize)` at a finer resolution,
+ * where a band is that many source pixels thick: the outer pixel of a thick
+ * band has its shape `reach` pixels away, not one. The straight-line test is
+ * what keeps diagonal-only corners falling away at any thickness, and it makes
+ * the rim of art upscaled by k exactly the k-times upscale of the original's.
  */
-function lowerRightRim(band: Mask, inside: Mask, width: number, height: number): Mask {
+function lowerRightRim(band: Mask, inside: Mask, width: number, height: number, reach = 1): Mask {
   const out = emptyMask(width, height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       if (!band[y]![x]) continue;
-      const right = x + 1 < width && inside[y]![x + 1] === true;
-      const below = y + 1 < height && inside[y + 1]![x] === true;
-      if (right || below) out[y]![x] = true;
+      for (let k = 1; k <= reach; k++) {
+        const right = x + k < width && inside[y]![x + k] === true;
+        const below = y + k < height && inside[y + k]![x] === true;
+        if (right || below) {
+          out[y]![x] = true;
+          break;
+        }
+      }
     }
   }
+  return out;
+}
+
+/** `steps` successive 8-neighbour dilations: every cell within Chebyshev distance `steps` of a set cell. One step is `dilate`. */
+function dilateBy(mask: Mask, width: number, height: number, steps: number): Mask {
+  let out = mask;
+  for (let i = 0; i < steps; i++) out = dilate(out, width, height);
   return out;
 }
 
@@ -326,10 +356,26 @@ function lowerRightRim(band: Mask, inside: Mask, width: number, height: number):
  * Exported (contract v2) for render/gearIcon.ts, which rasters the identical
  * rim for a single icon sprite -- `compositeToken`'s own multi-layer union is
  * simply the one-layer case of the same function.
+ *
+ * `spriteSize` is the library's source resolution (default 16). A band is one
+ * LOGICAL pixel, so at 32 px per tile it is two source pixels thick and the
+ * margin is `GLOW_MARGIN * 2` source pixels a side: the rim keeps its weight on
+ * screen instead of shrinking to a hairline beside the art it lights. The shape
+ * rule is resolution-independent, so the raster of art upscaled by k is exactly
+ * the k-times upscale of the original's raster (a test holds it to that). At
+ * the default every line below computes what it always did.
  */
-export function glowRaster(layers: readonly ResolvedLayer[], width: number, height: number, frame: GlowFrame): SpriteGrid {
-  const gw = width + 2 * GLOW_MARGIN;
-  const gh = height + 2 * GLOW_MARGIN;
+export function glowRaster(
+  layers: readonly ResolvedLayer[],
+  width: number,
+  height: number,
+  frame: GlowFrame,
+  spriteSize: number = BASE_SPRITE_SIZE,
+): SpriteGrid {
+  const unit = glowUnit(spriteSize);
+  const margin = GLOW_MARGIN * unit;
+  const gw = width + 2 * margin;
+  const gh = height + 2 * margin;
 
   const band1: (number | undefined)[][] = Array.from({ length: gh }, () => new Array<number | undefined>(gw).fill(undefined));
   const band2: (number | undefined)[][] = Array.from({ length: gh }, () => new Array<number | undefined>(gw).fill(undefined));
@@ -342,26 +388,26 @@ export function glowRaster(layers: readonly ResolvedLayer[], width: number, heig
     for (let sy = 0; sy < layer.pixels.length; sy++) {
       const row = layer.pixels[sy];
       if (!row) continue;
-      const gy = sy + layer.offsetY + GLOW_MARGIN;
+      const gy = sy + layer.offsetY + margin;
       if (gy < 0 || gy >= gh) continue;
       for (let sx = 0; sx < row.length; sx++) {
         const index = row[sx];
         if (index === undefined || remappedIndex(index, layer.remap) < 0) continue;
-        const gx = sx + GLOW_MARGIN;
+        const gx = sx + margin;
         if (gx < 0 || gx >= gw) continue;
         occupied[gy]![gx] = true;
       }
     }
 
-    const within1 = dilate(occupied, gw, gh);
-    const within2 = layer.glowBands >= 2 ? dilate(within1, gw, gh) : null;
+    const within1 = dilateBy(occupied, gw, gh, unit);
+    const within2 = layer.glowBands >= 2 ? dilateBy(within1, gw, gh, unit) : null;
 
     // Band N is the shell at Chebyshev distance exactly N; the rim is the part
     // of that shell facing the light. Band 2 is rimmed against the whole of
     // band 1's shell rather than against band 1's own rim, so the two bands run
     // parallel and read as one two-pixel gradient instead of two arcs.
-    const rim1 = lowerRightRim(subtract(within1, occupied, gw, gh), occupied, gw, gh);
-    const rim2 = within2 === null ? null : lowerRightRim(subtract(within2, within1, gw, gh), within1, gw, gh);
+    const rim1 = lowerRightRim(subtract(within1, occupied, gw, gh), occupied, gw, gh, unit);
+    const rim2 = within2 === null ? null : lowerRightRim(subtract(within2, within1, gw, gh), within1, gw, gh, unit);
 
     // THE PULSE TRAVELS, IT DOES NOT BLINK. Frame 1 swaps the two band indices
     // rather than dropping both to a dimmer pair. Dimming everything at once is

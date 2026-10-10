@@ -62,25 +62,25 @@ export const SPELL_EFFECTS: Record<string, SpellEffect> = {
   // Cleric
   "Sacred Flame": { kind: "save", ability: "dex", damage: "1d8", damageType: "radiant", halfOnSave: false, rangeFt: 60 },
   "Cure Wounds": { kind: "heal", dice: "1d8" },
-  Bless: { kind: "utility", note: "Everyone with you steadies. No number changes on your sheet yet in this build." },
+  Bless: { kind: "utility", note: "Everyone with you steadies. No number on your sheet changes for it yet." },
   "Guiding Bolt": { kind: "attack", damage: "4d6", damageType: "radiant", rangeFt: 120 },
   // SRD 5.1's Spiritual Weapon is cast at a point within 60 feet and the
   // spectral weapon then attacks a creature within 5 feet of itself; with no
   // separate summoned token on the board, 60 feet is the honest reach of the
   // whole effect from where the caster is standing.
   "Spiritual Weapon": { kind: "attack", damage: "1d8", damageType: "force", rangeFt: 60 },
-  "Lesser Restoration": { kind: "utility", note: "A disease or a lingering condition lifts. Conditions are not tracked on the sheet yet in this build." },
+  "Lesser Restoration": { kind: "utility", note: "A disease or a lingering condition lifts. Conditions are not tracked on your sheet yet." },
   // Wizard
   "Fire Bolt": { kind: "attack", damage: "1d10", damageType: "fire", rangeFt: 120 },
   "Magic Missile": { kind: "autohit", damage: "3d4+3", damageType: "force", rangeFt: 120 },
-  Shield: { kind: "utility", note: "A shimmer turns the next blow aside. Reactions are not tracked on the sheet yet in this build." },
+  Shield: { kind: "utility", note: "A shimmer turns the next blow aside. Reactions are not tracked on your sheet yet." },
   // A 15-foot cone. Measured here as a plain distance to the target, which is
   // the simplification this board already makes everywhere else (Chebyshev
   // tiles, see world/reach.ts): the cone's shape is not modelled, its REACH
   // is, and 15 feet is three tiles.
   "Burning Hands": { kind: "save", ability: "dex", damage: "3d6", damageType: "fire", halfOnSave: true, rangeFt: 15 },
   "Scorching Ray": { kind: "attack", damage: "2d6", damageType: "fire", attacks: 3, rangeFt: 120 },
-  "Misty Step": { kind: "utility", note: "You blink a short distance. Teleport movement is not on the board yet in this build." },
+  "Misty Step": { kind: "utility", note: "You blink a short distance. Jumping across the board is not possible yet." },
 };
 
 /** SRD 5.1's "touch": the caster's own square and everything adjacent to it, which is one tile on this board. */
@@ -142,7 +142,7 @@ export interface CastableSpell {
  * Every spell this character knows, each marked castable or not. A cantrip
  * (level 0) is always castable and costs no slot, per SRD 5.1; a levelled
  * spell needs a remaining slot OF THAT LEVEL, which is exactly the rule that
- * makes a level-3 "Fireball Person" unable to cast Fireball and is why the
+ * makes a level-3 "Wizard" unable to cast Fireball and is why the
  * launch list stops where it does (see rules/spells.ts's own note).
  */
 export function castableSpells(sheet: CharacterSheet): CastableSpell[] {
@@ -232,7 +232,7 @@ export function cantripNameFor(sheet: CharacterSheet): string | null {
  * The reconciled `identity.label` is used only once the weapon slot is
  * actually AT a magic tier (`itemName !== baseItemName`): at common there is
  * nothing enchanted to disambiguate, and printing the parenthetical anyway
- * would have every Fireball Person's Attack button read "Fire Bolt
+ * would have every Wizard's Attack button read "Fire Bolt
  * (Quarterstaff)" from level one, never just "Fire Bolt".
  */
 function isMagicWeaponTier(sheet: CharacterSheet): boolean {
@@ -294,7 +294,7 @@ export function castBlockedReason(args: {
 }): string | null {
   if (args.downed) return "You are on the floor. No spells until you are back up.";
   if (args.entry.blockedReason) return args.entry.blockedReason;
-  if (!args.entry.effect) return `${args.entry.spell.name} is described on your sheet but has no rules in this build yet.`;
+  if (!args.entry.effect) return `${args.entry.spell.name} is on your sheet, but the game cannot play it out yet.`;
   if (!args.casterAt) return "You are not standing in this room yet.";
   if (args.round && !isPlayersTurn(args.round)) return "It is not your turn yet.";
   if (args.round && !activeCombatant(args.round)?.economy.action) return "You have already taken your action this turn. End your turn to get it back.";

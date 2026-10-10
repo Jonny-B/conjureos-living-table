@@ -12,3 +12,5 @@ export * from "./connectivity";
 export * from "./perception";
 export * from "./manipulation";
 export * from "./reach";
+export * from "./pathing";
+export * from "./visibility";

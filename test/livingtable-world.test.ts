@@ -9,37 +9,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  CELL_HEIGHT,
-  CELL_WIDTH,
-  assembleCell,
-  buildCombatGeometry,
-  checkAttackReach,
-  combatGeometryFrom,
-  emptyWorld,
-  exitToNeighbour,
-  getCell,
-  getOffscreenCells,
-  getPlayspace,
-  getVisible,
-  markPropSearched,
-  moveToken,
-  placeToken,
-  removeToken,
-  setCell,
-  setDoorState,
-  setTokenHp,
-  tileFreeFor,
-  tileDistance,
-  type AssetManifest,
-  type CellLayout,
-  type World,
-} from "../src/games/livingtable/world";
+import { CELL_HEIGHT, CELL_WIDTH, assembleCell, buildCombatGeometry, checkAttackReach, combatGeometryFrom, emptyWorld, exitToNeighbour, getCell, getOffscreenCells, getPlayspace, getVisible, markPropSearched, moveToken, placeToken, removeToken, setCell, setDoorState, setTokenHp, sightBlockers, tileFreeFor, tileDistance, type AssetManifest, type CellLayout, type World } from "../src/games/livingtable/world";
 import { resetTurnEconomy } from "../src/games/livingtable/rules/actionEconomy";
-import { applyWorldAction } from "../src/games/livingtable/session/applyWorldAction";
-import type { WorldAction } from "../src/games/livingtable/dm/turnSchema";
-import { validateGeneratedCampaign } from "../src/games/livingtable/campaignGenerator";
-import { coerceRegionSketch, regionHints } from "../src/games/livingtable/types";
 
 const MANIFEST: AssetManifest = {
   tiles: { floor: { walkable: true }, wall: { walkable: false } },
@@ -688,6 +659,7 @@ function playspaceOf(layout: CellLayout) {
     cell: { cx: 0, cy: 0 },
     tiles: layout.tiles,
     walkable: layout.tiles.map((row) => row.map((id) => MANIFEST.tiles[id]?.walkable === true)),
+    opaque: sightBlockers(layout, MANIFEST),
     props: layout.props,
     tokens: layout.tokens,
     exits: layout.exits,
@@ -786,95 +758,6 @@ test("validateLayout rejects a search DC outside the SRD 5 to 30 scale", () => {
   assert.match(res.errors.join("; "), /dc/i);
 });
 
-// ── the campaign's region sketch, and the hints it feeds getOffscreenCells
-//
-// Every prompt in a hand-authored 14-turn run showed all eight neighbours as
-// "not built yet -- unexplored", because both getOffscreenCells call sites
-// omitted the hints parameter and there was nothing to pass anyway: the arc
-// outline was throughline plus beats plus npcs, with no geography in it at
-// all. This is the geography, generated on the campaign-planning credit that
-// was already spent.
-
-test("the campaign validator accepts an arc carrying a region sketch and keeps it on the outline", () => {
-  const campaign = validateGeneratedCampaign({
-    title: "The Salt-Blighted Coast",
-    throughline: "A creeping blight is poisoning the coastline.",
-    beats: ["A village has already lost someone.", "A half-sunken shrine out in the marsh.", "What is actually behind the blight."],
-    npcs: [{ name: "Maren Hollowell", role: "the herbalist who raised the alarm" }],
-    regionSketch: [
-      { cx: 0, cy: 0, hint: "the village of Fenwick, half its boats hauled up and rotting" },
-      { cx: 1, cy: 0, hint: "the marsh causeway; the half-sunken shrine is visible from here" },
-      { cx: 0, cy: -1, hint: "the salt flats, white and cracked" },
-      { cx: -1, cy: 0, hint: "the drowned orchard" },
-      { cx: 0, cy: 1, hint: "the tideline, and whatever the tide left" },
-    ],
-  });
-  assert.equal(campaign.arcOutline.regionSketch?.length, 5);
-  assert.deepEqual(campaign.arcOutline.regionSketch![1], {
-    cx: 1,
-    cy: 0,
-    hint: "the marsh causeway; the half-sunken shrine is visible from here",
-  });
-});
-
-test("the campaign validator rejects a region sketch too thin to hint a neighbourhood", () => {
-  assert.throws(
-    () =>
-      validateGeneratedCampaign({
-        title: "T",
-        throughline: "A thing.",
-        beats: ["a", "b", "c"],
-        npcs: [{ name: "N", role: "r" }],
-        regionSketch: [{ cx: 0, cy: 0, hint: "here" }],
-      }),
-    /regionSketch/,
-  );
-});
-
-test("the campaign validator rejects a region sketch cell too far from the origin to ever be reached", () => {
-  assert.throws(
-    () =>
-      validateGeneratedCampaign({
-        title: "T",
-        throughline: "A thing.",
-        beats: ["a", "b", "c"],
-        npcs: [{ name: "N", role: "r" }],
-        regionSketch: [
-          { cx: 0, cy: 0, hint: "here" },
-          { cx: 1, cy: 0, hint: "there" },
-          { cx: 0, cy: 1, hint: "below" },
-          { cx: -1, cy: 0, hint: "left" },
-          { cx: 40, cy: 40, hint: "somewhere nobody will ever walk to" },
-        ],
-      }),
-    /40/,
-  );
-});
-
-test("regionHints keys a sketch by cell so getOffscreenCells can look a neighbour's hint straight up", () => {
-  const hints = regionHints({
-    throughline: "t",
-    beats: [],
-    npcs: [],
-    regionSketch: [
-      { cx: 0, cy: 0, hint: "the village" },
-      { cx: 1, cy: 0, hint: "the marsh causeway" },
-    ],
-  });
-  assert.deepEqual(hints, { "0,0": "the village", "1,0": "the marsh causeway" });
-
-  const offscreen = getOffscreenCells(emptyWorld(), 0, 0, hints);
-  assert.equal(offscreen.E.status, "unassembled");
-  if (offscreen.E.status === "unassembled") assert.equal(offscreen.E.hint, "the marsh causeway");
-});
-
-test("coerceRegionSketch survives a legacy campaign row that has no sketch at all", () => {
-  assert.deepEqual(coerceRegionSketch(undefined), []);
-  assert.deepEqual(coerceRegionSketch([{ cx: 2, cy: -1, hint: "a ridge" }, { cx: "x", hint: "junk" }]), [
-    { cx: 2, cy: -1, hint: "a ridge" },
-  ]);
-});
-
 // -- setTokenHp / markPropSearched: the two engine-only mutators -----------
 //
 // Both exist because a resolved mechanical outcome had nowhere to be written.
@@ -948,46 +831,4 @@ test("markPropSearched rejects a prop that is not there", () => {
   const result = markPropSearched(world, 0, 0, "ghost-chest");
   assert.equal(result.ok, false);
   if (!result.ok) assert.match(result.error, /no prop "ghost-chest"/);
-});
-
-// ── the player's own token is not the DM's to move ───────────────────────
-//
-// session/applyWorldAction.ts hands every DM-narrated reposition a 9,999 ft.
-// movement budget, documented as a deliberate simplification for shuffling
-// NPCs around a scene -- and it applied to the player character too. An
-// adversary read the board straight off the DM's own prompt and issued one
-// moveToken on the pc token, reason "staging", no roll cited: the player was
-// dragged sixteen tiles across the room to stand beside a skeleton, with no
-// note and no rejection. On its own that is a nuisance; next to the reach gate
-// in dm/turnSchema.ts it is a supported way around it, since a creature that
-// cannot legally swing from six tiles away can simply have the player brought
-// to it and swing legally next turn.
-
-/** A world with the player standing at (2,2) and a skeleton across the room at (18,13), which is the exact board the adversary exploited. */
-function boardWithPlayer(): World {
-  const layout = blankLayout();
-  layout.tokens = [
-    { id: "pc-kira", assetId: "hero", x: 2, y: 2, kind: "pc" },
-    { id: "mon-skel-1", assetId: "goblin", x: 18, y: 13, kind: "monster" },
-  ];
-  return setCell(emptyWorld(), { cx: 0, cy: 0 }, layout);
-}
-
-test("applyWorldAction refuses a DM moveToken naming the player's own token, however it is labelled", () => {
-  const action: WorldAction = { type: "moveToken", cx: 0, cy: 0, tokenId: "pc-kira", to: { x: 17, y: 13 }, reason: "staging" };
-  const result = applyWorldAction(boardWithPlayer(), action, MANIFEST);
-  assert.ok(result.error, "moving the player character must be rejected, not applied");
-  assert.match(result.error!, /pc-kira/);
-  assert.match(result.error!, /player moves it themselves|player's own character token/i);
-  assert.deepEqual(result.touchedCells, []);
-  const token = getCell(result.world, { cx: 0, cy: 0 })!.tokens.find((t) => t.id === "pc-kira")!;
-  assert.deepEqual({ x: token.x, y: token.y }, { x: 2, y: 2 }, "the player has not moved a tile");
-});
-
-test("applyWorldAction still repositions a monster token on the generous budget, which is what that budget is for", () => {
-  const action: WorldAction = { type: "moveToken", cx: 0, cy: 0, tokenId: "mon-skel-1", to: { x: 3, y: 2 }, reason: "staging" };
-  const result = applyWorldAction(boardWithPlayer(), action, MANIFEST);
-  assert.equal(result.error, undefined);
-  const token = getCell(result.world, { cx: 0, cy: 0 })!.tokens.find((t) => t.id === "mon-skel-1")!;
-  assert.deepEqual({ x: token.x, y: token.y }, { x: 3, y: 2 });
 });

@@ -1287,6 +1287,230 @@ export const MATERIAL_VARIANTS: Record<string, readonly string[]> = {
 };
 
 // ---------------------------------------------------------------------------
+// Wall profiles: stone walls seen from above, one tile per shape.
+//
+// RENDER-ONLY. These are not tiles the DM lays and none is in FIELD_TILES,
+// MATERIAL_VARIANTS or the renderer's VARIANT_SETS. The DM keeps laying
+// `wall_stone` (and _b, _c, _top, _base); at draw time render/wallProfiles.ts
+// reads each wall cell's four neighbours as a 4-bit mask (N=1, E=2, S=4, W=8,
+// the same bits as terrainEdges) and swaps in `wall_stone_join_<join>`, where
+// <join> spells the joined sides in n, e, s, w order. A wall whose south
+// neighbour is not wall shows a FACE (rows 6..15, the shipped ashlar and its
+// graded base shadow) under a thin cap band (rows 0..5); a wall whose south
+// neighbour is wall shows CAP ONLY, all 16 rows, so a north-south run is a
+// stone strip seen from above and a thick wall's inner rows are all cap.
+//
+// Palette is the stone wall's own. OUTLINE: edges and mortar. ROCK_DEEP: face
+// joints and shadow. ROCK_SHADE: cap joints and the shaded east edge.
+// ROCK_BODY: the lip shade and the face body. ROCK_LIT: the cap surface.
+// STEEL_LIGHT: the cap's lit edge, as wall_stone_top rows 0..1 already use.
+// CREAM: specks. Light comes from the upper left, so the lit edge is north and
+// west and the shade is east.
+//
+// The two cap surfaces are frozen literals, not formulas, for rule 2 of the
+// file header: a joint that is a function of (x, y) is a ruler laid across the
+// room. CAP_RUN_ART is the strip (joints run ACROSS it, so the slabs lie end to
+// end), CAP_BAND_ART the thin band over a face (joints run DOWN it). Rows 0..1
+// and 14..15 of every run variant are joint-free so a run, a door jamb and a
+// junction all meet without doubling a joint at the tile seam. Columns 0..1 and
+// 14..15 are overwritten by the open-side edges below, so every feature that
+// has to survive an edge sits in columns 2..13.
+// ---------------------------------------------------------------------------
+
+const CAP_RUN_ART: readonly (readonly string[])[] = [
+  [
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRQRRRRRRRRRRR",
+    "RRRQQRRRRRRRRQRR",
+    "RRRRRRRRRRRRRQRR",
+    "RRRRRRRRcRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "PPPPPPPPPPPRRRRR",
+    "RRRRRRRRRRPPPPPP",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRQRRRRRRRRRR",
+    "RRRRQQRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+  ],
+  [
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRQRRRRRRRRRRRRR",
+    "RRQQRRRRRRRRRRRR",
+    "RRRRRRRRRRRQRRRR",
+    "RRRRRRRRRRQQRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "PPPPPPPPPPPPPPPP",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+  ],
+  [
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "PPPPPPPPPPPPPPPP",
+    "RRRRRRRRRRRRRRRR",
+    "RRRQRRRRRRRRRRRR",
+    "RRQQRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRQRRRRR",
+    "RRRRRRRRRQQRRRRR",
+    "PPPPPPPPPPPPPPPP",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+    "RRRRRRRRRRRRRRRR",
+  ],
+];
+
+const CAP_BAND_ART: readonly (readonly string[])[] = [
+  ["RRRRRRRRRRRRRRRR", "RRRRRRRRRRRRRRRR", "RRRRRRPRRRRQRRRR", "RRRRRRPRRRRRRRRR"],
+  ["RRRRRRRRRRRRRRRR", "RRRRRRRRRRRRRRRR", "RRRQRRRRRRRPRRRR", "RRRRRRRRRRRPRRcR"],
+  ["RRRRRRRRRRRRRRRR", "RRRRRRRRRRRRRRRR", "RRPRRRRRRRRRRRQR", "RRPRRRRRRRRRQRRR"],
+];
+
+const WALL_JOIN_PREFIX = "wall_stone_join_";
+
+/** Index is the 4-bit mask (N=1, E=2, S=4, W=8). The label is what the join is, for the roster name. */
+const WALL_JOINS: ReadonlyArray<readonly [join: string, label: string]> = [
+  ["none", "Pillar"],
+  ["n", "South End"],
+  ["e", "West End"],
+  ["ne", "Corner (South-West)"],
+  ["s", "North End"],
+  ["ns", "North-South Run"],
+  ["es", "Corner (North-West)"],
+  ["nes", "Junction (Leaves East)"],
+  ["w", "East End"],
+  ["nw", "Corner (South-East)"],
+  ["ew", "East-West Run"],
+  ["new", "Junction (From North)"],
+  ["sw", "Corner (North-East)"],
+  ["nsw", "Junction (Leaves West)"],
+  ["esw", "Junction (Leaves South)"],
+  ["nesw", "Crossing"],
+];
+
+/** The two long-run shapes, the bulk of every room, scatter three ways like the wall face does. */
+const WALL_JOIN_VARIANTS: Record<string, readonly string[]> = { ew: ["_b", "_c"], ns: ["_b", "_c"] };
+
+const WALL_FACE_IDS = ["wall_stone", "wall_stone_b", "wall_stone_c"];
+
+/**
+ * One join, drawn from its mask. A faced join (south open) is the cap band, a
+ * lip shade and a lip line over the shipped wall face and its graded base
+ * shadow; a cap-only join is the run surface top to bottom. Then the edges:
+ * every open side gets an OUTLINE edge, a STEEL_LIGHT lit inner edge on the
+ * north and west and a ROCK_SHADE one on the east; a cap-only cell that joins
+ * east or west gets its edge from row 6 down, where the cap drops to its
+ * neighbour's face; and the two inner corners are closed by hand.
+ */
+function wallJoinPixels(mask: number, variant: number): number[][] {
+  const n = (mask & 1) !== 0;
+  const e = (mask & 2) !== 0;
+  const s = (mask & 4) !== 0;
+  const w = (mask & 8) !== 0;
+  const px: number[][] = s
+    ? toPixels(CAP_RUN_ART[variant]!)
+    : [
+        ...toPixels(CAP_BAND_ART[variant]!),
+        new Array<number>(16).fill(ROCK_BODY),
+        new Array<number>(16).fill(OUTLINE),
+        ...tile(WALL_FACE_IDS[variant]!).slice(7, 14),
+        ...tile("wall_stone_base").slice(13, 16),
+      ];
+  const set = (x: number, y: number, v: number) => {
+    px[y]![x] = v;
+  };
+  // Face ends: the lit edge of the first block on an open west, the dark joint on an open east.
+  if (!s) {
+    for (let y = 6; y <= 12; y++) {
+      if (!w) set(1, y, ROCK_LIT);
+      if (!e) set(14, y, ROCK_DEEP);
+    }
+  }
+  if (!n) {
+    for (let x = 0; x < 16; x++) {
+      set(x, 0, OUTLINE);
+      set(x, 1, STEEL_LIGHT);
+    }
+  }
+  if (!w) {
+    for (let y = 0; y < 16; y++) set(0, y, OUTLINE);
+    for (let y = n ? 0 : 1; y <= (s ? 15 : 4); y++) set(1, y, STEEL_LIGHT);
+  }
+  if (!e) {
+    for (let y = 0; y < 16; y++) set(15, y, OUTLINE);
+    for (let y = n ? 0 : 2; y <= (s ? 15 : 3); y++) set(14, y, ROCK_SHADE);
+  }
+  if (s && w) {
+    for (let y = 6; y < 16; y++) {
+      set(0, y, OUTLINE);
+      set(1, y, STEEL_LIGHT);
+    }
+  }
+  if (s && e) {
+    for (let y = 6; y < 16; y++) {
+      set(15, y, OUTLINE);
+      set(14, y, ROCK_SHADE);
+    }
+  }
+  if (n && w) set(0, 0, OUTLINE);
+  if (n && e) set(15, 0, OUTLINE);
+  if (!n && !w) set(1, 1, CREAM);
+  return px;
+}
+
+/**
+ * Both jambs of a north-south door, as one overlay on the door's own square.
+ * DERIVED from the joins so they always match them: rows 0..1 are the run's
+ * last two, row 2 is the north jamb's end line, rows 3..12 are transparent (the
+ * room's floor shows through the gap), and rows 13..15 are the first three of
+ * the north end of a run, which is the south jamb's outlined top.
+ */
+function wallJambPixels(): number[][] {
+  const run = wallJoinPixels(5, 0);
+  const end = wallJoinPixels(4, 0);
+  return [
+    run[14]!,
+    run[15]!,
+    new Array<number>(16).fill(OUTLINE),
+    ...Array.from({ length: 10 }, () => new Array<number>(16).fill(-1)),
+    end[0]!,
+    end[1]!,
+    end[2]!,
+  ];
+}
+
+function wallJoinSprites(): Sprite[] {
+  const out: Sprite[] = [];
+  WALL_JOINS.forEach(([join, label], mask) => {
+    for (const [i, suffix] of ["", ...(WALL_JOIN_VARIANTS[join] ?? [])].entries()) {
+      out.push({
+        assetId: `${WALL_JOIN_PREFIX}${join}${suffix}`,
+        kind: "tile",
+        name: `Stone Wall, ${label}${VARIANT_LABEL[i]}`,
+        size: 16,
+        walkable: false,
+        pixels: wallJoinPixels(mask, i),
+      });
+    }
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Decals: whole-tile events, not four-pixel marks.
 //
 // What these used to be: floor_grass_flowers changed 4 pixels of 256 and the
@@ -1874,6 +2098,58 @@ const doorOpenPixels = toPixels([
   "Q..........34443",
   "QXXXXXXXXXX34443",
   ".OOOOOOOOOOOOOO.",
+]);
+
+/**
+ * The same two doors seen from above, for a door standing in a north-south
+ * wall (see "Wall profiles"). Render-only, drawn over the wall art's own
+ * `wall_stone_jambs_ns` on the door's square, so each is the LEAF ALONE and
+ * transparent everywhere else. Why the jambs are not in the leaf: KayKit's
+ * props part is shared by both of its ground styles, so jambs baked into the
+ * leaf could match only one of them.
+ *
+ * Closed: a wood bar, 4 px of plank in 6 with its outline, in columns 5..10 and
+ * spanning rows 2..13 from jamb to jamb, with two iron straps and a ring pull
+ * on the east side. Open: the leaf swung 90 degrees on hinges at the south
+ * jamb, pointing east and lying in rows 9..12, folded against that jamb and
+ * entirely inside its own square; the passage in rows 3..8 is clear.
+ */
+const doorClosedNsPixels = toPixels([
+  "................",
+  "................",
+  ".....X3443X.....",
+  ".....X3w43X.....",
+  ".....XWWWWX.....",
+  ".....X3w43X.....",
+  ".....X3w43X.....",
+  ".....X3w43XqX...",
+  ".....X3w43X.....",
+  ".....X3w43X.....",
+  ".....XWWWWX.....",
+  ".....X3w43X.....",
+  ".....X3w43X.....",
+  ".....X3443X.....",
+  "................",
+  "................",
+]);
+
+const doorOpenNsPixels = toPixels([
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "................",
+  "......XXXXXXXXXX",
+  "......X33333333X",
+  "......XWw4w4Ww4X",
+  "......X44q44444X",
+  "................",
+  "................",
+  "................",
 ]);
 
 /**
@@ -2620,6 +2896,8 @@ export const STRUCTURE_SEAMS: ReadonlyArray<{ a: string; b: string; axis: "h" | 
   { a: "well_ne", b: "well_se", axis: "v" },
   { a: "pillar_top", b: "pillar_base", axis: "v" },
   { a: "bed_head", b: "bed_foot", axis: "v" },
+  { a: "bar_counter_w", b: "bar_counter_mid", axis: "h" },
+  { a: "bar_counter_mid", b: "bar_counter_e", axis: "h" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -2708,9 +2986,9 @@ export const STRUCTURE_SEAMS: ReadonlyArray<{ a: string; b: string; axis: "h" | 
 
 const TOKEN_NAMES: Record<string, string> = {
   token_knight: "The Knight",
-  token_shadow: "The Shadow",
+  token_shadow: "The Rogue",
   token_healer: "The Healer",
-  token_fireball_person: "The Fireball Person",
+  token_fireball_person: "The Wizard",
   token_goblin: "Goblin",
   token_skeleton: "Skeleton",
   token_villager: "Villager",
@@ -4090,6 +4368,676 @@ const ACCESSORY_ART: Record<string, { name: string; art: readonly string[] }> = 
 };
 
 // ---------------------------------------------------------------------------
+// The first adventure's art (The Rat Cellar): two rats, and the pieces of a
+// village home, a workshop, a tavern and its cellar. They are appended to the
+// roster and no sprite above was touched; test/livingtable-fantasy-new-art.test.ts
+// is the twin that holds this block to its own rules.
+//
+// Same grammar as everything above: light from the upper left, a derived
+// boundary, at least three value steps on the dominant material, and a contact
+// shadow under anything that stands. Props are drawn over whatever floor the
+// DM lays, so they are transparent outside their own outline; the tiles
+// (floor_wood, wall_earth) are opaque like the other terrain.
+//
+// WHY THE RATS ARE DARK, LOW AND OUTLINED IN BROWN. Three of the token rules
+// bite a small dark animal harder than anything else on the roster, and the
+// art answers each of them rather than around them:
+//
+//  - Separation. Every figure is measured against every walkable floor, and
+//    dirt and sand sit at L110 to L146 in exactly the brown a rat is. Most of
+//    each rat is therefore EARTH_DEEP, EARTH_DARK and CRIMSON_DEEP (separating
+//    from dirt by value and from the grey cobble by colour), with the lit
+//    planes in the warm browns and the pink of ears, nose, feet and tail.
+//  - Colour. The mean chroma floor averages every opaque pixel, and a third or
+//    more of a rat is boundary. A black rim (chroma 4) made a brown rat measure
+//    35 against a floor of 45, so the rats' rim is a selective outline in the
+//    fur's own dark steps (see ratOutlined) and their eyes are EMBER.
+//  - Silhouette. No token may overlap another by more than 0.70, and the
+//    goblin, the skeleton and the robed figure already own the middle of the
+//    tile. A rat is small, so it is drawn small: with its boundary the Rat is
+//    12 columns by 10 rows and the Giant Rat 15 by 12, against the goblin's 14
+//    by 12 and the skeleton's 11 by 13.
+//
+// Floors that already exist are reused rather than duplicated: a dug tunnel
+// floor is floor_dirt. The hand-drawn set is the only art these ids have until
+// the KayKit library draws them too; the bench falls back to it for any id the
+// library does not cover, so nothing needs registering anywhere.
+// ---------------------------------------------------------------------------
+
+
+const RAT_ART: Record<string, { name: string; art: readonly string[] }> = {
+  token_rat: {
+    name: "Rat",
+    art: [
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "....AA....AA....",
+      "....ABeeeeBA....",
+      ".....wrCSrS.....",
+      ".....CrCSrS..B..",
+      ".....CCBBSe.B...",
+      ".....CSffSeB....",
+      ".....Cffffe.....",
+      ".....BB..BB.....",
+      "................",
+    ],
+  },
+  token_giant_rat: {
+    name: "Giant Rat",
+    art: [
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "..ABA......ABA..",
+      "..ABASSSSSSABA..",
+      ".....wCCSSSSS...",
+      ".....wrCSSrSS.B.",
+      ".....CrCSSrSS.B.",
+      "......CBBBSS..B.",
+      "......CcSScS.B..",
+      "..wCCCSSSSSSSB..",
+      "..wCCCSSffSSSB..",
+      "...BBB......BBB.",
+      "................",
+    ],
+  },
+};
+
+
+/**
+ * One prop of the first adventure. `raw` skips the derived boundary, which is
+ * right for the things that lie flat on the floor (a rug, a cobweb in a
+ * corner): a black rule round a rug reads as a hole, not a rug.
+ */
+interface AdventureProp {
+  id: string;
+  name: string;
+  walkable: boolean;
+  fill: readonly string[];
+  shadow: boolean;
+  sides?: OutlineSides;
+  raw?: boolean;
+}
+
+const ADVENTURE_PROPS: AdventureProp[] = [
+  // Barrel: a lid you can see, two iron hoops, staves lit on the left.
+  {
+    id: "barrel", name: "Barrel", walkable: false, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "....33333333....",
+      "...3wwwwwwww4...",
+      "..3wwwwwwwwww4..",
+      "..444444444444..",
+      "..lllWWWWWWWWY..",
+      "..3ww4www4www4..",
+      "..3ww4www4www4..",
+      "..3ww4www4www4..",
+      "..3ww4www4www4..",
+      "..lllWWWWWWWWY..",
+      "..3ww4www4www4..",
+      "...3w4www4ww4...",
+      "...4444444444...",
+      "................",
+    ],
+  },
+  // Crate: lid, then two slats and a brace, so it reads as a box and not a block.
+  {
+    id: "crate", name: "Crate", walkable: false, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "................",
+      "................",
+      "..333333333333..",
+      "..3wwwwwwwwww4..",
+      "..444444444444..",
+      "..3w4wwwwwwww4..",
+      "..3ww4wwwwwww4..",
+      "..3www4wwwwww4..",
+      "..444444444444..",
+      "..3wwwww4wwww4..",
+      "..3wwwwww4www4..",
+      "..3wwwwwww4ww4..",
+      "..444444444444..",
+      "................",
+    ],
+  },
+  // Two crates, the top one smaller and set back so the stack leans a little.
+  {
+    id: "crate_stack", name: "Crate Stack", walkable: false, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "..33333333......",
+      "..3wwwwww4......",
+      "..44444444......",
+      "..3ww4www4......",
+      "..3ww4www4......",
+      "..44444444......",
+      ".33333333333333.",
+      ".3wwwwwwwwwwww4.",
+      ".44444444444444.",
+      ".3wwwwww4wwwww4.",
+      ".3wwwwww4wwwww4.",
+      ".3wwwwww4wwwww4.",
+      ".44444444444444.",
+      "................",
+    ],
+  },
+  // The bar counter in three pieces: a rounded left end, a middle that
+  // repeats, a rounded right end. Planks run in fours so the seams line up
+  // across the join; the tankard stands on the middle piece.
+  {
+    id: "bar_counter_w", name: "Bar Counter, Left End", walkable: false, shadow: false, sides: { e: false },
+    fill: [
+      "................",
+      "................",
+      "................",
+      "................",
+      ".333333333333333",
+      ".3wwwwwwwwwwwwww",
+      ".3wwwwwwwwwwwwww",
+      ".333333333333333",
+      ".444444444444444",
+      ".3w4www4www4www4",
+      ".3w4www4www4www4",
+      ".3w4www4www4www4",
+      ".3w4www4www4www4",
+      ".3w4www4www4www4",
+      ".444444444444444",
+      "................",
+    ],
+  },
+  {
+    id: "bar_counter_mid", name: "Bar Counter, Middle", walkable: false, shadow: false, sides: { e: false, w: false },
+    fill: [
+      "................",
+      "................",
+      ".........ccc....",
+      ".........qq6q...",
+      "333333333qq6q333",
+      "wwwwwwwwwqq6qwww",
+      "wwwwwwwwwwwwwwww",
+      "3333333333333333",
+      "4444444444444444",
+      "www4www4www4www4",
+      "www4www4www4www4",
+      "www4www4www4www4",
+      "www4www4www4www4",
+      "www4www4www4www4",
+      "4444444444444444",
+      "................",
+    ],
+  },
+  {
+    id: "bar_counter_e", name: "Bar Counter, Right End", walkable: false, shadow: false, sides: { w: false },
+    fill: [
+      "................",
+      "................",
+      "................",
+      "................",
+      "333333333333333.",
+      "wwwwwwwwwwwwww4.",
+      "wwwwwwwwwwwwww4.",
+      "333333333333333.",
+      "444444444444444.",
+      "www4www4www4ww4.",
+      "www4www4www4ww4.",
+      "www4www4www4ww4.",
+      "www4www4www4ww4.",
+      "www4www4www4ww4.",
+      "444444444444444.",
+      "................",
+    ],
+  },
+  // Stool and chair share a leg grammar, so a tavern's seating reads as one set.
+  {
+    id: "stool", name: "Stool", walkable: true, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "....33333333....",
+      "...3wwwwwwww4...",
+      "...3wwwwwwww4...",
+      "....44444444....",
+      "....34....34....",
+      "....34....34....",
+      "....34....34....",
+      "....34....34....",
+      "...334....344...",
+      "...334....344...",
+      "................",
+    ],
+  },
+  {
+    id: "chair", name: "Chair", walkable: true, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "....33333333....",
+      "....3wwwwww4....",
+      "....3w4ww4w4....",
+      "....3w4ww4w4....",
+      "....3wwwwww4....",
+      "...3333333333...",
+      "...3wwwwwwww4...",
+      "....44444444....",
+      "....34....34....",
+      "....34....34....",
+      "....34....34....",
+      "...334....344...",
+      "...334....344...",
+      "................",
+    ],
+  },
+  // Workbench: a vise at one end and a hammer and a chisel on the top, so it
+  // reads as somewhere work is done, with a low shelf under it.
+  {
+    id: "workbench", name: "Workbench", walkable: false, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "...........lWW..",
+      "...........lWY..",
+      ".3333333333lWY3.",
+      ".3wwwwwwwwwlWY4.",
+      ".3wlWw33333lWY4.",
+      ".44444444444444.",
+      ".3wwwwwwwwwwww4.",
+      "..34........34..",
+      "..34........34..",
+      "..34........34..",
+      "..3wwwwwwwwww4..",
+      "..34........34..",
+      "..44........44..",
+      "................",
+    ],
+  },
+  // Anvil: horn to the left, flat face, a waist, a flared foot, all in the steel ramp.
+  {
+    id: "anvil", name: "Anvil", walkable: false, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "................",
+      "......llllllll..",
+      ".llllllWWWWWWYY.",
+      "..WWWWWWWWWWYY..",
+      "....WWWWWWYY....",
+      "......WWWYY.....",
+      "......WWWYY.....",
+      "......WWWYY.....",
+      ".....WWWWYYY....",
+      "....WWWWWWYYY...",
+      "...WWWWWWWYYYY..",
+      "...YYYYYYYYYYY..",
+      "...mmmmmmmmmmm..",
+      "................",
+    ],
+  },
+  // Hearth: a stone surround, a mantel, a live fire on two logs.
+  {
+    id: "hearth", name: "Hearth", walkable: false, shadow: false,
+    fill: [
+      "................",
+      ".RRRRRRRRRRRRRR.",
+      ".RQQQQQQQQQQQQP.",
+      ".OOOOOOOOOOOOOO.",
+      ".RQQQXXXXXXQQPP.",
+      ".RQQXXXXXXXXQPP.",
+      ".RQQXXX1XXXXQPP.",
+      ".ROOXXr1rXXXOPP.",
+      ".RQQXXr1qrXXQPP.",
+      ".RQQXr1qq1rXQPP.",
+      ".ROOXr1qcq1rOPP.",
+      ".RQQr1qcccq1QPP.",
+      ".RQQ2w3ww3w2QPP.",
+      ".ROO44e44e44OPP.",
+      ".OQQQQQQQQQQQQO.",
+      "................",
+    ],
+  },
+  // Shelf: three boards, jars, books and bowls against a dark back, so there is
+  // something on it to read from across a room.
+  {
+    id: "shelf", name: "Shelf", walkable: false, shadow: true,
+    fill: [
+      "................",
+      ".33333333333333.",
+      ".3ehheqqeeneee4.",
+      ".3ehFeq6eeDeee4.",
+      ".3eFFeq6eeDeee4.",
+      ".3wwwwwwwwwwww4.",
+      ".3eeeeZZeennee4.",
+      ".3rrZZZZnnqqhh4.",
+      ".3ffAAAADD66FF4.",
+      ".3wwwwwwwwwwww4.",
+      ".3eeeeeeeqqqee4.",
+      ".3ettttteqqq6e4.",
+      ".3eZZZZZeq666e4.",
+      ".3wwwwwwwwwwww4.",
+      ".44444444444444.",
+      "................",
+    ],
+  },
+  // Rug: flat, so no black rule; a border, a gold line and a lozenge.
+  {
+    id: "rug", name: "Rug", walkable: true, shadow: false, raw: true,
+    fill: [
+      "................",
+      "..ffffffffffff..",
+      ".ffqqqqqqqqqqff.",
+      "cfqrrrrrrrrrrqfc",
+      ".fqrrrrrrrrrrqf.",
+      "cfqrrrr11rrrrqfc",
+      ".fqrrr1qq1rrrqf.",
+      "cfqrrr1qq1rrrqfc",
+      ".fqrrrr11rrrrqf.",
+      "cfqrrrrrrrrrrqfc",
+      ".fqrrrrrrrrrrqf.",
+      ".ffqqqqqqqqqqff.",
+      "..ffffffffffff..",
+      "................",
+      "................",
+      "................",
+    ],
+  },
+  // Stairs down: a stone collar, then treads that get darker the further down
+  // they go, ending in black.
+  {
+    id: "stairs_down", name: "Stairs Down", walkable: true, shadow: false,
+    fill: [
+      "................",
+      ".RRRRRRRRRRRRRR.",
+      ".RQRRRRRRRRRRQP.",
+      ".RQPPPPPPPPPPQP.",
+      ".RQQQQQQQQQQQQP.",
+      ".RQOOOOOOOOOOQP.",
+      ".RQPPPPPPPPPPQP.",
+      ".RQddddddddddQP.",
+      ".RQOOOOOOOOOOQP.",
+      ".RQmmmmmmmmmmQP.",
+      ".RQddddddddddQP.",
+      ".RQXXXXXXXXXXQP.",
+      ".RQXXXXXXXXXXQP.",
+      ".OQXXXXXXXXXXQO.",
+      ".OOOOOOOOOOOOOO.",
+      "................",
+    ],
+  },
+  // Ladder: two rails and four rungs. The pocket between rungs is enclosed, so
+  // the floor shows through it instead of being painted black.
+  {
+    id: "ladder_up", name: "Ladder", walkable: true, shadow: true,
+    fill: [
+      "................",
+      "....34....34....",
+      "....34....34....",
+      "....34wwww34....",
+      "....34....34....",
+      "....34....34....",
+      "....34wwww34....",
+      "....34....34....",
+      "....34....34....",
+      "....34wwww34....",
+      "....34....34....",
+      "....34....34....",
+      "....34wwww34....",
+      "....34....34....",
+      "....34....34....",
+      "................",
+    ],
+  },
+  // Rat hole: an arched gap gnawed at the foot of a wall, a broken lip of
+  // plaster round it and a few crumbs on the floor.
+  {
+    id: "rat_hole", name: "Rat Hole", walkable: true, shadow: false,
+    fill: [
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "......VVVV......",
+      ".....VUUUUT.....",
+      "....VUeeeeUT....",
+      "...VUeXXXXeUT...",
+      "...VUeXXXXeUT...",
+      "..VUeXXXXXXeUT..",
+      "..VUeXXXXXXeUT..",
+      "..QRTTTTTTTTQP..",
+      "................",
+    ],
+  },
+  // Tunnel mouth: a rough dug opening, wider than a rat hole, with spoil piled
+  // at its lip. It is cut through earth, so it is drawn in the earth ramp.
+  {
+    id: "tunnel_mouth", name: "Tunnel Mouth", walkable: true, shadow: false,
+    fill: [
+      "................",
+      "....VVVVVVVV....",
+      "..VVUUUUUUUUTT..",
+      ".VVUUUUUUUUUUTT.",
+      ".VUUUTUUUUUUTTT.",
+      ".VUUUUUUUUUUUTT.",
+      ".VUUUTeeeeTUUTT.",
+      ".VUUTeXXXXeTUTT.",
+      ".VUTeXXXXXXeTUT.",
+      ".VUTeXXXXXXeTUT.",
+      ".VTeXXXXXXXXeTT.",
+      ".UTeXXXXXXXXeTT.",
+      ".UTeXXXXXXXXeSS.",
+      ".TTeXXXXXXXXeSS.",
+      ".RQSTTTTTTTTSQP.",
+      "................",
+    ],
+  },
+  // Grain sack, tied at the neck with a bit of rope; light from the upper left.
+  {
+    id: "sack", name: "Sack", walkable: true, shadow: true,
+    fill: [
+      "................",
+      "................",
+      "................",
+      "......t..t......",
+      "......tZZt......",
+      "......4ww4......",
+      ".....ttZZZZA....",
+      "....ttZZZZZZA...",
+      "...ttZZZZZZZA...",
+      "...tZZZZZZZZA...",
+      "...tZZZZZZZZA...",
+      "...ZZZZZZZZZA...",
+      "...ZZZZZZZZAA...",
+      "....ZZZZZZAA....",
+      ".....AAAAAA.....",
+      "................",
+    ],
+  },
+  // Cobweb: strands only, in the corner of a tile, drawn over whatever is
+  // there. No boundary, because a web has no edge to speak of.
+  {
+    id: "cobweb", name: "Cobweb", walkable: true, shadow: false, raw: true,
+    fill: [
+      "cccccccccccc....",
+      "cc.5...5..6.....",
+      "c.c5..5..6......",
+      "c55c..5..6......",
+      "c...c.5..6......",
+      "c....c5..6......",
+      "c.5555c..6......",
+      "c5.....c.6......",
+      "c.......c.......",
+      "c.555555.c......",
+      "c5..............",
+      "c...............",
+      "................",
+      "................",
+      "................",
+      "................",
+    ],
+  },
+];
+
+
+/**
+ * Opaque tiles for the same places. floor_wood is horizontal planks with a lit
+ * top edge, a seam of EARTH_DEEP under each and a butt joint staggered from
+ * board to board; it deliberately stays out of the WOOD index (L130), which
+ * sits 4 levels from the enchantment glow's third entry and would put a ring
+ * on a floor it could not be told from. wall_earth is wrapped Voronoi lumps
+ * lit from the upper left, frozen like the other terrain, with three pebbles.
+ */
+const ADVENTURE_TILE_ART: Record<string, readonly string[]> = {
+  floor_wood: [
+    "33333S3333333333",
+    "VVVVVSVVVVVVVVVV",
+    "VUUVVSVVVVUUVVVV",
+    "SSSSSSSSSSSSSSSS",
+    "33333333333S3333",
+    "VVVVVVVVVVVSVVVV",
+    "VVVUUVVVVVVSVVUV",
+    "SSSSSSSSSSSSSSSS",
+    "33S3333333333333",
+    "VVSVVVVVVVVVVVVV",
+    "VVSVVVUUUVVVVVVV",
+    "SSSSSSSSSSSSSSSS",
+    "33333333S3333333",
+    "VVVVVVVVSVVVVVVV",
+    "VUUVVVVVSVVVUUVV",
+    "SSSSSSSSSSSSSSSS",
+  ],
+  floor_wood_b: [
+    "3333333333S33333",
+    "VVVVVVVVVVSVVVVV",
+    "VVVUUVVVVVSVVVUV",
+    "SSSSSSSSSSSSSSSS",
+    "3333S33333333333",
+    "UUUUSUUUUUUUUUUU",
+    "UUTUSUUUUUUUTUUU",
+    "SSSSSSSSSSSSSSSS",
+    "33333333333333S3",
+    "VVVVVVVVVVVVVVSV",
+    "VUUVVVVVVUUVVVSV",
+    "SSSSSSSSSSSSSSSS",
+    "333333S333333333",
+    "VVVVVVSVVVVVVVVV",
+    "VVVVUVSVVVVVUUVV",
+    "SSSSSSSSSSSSSSSS",
+  ],
+  wall_earth: [
+    "SSSSSUUUTSeUUUSe",
+    "SSSTSUTSSSeUUTTe",
+    "UUTRQTTSSSSUUTSe",
+    "UUTQPeSSSSUTTSSS",
+    "TSSSSeSSSeTTSSSS",
+    "TSSSSeSSeSTSSeeT",
+    "SeeSSSUUTSSUUUTS",
+    "SUUUSUUTTSUUUUTS",
+    "SUUTeUUTSSUUUTSS",
+    "SUTSeUTSSSSRQSSS",
+    "STSSeTSSSSSQPSSe",
+    "eeSSeSSeSUTeSUUT",
+    "SUTeeSRQUUTeUUTS",
+    "UTTSSSQPUTSSUTSe",
+    "USSSSSSSTSSSTSSS",
+    "SSSSeUUUSeSSeSeS",
+  ],
+  wall_earth_b: [
+    "SeSSUUUSeeeSTTSS",
+    "SUUSUUTSSeeUUSSe",
+    "UUTSTTSSSSSUUUTe",
+    "UUTSSSSSSSRQUUTS",
+    "UTSSSeSSSeQPTTSe",
+    "TSeSTTSeSSSSTSSe",
+    "SeUUTSeSUSUUUSSe",
+    "SUTTSSSUTTUUUTSS",
+    "eTTSSeUUTSSUTSSS",
+    "eeRQeUUTSSSTSSSS",
+    "SUQPTSTSSSeSSSSS",
+    "SUUUTeeeeeeSSeSS",
+    "SUUTSeUUTTSSUUUU",
+    "STTSSeUURQSSUUUT",
+    "SeSSSSUTQPSSUUUS",
+    "SeeSSSSSSSSSTTSS",
+  ],
+};
+
+
+const ADVENTURE_TILES: ReadonlyArray<{ id: string; name: string; walkable: boolean }> = [
+  { id: "floor_wood", name: "Wood Floor", walkable: true },
+  { id: "floor_wood_b", name: "Wood Floor, Variant B", walkable: true },
+  { id: "wall_earth", name: "Earth Wall", walkable: false },
+  { id: "wall_earth_b", name: "Earth Wall, Variant B", walkable: false },
+];
+
+/**
+ * The rats' boundary is not the black the rest of the roster derives but a
+ * selective outline: EARTH_DARK on the lit (north and west) sides and
+ * CRIMSON_DEEP on the shaded (south and east) ones, the contact shadow
+ * included. Both sit under the dark cut, which is all the boundary rule asks
+ * of a rim, and both carry the hue of the fur they bound. The reason is
+ * arithmetic, not taste: a rat is a small dark animal, a third or more of its
+ * pixels are boundary, and the token colour rule averages every opaque pixel,
+ * so a black rim (chroma 4) made a brown rat measure 35 against a floor of 45.
+ * Eyes stay out of this: they are authored in EMBER and are not boundary.
+ */
+function ratOutlined(fill: readonly string[]): number[][] {
+  const drawn = toPixels(fill);
+  return outlined(fill, true).map((row, y) =>
+    row.map((v, x) => {
+      if (v !== OUTLINE || drawn[y]![x] !== -1) return v;
+      const litSide = (y + 1 < drawn.length && drawn[y + 1]![x] !== -1) || (x + 1 < TILE_SIZE && drawn[y]![x + 1] !== -1);
+      if (y === drawn.length - 1) return EARTH_DARK;
+      return litSide ? EARTH_DARK : CRIMSON_DEEP;
+    }),
+  );
+}
+
+/** What the first adventure adds to SPRITES: two rats, nineteen props, four tiles. */
+const FIRST_ADVENTURE_SPRITES: Sprite[] = [
+  ...Object.entries(RAT_ART).map(([id, { name, art }]) => ({
+    assetId: id,
+    kind: "token" as const,
+    name,
+    size: 16 as const,
+    walkable: false,
+    pixels: ratOutlined(art),
+  })),
+  ...ADVENTURE_PROPS.map((p) => ({
+    assetId: p.id,
+    kind: "prop" as const,
+    name: p.name,
+    size: 16 as const,
+    walkable: p.walkable,
+    pixels: p.raw ? toPixels(p.fill) : outlined(p.fill, p.shadow, p.sides),
+  })),
+  ...ADVENTURE_TILES.map((t) => ({
+    assetId: t.id,
+    kind: "tile" as const,
+    name: t.name,
+    size: 16 as const,
+    walkable: t.walkable,
+    pixels: toPixels(ADVENTURE_TILE_ART[t.id]!),
+  })),
+];
+// End of the first adventure's art.
+
+// ---------------------------------------------------------------------------
 // The roster: DESIGN.md's asset manifest shape, one entry per sprite. This
 // is what build-seed-code.mjs reads to emit the LIVING_TABLE_TEMPLATES
 // constant that games-db ships.
@@ -4158,6 +5106,11 @@ export const SPRITES: Sprite[] = [
   { assetId: "wall_stone_top", kind: "tile", name: "Stone Wall, Cap", size: 16, walkable: false, pixels: tile("wall_stone_top") },
   { assetId: "wall_stone_base", kind: "tile", name: "Stone Wall, Base", size: 16, walkable: false, pixels: tile("wall_stone_base") },
 
+  // Wall profiles, render-only: 16 joins plus 4 run variants. The renderer
+  // swaps them in for the stored wall ids from each cell's neighbours, and only
+  // when ALL 16 base joins are present, so a partial set never draws.
+  ...wallJoinSprites(),
+
   // Decals: whole-tile events on the new ramps, registered for the variant
   // picker at low density rather than left as ids the DM has to choose.
   { assetId: "floor_grass_tufted", kind: "tile", name: "Grass, Tussock", size: 16, walkable: true, pixels: withMarks(tile("floor_grass"), overlay(GRASS_TUFT)) },
@@ -4174,6 +5127,13 @@ export const SPRITES: Sprite[] = [
   // the same object stops reading as a stamp.
   { assetId: "door_closed", kind: "prop", name: "Closed Door", size: 16, walkable: false, pixels: doorClosedPixels },
   { assetId: "door_open", kind: "prop", name: "Open Door", size: 16, walkable: true, pixels: doorOpenPixels },
+
+  // Render-only: a north-south door's two jambs (an overlay under the leaf) and
+  // its leaf closed and open, seen from above. Walkability keeps parity with
+  // door_closed / door_open; the jambs' flag is moot, the id never reaches the engine.
+  { assetId: "wall_stone_jambs_ns", kind: "prop", name: "Stone Wall, Door Jambs (North-South)", size: 16, walkable: false, pixels: wallJambPixels() },
+  { assetId: "door_closed_ns", kind: "prop", name: "Closed Door, North-South", size: 16, walkable: false, pixels: doorClosedNsPixels },
+  { assetId: "door_open_ns", kind: "prop", name: "Open Door, North-South", size: 16, walkable: true, pixels: doorOpenNsPixels },
   { assetId: "tree", kind: "prop", name: "Tree", size: 16, walkable: false, pixels: treePixels },
   { assetId: "tree_left", kind: "prop", name: "Tree, Left of Cell", size: 16, walkable: false, pixels: treeLeftPixels },
   { assetId: "tree_right", kind: "prop", name: "Tree, Right of Cell", size: 16, walkable: false, pixels: treeRightPixels },
@@ -4233,4 +5193,7 @@ export const SPRITES: Sprite[] = [
     walkable: false,
     pixels: outlined(art, false),
   })),
+
+  // The first adventure's own art: the Rat Cellar's rats, props and tiles.
+  ...FIRST_ADVENTURE_SPRITES,
 ];

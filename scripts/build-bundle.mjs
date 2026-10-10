@@ -27,11 +27,18 @@ const BINARY = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".eot",
 ]);
 
+// ConjureOS #1149: the files package.json lists under conjureos.assetFiles (the animated art) are uploaded by the
+// publish and installed beside the app. They are not part of the page, so the bundle leaves them out, exactly as
+// ConjureOS scripts/bundle-app.ts does.
+const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+const ASSET_PATHS = new Set((pkg.conjureos?.assetFiles ?? []).map((a) => String(a.path).replace(/^\.\//, "").split("\\").join("/")));
+
 function walk(root, dir, files) {
   for (const name of readdirSync(dir)) {
     const abs = join(dir, name);
     const rel = relative(root, abs).split(sep).join("/");
     if (rel.split("/").some((s) => STRIP.has(s))) continue;
+    if (ASSET_PATHS.has(rel)) continue;
     if (name.endsWith(".conj")) continue;
     const st = statSync(abs);
     if (st.isDirectory()) {

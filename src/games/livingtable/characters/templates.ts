@@ -123,6 +123,41 @@ const SAVES_BY_CHASSIS: Record<Chassis, (keyof AbilityScores)[]> = {
   wizard: ["int", "wis"],
 };
 
+/**
+ * SRD 5.1's class skill lists: how many skills each class picks at level 1 and
+ * the list it picks them from. A class-table fact, so it is keyed by chassis
+ * like SAVES_BY_CHASSIS above (both reskins of one chassis share it).
+ *
+ * Every archetype's own starting skills in ARCHETYPES below are drawn from its
+ * chassis's list, which a test pins, so "keep the archetype's skills" is always
+ * a legal pick. The Rogue's count is 4 in the SRD while the three Rogue
+ * archetypes ship with 3; creation fills the gap from this list.
+ */
+export const CLASS_SKILL_CHOICES: Readonly<Record<Chassis, { count: number; from: string[] }>> = Object.freeze({
+  fighter: {
+    count: 2,
+    from: ["Acrobatics", "Animal Handling", "Athletics", "History", "Insight", "Intimidation", "Perception", "Survival"],
+  },
+  rogue: {
+    count: 4,
+    from: [
+      "Acrobatics",
+      "Athletics",
+      "Deception",
+      "Insight",
+      "Intimidation",
+      "Investigation",
+      "Perception",
+      "Performance",
+      "Persuasion",
+      "Sleight of Hand",
+      "Stealth",
+    ],
+  },
+  wizard: { count: 2, from: ["Arcana", "History", "Insight", "Investigation", "Medicine", "Religion"] },
+  cleric: { count: 2, from: ["History", "Insight", "Medicine", "Persuasion", "Religion"] },
+});
+
 function proficiencies(skills: string[], chassis: Chassis): ArchetypeProficiencies {
   return { skills, saves: SAVES_BY_CHASSIS[chassis] };
 }
@@ -173,7 +208,7 @@ export const ARCHETYPES: Archetype[] = [
   {
     id: "shadow",
     template: "fantasy",
-    displayName: "The Shadow",
+    displayName: "The Rogue",
     chassis: "rogue",
     // Stealth-and-cunning build: DEX and INT lead, CHA is a distant third tool.
     baseAbilityScores: { dex: 15, int: 14, con: 13, wis: 12, cha: 10, str: 8 },
@@ -242,7 +277,7 @@ export const ARCHETYPES: Archetype[] = [
   {
     id: "fireball-person",
     template: "fantasy",
-    displayName: "The Fireball Person",
+    displayName: "The Wizard",
     chassis: "wizard",
     // Classic glass-cannon build: INT to cast, CON to survive being the priority target.
     baseAbilityScores: { int: 15, con: 14, dex: 13, wis: 12, cha: 10, str: 8 },
@@ -270,6 +305,25 @@ export const ARCHETYPES: Archetype[] = [
       "You never want anything within arm's reach, and you have the range not to need it. The hardest-hitting attack in the game and the fewest hit points behind it.",
   },
 ];
+
+/**
+ * What a player can start today, a subset of everything defined above.
+ *
+ * Owner decision, 2026-09-30: the game's art is moving to Kay Lousberg's free
+ * KayKit packs (CC0), which have a knight, a rogue and a mage but no cleric and
+ * no sci-fi characters. So the sci-fi template is PAUSED and the Healer is OUT
+ * OF PLAY. Both stay defined (rules, gear tables, sprites, tests) and simply
+ * cannot be picked: un-pausing is an edit to these two lists, and a stored
+ * sheet or campaign that names one still loads.
+ */
+export const PLAYABLE_TEMPLATES: readonly TemplateGenre[] = Object.freeze(["fantasy"] as const);
+export const PLAYABLE_ARCHETYPE_IDS: readonly string[] = Object.freeze(["knight", "shadow", "fireball-person"]);
+
+/** The archetypes a player may pick for a campaign in `template`, in ARCHETYPES order. */
+export function playableArchetypes(template: TemplateGenre): Archetype[] {
+  if (!PLAYABLE_TEMPLATES.includes(template)) return [];
+  return ARCHETYPES.filter((a) => a.template === template && PLAYABLE_ARCHETYPE_IDS.includes(a.id));
+}
 
 export function getArchetype(archetypeId: string): Archetype {
   const found = ARCHETYPES.find((a) => a.id === archetypeId);

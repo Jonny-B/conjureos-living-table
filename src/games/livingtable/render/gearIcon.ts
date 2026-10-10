@@ -19,6 +19,15 @@
  * touches a canvas (`renderGearIcon`), the same split every other drawing
  * surface in render/ keeps, so the crop/scale/centre arithmetic is checkable
  * under node with no 2D context.
+ *
+ * SOURCE RESOLUTION. The cell is `cellPx` canvas pixels whatever the art is
+ * drawn at, so a 32 px library (2 source pixels to a logical pixel of the 16 px
+ * grid) fills the same box: the crop is measured in source pixels, the rim band
+ * is one logical pixel (two source pixels) thick, and the size cap is stated in
+ * logical pixels, so the capped icon is as big on screen as it always was and a
+ * cell-limited one gets finer detail instead of a bigger picture. The scale is
+ * still a whole number of canvas pixels per source pixel. With no
+ * `spriteSize` every number is the one it has always been.
  */
 import {
   GEAR_ICON_MAX_SCALE,
@@ -29,7 +38,7 @@ import {
   type IconPlacement,
 } from "../characters/equipmentTypes";
 import { glowRaster, remappedIndex, type ResolvedLayer } from "./equipmentCompositor";
-import { spriteDimensions, TRANSPARENT, type SpriteGrid } from "./spritePixels";
+import { BASE_SPRITE_SIZE, glowUnit, resolutionFactor, spriteDimensions, spriteSizeOf, TRANSPARENT, type SpriteGrid } from "./spritePixels";
 import type { RenderManifest } from "./canvasRenderer";
 
 /**
@@ -52,9 +61,17 @@ import type { RenderManifest } from "./canvasRenderer";
  * A sprite with no opaque pixel at all (not expected of real art, but not a
  * reason to divide by zero either) falls back to its own full grid, so there
  * is always something to place.
+ *
+ * `spriteSize` is the library's source resolution (default 16). It changes two
+ * things: a rim band grows the crop by `glowUnit(spriteSize)` source pixels
+ * instead of one, and the scale cap is GEAR_ICON_MAX_SCALE logical pixels, so
+ * `floor(GEAR_ICON_MAX_SCALE / (spriteSize / 16))` canvas pixels per source
+ * pixel, never below 1.
  */
-export function iconPlacement(pixels: SpriteGrid, glowBands: 0 | 1 | 2, cellPx: number): IconPlacement {
+export function iconPlacement(pixels: SpriteGrid, glowBands: 0 | 1 | 2, cellPx: number, spriteSize: number = BASE_SPRITE_SIZE): IconPlacement {
   const { width, height } = spriteDimensions(pixels);
+  const bandPx = glowBands * glowUnit(spriteSize);
+  const maxScale = Math.max(1, Math.floor(GEAR_ICON_MAX_SCALE / resolutionFactor(spriteSize)));
 
   let minX = width;
   let minY = height;
@@ -78,10 +95,10 @@ export function iconPlacement(pixels: SpriteGrid, glowBands: 0 | 1 | 2, cellPx: 
     maxY = height - 1;
   }
 
-  const cropX = minX - glowBands;
-  const cropY = minY - glowBands;
-  const cropW = maxX - minX + 1 + 2 * glowBands;
-  const cropH = maxY - minY + 1 + 2 * glowBands;
+  const cropX = minX - bandPx;
+  const cropY = minY - bandPx;
+  const cropW = maxX - minX + 1 + 2 * bandPx;
+  const cropH = maxY - minY + 1 + 2 * bandPx;
 
   // Scale is chosen from the sprite's OWN opaque bounding box (glowBands 0),
   // never from the glow-grown crop above. Growing the crop so a rim has
@@ -97,7 +114,7 @@ export function iconPlacement(pixels: SpriteGrid, glowBands: 0 | 1 | 2, cellPx: 
   // and the rim yields, not the other way around.
   const tightW = maxX - minX + 1;
   const tightH = maxY - minY + 1;
-  const scale = Math.max(1, Math.min(GEAR_ICON_MAX_SCALE, Math.floor(cellPx / Math.max(tightW, tightH, 1))));
+  const scale = Math.max(1, Math.min(maxScale, Math.floor(cellPx / Math.max(tightW, tightH, 1))));
   const offsetX = Math.floor((cellPx - cropW * scale) / 2);
   const offsetY = Math.floor((cellPx - cropH * scale) / 2);
 
@@ -139,9 +156,10 @@ export function renderGearIcon(
   const sprite = manifest.tokens[source.spriteId]?.pixels;
   if (!sprite) return false;
 
+  const size = spriteSizeOf(manifest);
   const remap = source.kind === "silhouette" ? null : source.remap;
   const glowBands = source.kind === "silhouette" ? 0 : source.glowBands;
-  const placement = iconPlacement(sprite, glowBands, cellPx);
+  const placement = iconPlacement(sprite, glowBands, cellPx, size);
 
   const toCanvas = (sx: number, sy: number): { x: number; y: number } => ({
     x: placement.offsetX + (sx - placement.cropX) * placement.scale,
@@ -169,7 +187,8 @@ export function renderGearIcon(
       pixels: sprite,
       offsetY: 0,
     };
-    const ring = glowRaster([layer], width, height, 0);
+    const ring = glowRaster([layer], width, height, 0, size);
+    const margin = GLOW_MARGIN * glowUnit(size);
     for (let gy = 0; gy < ring.length; gy++) {
       const row = ring[gy];
       if (!row) continue;
@@ -181,10 +200,12 @@ export function renderGearIcon(
         if (index === undefined || index === TRANSPARENT) continue;
         const color = manifest.palette[index];
         if (!color) continue;
-        // The raster is offset by GLOW_MARGIN from the sprite's own origin on
-        // both axes (equipmentCompositor.ts's own convention); undo that here
-        // to land back in the sprite's coordinate space before placing.
-        const { x, y } = toCanvas(gx - GLOW_MARGIN, gy - GLOW_MARGIN);
+        // The raster is offset by the glow margin (GLOW_MARGIN logical pixels,
+        // so twice that in source pixels at 32 px per tile) from the sprite's
+        // own origin on both axes (equipmentCompositor.ts's own convention);
+        // undo that here to land back in the sprite's coordinate space before
+        // placing.
+        const { x, y } = toCanvas(gx - margin, gy - margin);
         ctx.fillStyle = color;
         ctx.fillRect(x, y, placement.scale, placement.scale);
       }

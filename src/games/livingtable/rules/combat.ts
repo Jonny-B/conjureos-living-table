@@ -3,7 +3,7 @@
  * protocol is not allowed to originate itself (see DESIGN.md, "the DM turn
  * protocol"). The model can request a roll; only this module resolves one.
  */
-import { rollD20, rollDie, rollDice, parseDiceNotation, type DiceResult } from "./dice";
+import { flatAmount, rollD20, rollDie, rollDice, parseDiceNotation, type DiceResult } from "./dice";
 
 export interface AttackParams {
   attackerBonus: number;
@@ -51,6 +51,9 @@ export function resolveAttack(params: AttackParams): AttackResult {
 
 export function resolveDamage(notation: string, rng: () => number = Math.random, critical = false): DiceResult {
   if (!critical) return rollDice(notation, rng);
+  // Flat damage has no dice for a critical hit to double (SRD 5.1), so it stays as written.
+  const flat = flatAmount(notation);
+  if (flat !== null) return { total: flat, rolls: [], notation };
 
   // SRD 5.1: a critical hit doubles the DAMAGE DICE, not the flat modifier -
   // roll twice as many dice and add the modifier once. Re-parsing rather than
