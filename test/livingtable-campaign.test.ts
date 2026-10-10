@@ -75,6 +75,64 @@ test("a written campaign's stored outline fits the campaign row's 32 KB cap and 
   }
 });
 
+test("a single-cell place's map hint is its description; a multi-cell place gives each cell its own", () => {
+  const hints = moduleRegionHints(BLACKSTONE);
+  assert.equal(hints["1,0"], `The mayor's house: ${BLACKSTONE.locations.find((l) => l.id === "loc_mayors_house")!.description}`);
+  assert.match(hints["-1,-1"]!, /lower barrow-field/);
+  const m = clone(BLACKSTONE);
+  delete m.locations.find((l) => l.id === "loc_barrow_field")!.cells[1]!.hint;
+  assert.ok(validateCampaignModule(m).some((p) => p.includes("each needs its own hint")));
+});
+
+test("who is usually at a place is read off each person, and an act's cast off its arcs", () => {
+  const atShrine = brief(initialStoryState(BLACKSTONE), 5, -1, 0);
+  assert.match(atShrine, /Usually here: Ilse Pell\./);
+  const s = initialStoryState(BLACKSTONE);
+  const act3 = brief({ ...s, act: "act_unburied_king", flags: [...s.flags, "act:act_silver_road", "act:act_unburied_king"] }, 5, 7, 7);
+  assert.match(act3, /\[npc_pell\] Ilse Pell, sexton of the shrine of the Quiet Bell\. Wants now:/, "Pell is in Act III's cast through its arcs");
+});
+
+/**
+ * Blackstone's ids, frozen. Saved games are lists of ids, so once the
+ * campaign has been played an id may never change or disappear (types.ts).
+ * Adding an id is fine; this fails only when one goes missing.
+ */
+const BLACKSTONE_IDS = (
+  "a_barrow_halls a_deep_door a_hollow_teeth a_lamplighter a_missing_three a_the_buyer act_silver_road " +
+  "act_something_wrong act_unburied_king b_barrow_entered b_crown_truth b_face_to_face b_its_over " +
+  "b_lamplighter_named b_mayor_involved b_pell_heard b_something_below b_tam_alive blackstone c_door_breaks " +
+  "c_king_wakes c_lantern_finished c_ridge_walkers c_silver_taken cl_archive_seal cl_bell_inscription " +
+  "cl_blue_light cl_boy_prints cl_buyer_letters cl_cairn_tunnel cl_corvane_journal cl_door_carvings " +
+  "cl_fresh_digging cl_goblin_testimony cl_hobbs_account cl_oath_stone cl_scratching cl_tam_words cl_tithe_ledger " +
+  "cl_tomb_inscription cl_tracks cl_wennas_crates e_cairn_guard e_camp_fight e_corvane_talk e_crowd e_door_breach " +
+  "e_hall_guard e_parley e_scout e_tomb_fight end_cold_crown end_dawn end_fallen end_quiet_ridge f_bell " +
+  "f_hollow_teeth f_lamplighter f_village loc_barrow_field loc_barrow_halls loc_cairn loc_carters_yard " +
+  "loc_goblin_camp loc_kings_tomb loc_lower_mine loc_mayors_house loc_mine_road loc_shrine loc_square " +
+  "loc_upper_mine npc_corvane npc_grukka npc_hobb npc_orrin npc_pell npc_snik npc_tam npc_venn npc_wenna " +
+  "o_buyer_followed o_buyer_met o_captives_negotiated o_captives_stolen o_corvane_let_go o_corvane_stopped " +
+  "o_door_held o_door_opened o_door_passed o_goblins_allied o_goblins_fought o_king_at_rest o_lantern_destroyed " +
+  "o_mayor_confessed o_mayor_covered o_mayor_exposed o_player_crowned o_silver_cut_off o_tam_freed o_tomb_reached " +
+  "o_village_left s_carters_yard s_halls_of_niches s_listening_shaft s_lower_workings s_mayors_study s_mine_mouth " +
+  "s_night_cairn s_notice_board s_ridge_at_dusk s_shrine s_the_tomb t_barrow_field t_bell_rite t_corvane_daughter " +
+  "t_corvane_is_buyer t_crown_price t_dead_walk_ridge t_goblins_near t_goblins_took_two t_grain_toll " +
+  "t_lantern_mark t_mayor_selling_silver t_mine_played_out t_oath_seal t_silver_given t_tam_below t_three_missing"
+).split(" ");
+
+test("every id Blackstone has ever shipped still exists", () => {
+  const present = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") {
+      const rec = v as Record<string, unknown>;
+      if (typeof rec.id === "string") present.add(rec.id);
+      Object.values(rec).forEach(walk);
+    }
+  };
+  walk(BLACKSTONE);
+  assert.equal(BLACKSTONE_IDS.length, 128);
+  assert.deepEqual(BLACKSTONE_IDS.filter((id) => !present.has(id)), []);
+});
+
 test("the region hints name the written place in every cell it covers", () => {
   const hints = moduleRegionHints(BLACKSTONE);
   assert.match(hints["0,0"]!, /^Blackstone square: /);
@@ -147,7 +205,7 @@ test("conditions: every part that is present must hold", () => {
 test("a beat whose gate has not opened is refused, with the reason, and nothing is recorded", () => {
   const step = stepStory(BLACKSTONE, initialStoryState(BLACKSTONE), { beats: ["b_mayor_involved"] }, 1);
   assert.deepEqual(step.state.beats, []);
-  assert.ok(step.notes.some((n) => n.startsWith('STORY: beat "b_mayor_involved" cannot happen yet') && n.includes("evidence_against_mayor (not yet)")));
+  assert.ok(step.notes.some((n) => n.startsWith('STORY: beat "b_mayor_involved" cannot happen yet') && n.includes("needs any of: evidence_against_mayor, t_grain_toll")));
 });
 
 test("one turn's report can be listed in any order: a beat lands on a clue found in the same turn", () => {
@@ -277,23 +335,32 @@ test("the brief expands only the current act and never prints a later act's arcs
   assert.match(text, /LATER ACTS, not in play yet: Act II: The Silver Road; Act III: The Unburied King/);
 });
 
-test("a closed secret is printed without its routes; an open one with them", () => {
-  const closed = brief(initialStoryState(BLACKSTONE));
-  const line = closed.split("\n").find((l) => l.includes("[t_corvane_is_buyer]"))!;
-  assert.match(line, /gate CLOSED/);
-  assert.doesNotMatch(line, /Routes:/);
+const truthLine = (text: string, id: string) => text.split("\n").find((l) => l.includes(`[${id}]`))!;
+
+test("a closed secret is printed without its routes; an open one with them where it can come out", () => {
+  const closed = brief(initialStoryState(BLACKSTONE), 5, -1, -3);
+  assert.match(truthLine(closed, "t_corvane_is_buyer"), /gate CLOSED/);
+  assert.doesNotMatch(truthLine(closed, "t_corvane_is_buyer"), /Routes:/);
   const s = initialStoryState(BLACKSTONE);
-  const open = brief({ ...s, act: "act_silver_road", flags: [...s.flags, "act:act_silver_road"] });
-  const openLine = open.split("\n").find((l) => l.includes("[t_corvane_is_buyer]"))!;
-  assert.match(openLine, /gate OPEN/);
-  assert.match(openLine, /Routes: meeting him at the cairn/);
+  const act2 = { ...s, act: "act_silver_road", flags: [...s.flags, "act:act_silver_road"] };
+  const atCairn = truthLine(brief(act2, 5, -1, -3), "t_corvane_is_buyer");
+  assert.match(atCairn, /gate OPEN/);
+  assert.match(atCairn, /Routes: meeting him at the cairn/);
+});
+
+test("a truth's routes print only where it can come out: this place, the people in it, or the clues worked here", () => {
+  const atSquare = brief(initialStoryState(BLACKSTONE), 5, 0, 0);
+  assert.match(truthLine(atSquare, "t_dead_walk_ridge"), /Routes: watching the ridge after dark/, "the square lists it, and Hobb keeps it");
+  assert.doesNotMatch(truthLine(atSquare, "t_oath_seal"), /Routes:/, "nothing at the square can reveal the oath");
+  assert.match(truthLine(atSquare, "t_oath_seal"), /The oath was never about the mine/, "the truth itself is always there");
+  assert.match(truthLine(brief(initialStoryState(BLACKSTONE), 5, -1, 0), "t_oath_seal"), /Routes: Sexton Pell/, "Pell keeps it, at her shrine");
 });
 
 test("detail follows the player: the people where they stand in full, the rest of the act in one line", () => {
   const atSquare = brief(initialStoryState(BLACKSTONE), 3, 0, 0);
   assert.match(atSquare, /YOU ARE HERE: \[loc_square\]/);
   assert.match(atSquare, /\[npc_hobb\] Hobb Varley, Blackstone's only watchman\. A broad young man/);
-  assert.match(atSquare, /\[npc_grukka\] Grukka Two-Knives, chief of the Hollow Teeth\. Wants right now:/);
+  assert.match(atSquare, /\[npc_grukka\] Grukka Two-Knives, chief of the Hollow Teeth\. Wants now:/);
   assert.doesNotMatch(atSquare, /Grukka Two-Knives, chief of the Hollow Teeth\. A grey-skinned/);
   const atCamp = brief(initialStoryState(BLACKSTONE), 3, 0, -2);
   assert.match(atCamp, /Grukka Two-Knives, chief of the Hollow Teeth\. A grey-skinned/);

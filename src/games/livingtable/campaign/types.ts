@@ -149,17 +149,17 @@ export interface Npc {
   speech: string;
   currentGoal: string;
   faction?: Id;
-  /** A location id: where they are usually found. */
+  /** A location id: where they are usually found. The one place this is written; a location's "usually here" is read off it. */
   location?: Id;
   /** The token asset id the DM should stand them on the board with, when the roster has a fitting one. */
   token?: string;
 }
 
-/** One map cell a location occupies, with the one line the DM reads before it builds that cell. */
+/** One map cell a location occupies, with the one line the DM reads before it builds that cell. A single-cell location can leave `hint` out and its description is used. */
 export interface LocationCell {
   cx: number;
   cy: number;
-  hint: string;
+  hint?: string;
 }
 
 export interface Location {
@@ -173,14 +173,10 @@ export interface Location {
   cells: LocationCell[];
   description: string;
   atmosphere: string;
+  /** What is there, including what can be handled. Who is usually here comes from each NPC's `location`, and what can be fought or talked through here from each encounter's. */
   features: string[];
-  /** NPC ids. */
-  npcs: Id[];
   /** Truth ids that can be learned here. */
   secrets: Id[];
-  interactables: string[];
-  /** Encounter ids. */
-  encounters: Id[];
   /** Location ids. */
   connected: Id[];
   threats: string[];
@@ -296,13 +292,12 @@ export interface Beat {
   sets?: Id[];
 }
 
+/** An act's cast and places are its arcs' `npcs` and `locations`, so they are written once, on the arcs. */
 export interface Act {
   id: Id;
   title: string;
   goal: string;
   conflict: string;
-  locations: Id[];
-  npcs: Id[];
   revelation: string;
   arcs: Arc[];
   beats: Beat[];

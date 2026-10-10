@@ -16,6 +16,7 @@
  * losing sight of what exists beyond the room.
  */
 import {
+  actCast,
   arcOpen,
   arcResolved,
   attitudeOf,
@@ -24,6 +25,7 @@ import {
   describeCondition,
   indexModule,
   locationAt,
+  npcsAt,
 } from "./engine";
 import type { Arc, CampaignModule, Condition, Encounter, Location, Npc, Scene, StoryState, Truth } from "./types";
 
@@ -50,8 +52,15 @@ function cellsOf(loc: Location): string {
   return loc.cells.map((c) => `(${c.cx},${c.cy})`).join(" ");
 }
 
-function renderTruth(t: Truth, state: StoryState, flags: Set<string>, scene: number): string {
-  const via = t.learnedVia?.length ? ` Routes: ${list(t.learnedVia)}.` : "";
+/**
+ * One truth. Its routes (how it can come out) are printed only where it can
+ * come out: `withinReach` is every truth this location, the people standing
+ * in it, or the clues being worked here can reveal. Anywhere else the DM
+ * needs the truth and its status to stay consistent, not a list of doors on
+ * the far side of the map.
+ */
+function renderTruth(t: Truth, state: StoryState, flags: Set<string>, scene: number, withinReach: ReadonlySet<string>): string {
+  const via = t.learnedVia?.length && withinReach.has(t.id) ? ` Routes: ${list(t.learnedVia)}.` : "";
   if (t.visibility === "known") return `  [${t.id}] ${t.text}`;
   if (state.learned.includes(t.id)) return `  [${t.id}] ${t.text} (THE PLAYER HAS LEARNED THIS)`;
   if (t.visibility === "discoverable") return `  [${t.id}] ${t.text}${via} (not learned yet)`;
@@ -65,30 +74,29 @@ function renderNpc(module: CampaignModule, state: StoryState, n: Npc): string {
   const dead = state.dead.includes(n.id) ? " DEAD." : "";
   return [
     `  [${n.id}] ${n.name}, ${n.role}.${dead} ${n.description}`,
-    `    Personality: ${n.personality} Speaks: ${n.speech}`,
-    `    Wants right now: ${n.currentGoal} Underneath: ${n.motivation} Fears: ${n.fears} Values: ${n.values}`,
-    `    Toward the player: ${attitudeOf(module, state, n.id)}. Knows: ${list(n.knowledge)}.`,
-    `    Keeps (out of their own mouth, in pieces, under pressure, or not at all): ${list(n.secrets)}. Relationships: ${list(n.relationships)}.` +
-      (n.token ? ` Board token: ${n.token}.` : ""),
+    `    ${n.personality} Speaks: ${n.speech}`,
+    `    Wants now: ${n.currentGoal} Underneath: ${n.motivation} Fears: ${n.fears} Values: ${n.values}`,
+    `    Toward the player: ${attitudeOf(module, state, n.id)}. Knows: ${list(n.knowledge)}. Keeps: ${list(n.secrets)}. Ties: ${list(n.relationships)}.` +
+      (n.token ? ` Token: ${n.token}.` : ""),
   ].join("\n");
 }
 
 /** One line: enough to keep someone consistent when they are not in front of the player. */
 function renderNpcBrief(module: CampaignModule, state: StoryState, n: Npc): string {
   const dead = state.dead.includes(n.id) ? " DEAD." : "";
-  return `  [${n.id}] ${n.name}, ${n.role}.${dead} Wants right now: ${n.currentGoal} Toward the player: ${attitudeOf(module, state, n.id)}. Keeps: ${list(n.secrets)}.`;
+  return `  [${n.id}] ${n.name}, ${n.role}.${dead} Wants now: ${n.currentGoal} Toward the player: ${attitudeOf(module, state, n.id)}. Keeps: ${list(n.secrets)}.`;
 }
 
 function renderScene(s: Scene, full: boolean, module: CampaignModule): string {
   const where = indexModule(module).locations.get(s.location)?.name ?? s.location;
   if (!full) return `    scene [${s.id}] ${s.name}, at ${where}: ${s.situation}`;
-  const checks = s.checks.map((c) => `${c.skill} DC ${c.dc} reveals ${c.reveals}`);
+  const checks = s.checks.map((c) => `${c.skill} DC ${c.dc}: ${c.reveals}`);
   return [
     `    scene [${s.id}] ${s.name}, at ${where}: ${s.situation}`,
-    `      Present: ${list(s.npcsPresent)}. What they want: ${s.whatTheyWant}`,
-    `      The player knows: ${s.playerKnows} Hidden: ${s.hidden}`,
-    `      Can be done here: ${list(s.interactions)}. Checks it is pitched at: ${list(checks)}.${s.combat ? ` Can turn into encounter ${s.combat}.` : ""}`,
-    `      If it drags or goes badly: ${s.escalation} Ways it can end: ${list(s.outcomes)}.`,
+    `      Present: ${list(s.npcsPresent)}. They want: ${s.whatTheyWant}`,
+    `      Player knows: ${s.playerKnows} Hidden: ${s.hidden}`,
+    `      Can be done: ${list(s.interactions)}. Checks: ${list(checks)}.${s.combat ? ` Can become ${s.combat}.` : ""}`,
+    `      Escalation: ${s.escalation} Ends: ${list(s.outcomes)}.`,
   ].join("\n");
 }
 
@@ -99,8 +107,8 @@ function renderEncounter(e: Encounter, full: boolean): string {
     head,
     `      Who: ${list(e.participants)}. Ground: ${e.environment} Special: ${list(e.special)}.`,
     (e.enemyBehavior ? `      Enemies: ${e.enemyBehavior}` : "") + (e.npcBehavior ? ` Others: ${e.npcBehavior}` : ""),
-    `      Starts when: ${list(e.triggers)}. Success: ${e.success} Failure: ${e.failure}`,
-    `      Other ways through: ${list(e.alternatives)}. What it earns: ${list(e.rewards)}.`,
+    `      Starts: ${list(e.triggers)}. Success: ${e.success} Failure: ${e.failure}`,
+    `      Other ways: ${list(e.alternatives)}. Earns: ${list(e.rewards)}.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -109,32 +117,33 @@ function renderEncounter(e: Encounter, full: boolean): string {
 function renderArc(module: CampaignModule, state: StoryState, arc: Arc, ctx: BriefContext, here: Location | undefined): string {
   const flags = new Set(state.flags);
   if (!arcOpen(module, state, arc.id, ctx.scene)) {
-    return `  [${arc.id}] ${arc.name}: NOT OPEN YET (needs ${describeCondition(arc.opensWhen, flags, ctx.scene)}). ${arc.purpose}`;
+    return `  [${arc.id}] ${arc.name}: NOT OPEN (needs ${describeCondition(arc.opensWhen, flags, ctx.scene)}). ${arc.purpose}`;
   }
   const reached = arc.outcomes.filter((o) => state.outcomes.includes(o.id));
   if (arcResolved(state, arc)) {
     const rest = arc.outcomes.filter((o) => !state.outcomes.includes(o.id)).map((o) => `[${o.id}] ${o.text}`);
-    return `  [${arc.id}] ${arc.name}: RESOLVED. Reached: ${reached.map((o) => `[${o.id}] ${o.text}`).join("; ")}. Still reachable if play goes there: ${list(rest)}.`;
+    return `  [${arc.id}] ${arc.name}: RESOLVED. Reached: ${reached.map((o) => `[${o.id}] ${o.text}`).join("; ")}. Still reachable: ${list(rest)}.`;
   }
-  const clues = arc.clues.map((c) => `[${c.id}] ${c.text} (at: ${c.source}) ${state.clues.includes(c.id) ? "FOUND" : "not found"}`);
   const outcomes = arc.outcomes.map((o) => `[${o.id}] ${o.text}`);
   const isHere = (locId: string) => here?.id === locId;
   if (!here || !arc.locations.includes(here.id)) {
+    // Played out elsewhere: what it is for and how it can end, with its
+    // clues as ids. Each clue's text and whereabouts print in full once the
+    // player is in one of the arc's places.
     const elsewhere = [...arc.scenes.map((s) => `${s.id} (${s.name})`), ...arc.encounters.map((e) => `${e.id} (${e.name})`)];
     return [
-      `  [${arc.id}] ${arc.name}: OPEN, played out elsewhere (${list(arc.locations)}). Objective: ${arc.objective}`,
-      `    Clues: ${list(arc.clues.map((c) => `[${c.id}] ${state.clues.includes(c.id) ? "FOUND" : "not found"}, at ${c.source}`))}.`,
-      `    Outcomes: ${list(outcomes)}. Its scenes and encounters, in full when the player is there: ${list(elsewhere)}.`,
+      `  [${arc.id}] ${arc.name}: OPEN, elsewhere (${list(arc.locations)}). Objective: ${arc.objective}`,
+      `    Clues: ${list(arc.clues.map((c) => `${c.id}${state.clues.includes(c.id) ? " FOUND" : ""}`))}. Outcomes: ${list(outcomes)}. Scenes and encounters: ${list(elsewhere)}.`,
     ].join("\n");
   }
+  const clues = arc.clues.map((c) => `[${c.id}]${state.clues.includes(c.id) ? " FOUND:" : ""} ${c.text} (at: ${c.source})`);
   return [
     `  [${arc.id}] ${arc.name}: OPEN. ${arc.purpose}`,
-    `    Starting state: ${arc.startingState}`,
-    `    The player's objective: ${arc.objective} What stands in the way: ${arc.conflict}`,
-    `    Approaches that work (or one nobody wrote, if it is sound): ${list(arc.approaches)}.`,
+    `    Now: ${arc.startingState} Objective: ${arc.objective} In the way: ${arc.conflict}`,
+    `    Approaches: ${list(arc.approaches)}.`,
     `    Clues: ${list(clues)}.`,
-    `    Outcomes (report the id the turn one happens): ${list(outcomes)}.`,
-    `    If the player fails or walks away: ${arc.failure} What it can earn: ${list(arc.rewards)}. How the world changes: ${list(arc.worldChanges)}.`,
+    `    Outcomes: ${list(outcomes)}.`,
+    `    If they fail or walk away: ${arc.failure} Earns: ${list(arc.rewards)}. Changes: ${list(arc.worldChanges)}.`,
     ...arc.scenes.map((s) => renderScene(s, isHere(s.location), module)),
     ...arc.encounters.map((e) => renderEncounter(e, isHere(e.location))),
   ].join("\n");
@@ -144,11 +153,11 @@ function renderHere(module: CampaignModule, here: Location | undefined, ctx: Bri
   if (!here) {
     return `  YOU ARE HERE: cell (${ctx.cx},${ctx.cy}), which this campaign has not written. Improvise it, consistent with everything above, and keep it modest: the written places are where the story lives.`;
   }
-  const people = here.npcs.map((id) => indexModule(module).npcs.get(id)?.name ?? id);
+  const people = npcsAt(module, here.id).map((id) => indexModule(module).npcs.get(id)?.name ?? id);
   return [
     `  YOU ARE HERE: [${here.id}] ${here.name}, cells ${cellsOf(here)}. ${here.description}`,
     `    Atmosphere: ${here.atmosphere}`,
-    `    Features: ${list(here.features)}. Things to interact with: ${list(here.interactables)}.`,
+    `    Features: ${list(here.features)}.`,
     `    Usually here: ${list(people)}. Threats: ${list(here.threats)}. To be found here: ${list(here.discoverable)}.`,
     `    Truths that can be learned here: ${list(here.secrets)}. Leads to: ${list(here.connected)}.`,
   ].join("\n");
@@ -167,25 +176,31 @@ export function renderCampaignBrief(module: CampaignModule, state: StoryState, c
   // People in full: whoever is usually where the player is standing, and
   // anyone in a scene written there. This act's other people get one line
   // each, enough to stay consistent offstage; everyone else, a name.
-  const focus = new Set<string>(here?.npcs ?? []);
+  const focus = new Set<string>(here ? npcsAt(module, here.id) : []);
   for (const arc of act.arcs) for (const s of arc.scenes) if (s.location === here?.id) s.npcsPresent.forEach((id) => focus.add(id));
   const focused = module.npcs.filter((n) => focus.has(n.id));
-  const cast = module.npcs.filter((n) => !focus.has(n.id) && (act.npcs.includes(n.id) || n.id === v.npc));
+  const actNpcs = actCast(module, act);
+  const cast = module.npcs.filter((n) => !focus.has(n.id) && (actNpcs.includes(n.id) || n.id === v.npc));
   const others = module.npcs.filter((n) => !focus.has(n.id) && !cast.includes(n));
 
   const fired = v.clock.filter((s) => state.clock.includes(s.id));
   const pending = v.clock.filter((s) => !state.clock.includes(s.id) && !state.prevented.includes(s.id));
   const stopped = v.clock.filter((s) => state.prevented.includes(s.id));
 
-  const truthsBy = (vis: Truth["visibility"]) => module.truths.filter((t) => t.visibility === vis).map((t) => renderTruth(t, state, flags, ctx.scene));
+  const withinReach = new Set<string>([
+    ...(here?.secrets ?? []),
+    ...focused.flatMap((n) => n.secrets),
+    ...act.arcs.filter((a) => here && a.locations.includes(here.id)).flatMap((a) => a.clues.flatMap((c) => c.pointsTo)),
+  ]);
+  const truthsBy = (vis: Truth["visibility"]) =>
+    module.truths.filter((t) => t.visibility === vis).map((t) => renderTruth(t, state, flags, ctx.scene, withinReach));
 
   const beats = act.beats.map((b) => {
-    const status = state.beats.includes(b.id)
-      ? "DONE"
-      : conditionHolds(b.notBefore, flags, ctx.scene)
-        ? "READY"
-        : `NOT YET (needs ${describeCondition(b.notBefore, flags, ctx.scene)})`;
-    return `  [${b.id}] ${b.text}: ${status}. Required: ${b.required} Can happen through: ${list(b.canHappenThrough)}. Then: ${b.result}`;
+    if (state.beats.includes(b.id)) return `  [${b.id}] ${b.text} DONE. ${b.result}`;
+    const status = conditionHolds(b.notBefore, flags, ctx.scene)
+      ? "READY"
+      : `NOT YET (needs ${describeCondition(b.notBefore, flags, ctx.scene)})`;
+    return `  [${b.id}] ${b.text} ${status}. Required: ${b.required} Through: ${list(b.canHappenThrough)}. Then: ${b.result}`;
   });
 
   const ending = state.ending ? module.endings.find((e) => e.id === state.ending) : undefined;
@@ -230,17 +245,20 @@ export function renderCampaignBrief(module: CampaignModule, state: StoryState, c
       const leader = f.leader ? idx.npcs.get(f.leader)?.name ?? f.leader : "nobody";
       return `  [${f.id}] ${f.name}, led by ${leader}. Goal: ${f.goal} Toward the player: ${attitudeOf(module, state, f.id)}. Wants from the player: ${f.wantsFromPlayer} If ignored: ${f.ifIgnored} Enemies: ${list(f.enemies)}.`;
     }),
-    `\nPEOPLE (play each one as written; what they want right now is what drives them)`,
+    `\nPEOPLE (play each as written: what they want now drives them, and what they keep comes out of their own mouth, in pieces, under pressure, or not at all)`,
     ...focused.map((n) => renderNpc(module, state, n)),
     ...cast.map((n) => renderNpcBrief(module, state, n)),
     ...(others.length ? [`  Elsewhere for now: ${others.map((n) => `[${n.id}] ${n.name}, ${n.role}${state.dead.includes(n.id) ? " (DEAD)" : ""}`).join("; ")}`] : []),
     `\nPLACES (cell coordinates; north is cy-1)`,
     renderHere(module, here, ctx),
-    ...module.locations.filter((l) => l !== here).map((l) => `  [${l.id}] ${l.name} at ${cellsOf(l)}: ${l.description}`),
+    // Only names and cells for the rest: the DM is handed each neighbouring
+    // cell's own hint with the map, and a place prints in full once the
+    // player is standing in it.
+    `  Elsewhere: ${module.locations.filter((l) => l !== here).map((l) => `[${l.id}] ${l.name} ${cellsOf(l)}`).join("; ")}.`,
     `\nACT ${actPos + 1} OF ${module.acts.length}: ${act.title}`,
     `  Goal: ${act.goal} Conflict: ${act.conflict}`,
     `  What it builds to: ${act.revelation}`,
-    ` ARCS (problems the player can solve, in any order, by any means):`,
+    ` ARCS (problems the player can solve in any order, by a listed approach or any other sound one; report an outcome's id the turn it happens):`,
     ...act.arcs.map((arc) => renderArc(module, state, arc, ctx, here)),
     ` BEATS (these must happen eventually; you choose how and when, from what the player is actually doing, never by forcing it):`,
     ...beats,

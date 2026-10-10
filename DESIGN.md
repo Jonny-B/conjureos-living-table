@@ -333,8 +333,11 @@ engine notes on the next turn. No extra model call and no extra charge.
 What the DM reads is `campaign/brief.ts`: every truth with its gate, the
 villain and what his clock does next, the factions, and only the current act
 in full. Detail follows the player: the people and scenes where they stand
-are printed in full, everything else in one line, which keeps the brief to
-roughly 20 to 30 KB a turn.
+are printed in full, everything else in one line or less, and a truth's
+routes print only where it can come out, which keeps the brief to roughly
+16 to 24 KB a turn. Each fact has one home in the format (who is where lives
+on the person, what happens where on the scene), so nothing is paid for
+twice.
 
 Storage: the campaign row stores a pointer (`arcOutline.module`) plus an
 ordinary plan as a fallback; the module ships in the app, so its ids are

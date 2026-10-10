@@ -92,10 +92,9 @@ export function validateCampaignModule(module: CampaignModule): string[] {
       if (prior) say(`cell (${key}) is claimed by both "${prior}" and "${l.id}"`);
       else cellOwner.set(key, l.id);
     }
-    ref(l.npcs, npcs, "npc", `location "${l.id}"`);
     ref(l.secrets, truths, "truth", `location "${l.id}" secrets`);
-    ref(l.encounters, encounterIds, "encounter", `location "${l.id}"`);
     ref(l.connected, locations, "location", `location "${l.id}" connected`);
+    if (l.cells.length > 1 && l.cells.some((c) => !c.hint)) say(`location "${l.id}" covers several cells, so each needs its own hint`);
   }
 
   for (const t of module.truths) {
@@ -104,8 +103,6 @@ export function validateCampaignModule(module: CampaignModule): string[] {
   }
 
   module.acts.forEach((act, i) => {
-    ref(act.locations, locations, "location", `act "${act.id}"`);
-    ref(act.npcs, npcs, "npc", `act "${act.id}"`);
     const last = i === module.acts.length - 1;
     if (!last && !act.advanceWhen) say(`act "${act.id}" has no advanceWhen, so the campaign can never leave it`);
     if (last && act.advanceWhen) say(`act "${act.id}" is the last act and has an advanceWhen with nowhere to go; an ending is what closes a campaign`);

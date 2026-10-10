@@ -6,6 +6,14 @@ fields map one to one onto `CampaignModule` in
 `src/games/livingtable/campaign/types.ts`. `modules/blackstone.ts` is a
 finished example of every field.
 
+## Write each fact once
+
+The DM is sent the brief every turn, so a fact written in three places is
+paid for three times. Each thing has one home: who is where lives on the
+person, what happens where lives on the scene or encounter, and how a truth
+comes out lives on the truth (plus the clues that point at it). The brief
+shows each place, person and scene in full only when the player is there.
+
 ## The one rule
 
 Write the campaign as **facts, situations and possible outcomes**, never as a
@@ -139,7 +147,7 @@ What does this person want RIGHT NOW? That field matters most.
   speech style:
   current goal:
   faction:             (faction id)
-  usually found at:    (location id)
+  usually found at:    (location id; the only place this is written, so a place's "usually here" comes from it)
   token:               (roster token id)
 ```
 
@@ -148,17 +156,19 @@ What does this person want RIGHT NOW? That field matters most.
 ```text
 - id:
   name:
-  cells:               (cx,cy: one line each on what is there)
+  cells:               (cx,cy; one place, one cell: the description doubles as the map hint.
+                        Several cells: one line each on what is there)
   description:
   atmosphere:
-  features:
-  people:              (npc ids)
+  features:            (what is there, including what can be handled)
   secrets:             (truth ids that can be learned here)
-  interactable:
-  encounters:          (encounter ids)
   connected to:        (location ids)
   threats:
   discoverable:
+
+Who is usually here comes from each person's "usually found at", and what
+can happen here from each scene and encounter's location. Write those once,
+there.
 ```
 
 ## 7. Acts (3 to 5)
@@ -168,9 +178,8 @@ ACT id:
   title:
   goal:
   main conflict:
-  locations:           (location ids)
-  people:              (npc ids)
   revelation:          (what it builds to)
+  (an act's people and places are its arcs' people and locations: list them on the arcs)
   advance when:        (condition; leave empty on the last act)
   transition:          (what the DM is told when this act begins)
 

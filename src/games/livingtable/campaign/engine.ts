@@ -29,6 +29,7 @@ import type {
   Condition,
   Id,
   Location,
+  LocationCell,
   Outcome,
   StoryState,
   StoryUpdate,
@@ -96,6 +97,22 @@ function actPosition(module: CampaignModule, state: StoryState): number {
   return indexModule(module).acts.get(state.act) ?? 0;
 }
 
+/** What the DM reads about one cell before building it: its own hint, or its location's description. */
+export function cellHint(loc: Location, cell: LocationCell): string {
+  return cell.hint ?? loc.description;
+}
+
+/** The people an act puts in play: everyone its arcs name, in module order. */
+export function actCast(module: CampaignModule, act: Act): Id[] {
+  const named = new Set(act.arcs.flatMap((a) => a.npcs));
+  return module.npcs.filter((n) => named.has(n.id)).map((n) => n.id);
+}
+
+/** Who is usually found at a location, read off each NPC's own `location`. */
+export function npcsAt(module: CampaignModule, locationId: Id): Id[] {
+  return module.npcs.filter((n) => n.location === locationId).map((n) => n.id);
+}
+
 /** The written location whose cells include this one, if the campaign wrote one there. */
 export function locationAt(module: CampaignModule, cx: number, cy: number): Location | undefined {
   return module.locations.find((l) => l.cells.some((c) => c.cx === cx && c.cy === cy));
@@ -116,10 +133,11 @@ export function conditionHolds(cond: Condition | undefined, flags: ReadonlySet<I
 export function describeCondition(cond: Condition | undefined, flags: ReadonlySet<Id>, scene: number): string {
   if (!cond) return "nothing";
   const parts: string[] = [];
-  const mark = (f: Id) => `${f} (${flags.has(f) ? "done" : "not yet"})`;
+  // Only what already holds is marked; an unmarked flag has not happened.
+  const mark = (f: Id) => (flags.has(f) ? `${f} (done)` : f);
   if (cond.allOf?.length) parts.push(`all of: ${cond.allOf.map(mark).join(", ")}`);
   if (cond.anyOf?.length) parts.push(`any of: ${cond.anyOf.map(mark).join(", ")}`);
-  if (cond.noneOf?.length) parts.push(`none of: ${cond.noneOf.map((f) => `${f} (${flags.has(f) ? "SET" : "not set"})`).join(", ")}`);
+  if (cond.noneOf?.length) parts.push(`none of: ${cond.noneOf.map((f) => (flags.has(f) ? `${f} (SET)` : f)).join(", ")}`);
   if (cond.afterScene !== undefined) parts.push(`scene ${cond.afterScene} or later (it is scene ${scene})`);
   return parts.length ? parts.join("; ") : "nothing";
 }
@@ -400,7 +418,7 @@ function settle(module: CampaignModule, draft: Draft, scene: number): string[] {
 export function moduleRegionHints(module: CampaignModule): Record<string, string> {
   const out: Record<string, string> = {};
   for (const loc of module.locations) {
-    for (const cell of loc.cells) out[`${cell.cx},${cell.cy}`] = `${loc.name}: ${cell.hint}`;
+    for (const cell of loc.cells) out[`${cell.cx},${cell.cy}`] = `${loc.name}: ${cellHint(loc, cell)}`;
   }
   return out;
 }
@@ -417,7 +435,7 @@ export function arcOutlineFor(module: CampaignModule): ArcOutline {
     throughline: module.premise.centralConflict,
     beats: module.acts.map((a) => `${a.title}: ${a.goal}`),
     npcs: module.npcs.map((n) => ({ name: n.name, role: n.role })),
-    regionSketch: module.locations.flatMap((l) => l.cells.map((c) => ({ cx: c.cx, cy: c.cy, hint: `${l.name}: ${c.hint}` }))),
+    regionSketch: module.locations.flatMap((l) => l.cells.map((c) => ({ cx: c.cx, cy: c.cy, hint: `${l.name}: ${cellHint(l, c)}` }))),
     module: { id: module.id, version: module.version },
   };
 }
