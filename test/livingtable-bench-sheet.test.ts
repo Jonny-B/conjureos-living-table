@@ -356,7 +356,7 @@ test("heroPreview gives the default stats of each class under the adventure's ow
 test("the sheet names the class by the archetype, so a hero saved as The Shadow reads Rogue (item 6)", () => {
   const old = { ...build(), archetypeId: "shadow", displayName: "The Shadow" } as CharacterSheet;
   assert.equal(sheetClassName(old), "Rogue");
-  assert.equal(sheetClassName({ ...old, archetypeId: "fireball-person", displayName: "The Fireball Person" } as CharacterSheet), "Mage");
+  assert.equal(sheetClassName({ ...old, archetypeId: "fireball-person", displayName: "The Fireball Person" } as CharacterSheet), "Wizard");
   assert.equal(sheetClassName({ ...old, archetypeId: "from-the-future", displayName: "The Oddity" } as CharacterSheet), "Oddity", "an unknown class keeps its stored name");
 });
 

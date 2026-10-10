@@ -251,7 +251,7 @@ export interface SlotDefinition {
  * so two reskins of one class are equally strong.
  *
  * The Knight's set is the owner's own example, given verbatim (sword, shield,
- * armour), and the Mage's is their wizard example (staff, hat,
+ * armour), and the Wizard's is their wizard example (staff, hat,
  * cloak). The other six follow that spirit off each archetype's real
  * `startingInventory` in templates.ts.
  *

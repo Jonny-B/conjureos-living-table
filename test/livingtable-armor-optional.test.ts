@@ -57,7 +57,7 @@ function bare(id: string, items?: string[]): CharacterSheet {
 
 // ── 1. unarmored AC ─────────────────────────────────────────────────────
 
-test("an unarmored Knight, Rogue and Mage are AC 10 + DEX with nothing slowing them", () => {
+test("an unarmored Knight, Rogue and Wizard are AC 10 + DEX with nothing slowing them", () => {
   for (const hero of HEROES) {
     const sheet = bare(hero.id);
     const expected = 10 + sheet.modifiers.dex;

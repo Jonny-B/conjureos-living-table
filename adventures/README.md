@@ -109,7 +109,7 @@ One bullet each. Keep each to one idea. Truths pin facts down ("There is exactly
 
 ### Hooks
 
-How the story addresses each class: `- default:`, `- fighter:`, `- rogue:`, `- wizard:`, `- cleric:`. A hero gets the line for their class, or `default` if their class has none. The launch heroes map as Knight is `fighter`, Shadow is `rogue`, Fireball Person is `wizard`, Healer is `cleric` (`knight`, `shadow`, `fireball person` and `healer` also work as keys).
+How the story addresses each class: `- default:`, `- fighter:`, `- rogue:`, `- wizard:`, `- cleric:`. A hero gets the line for their class, or `default` if their class has none. The launch heroes map as Knight is `fighter`, Rogue is `rogue`, Wizard is `wizard`, Healer is `cleric` (`knight`, `shadow`, `mage`, `fireball person` and `healer` also work as keys).
 
 ### Starting kit
 

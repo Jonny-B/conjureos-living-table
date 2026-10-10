@@ -308,10 +308,10 @@ test("spellSlotsForLevel: Wizard chassis levels 1-3 match the SRD full-caster ta
   assert.deepEqual(spellSlotsForLevel("wizard", 3), { 1: { max: 4, used: 0 }, 2: { max: 2, used: 0 } });
 });
 
-test("spellSlotsForLevel: a level-3 Wizard has no 3rd-level slot, so Mage cannot cast Fireball yet", () => {
+test("spellSlotsForLevel: a level-3 Wizard has no 3rd-level slot, so the Wizard cannot cast Fireball yet", () => {
   // This locks in the SRD progression on purpose: the full-caster table does
   // not grant a 3rd-level slot until character level 5. A future "fix" that
-  // hands Mage an early 3rd-level slot must fail this test, not
+  // hands the Wizard an early 3rd-level slot must fail this test, not
   // silently pass it.
   const slots = spellSlotsForLevel("wizard", 3);
   assert.equal(slots[3], undefined, "a level-3 Wizard must not have a 3rd-level spell slot bucket at all");

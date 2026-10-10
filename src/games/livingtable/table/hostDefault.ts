@@ -51,7 +51,7 @@ export const DEFAULT_SPRITES: Record<TemplateGenre, readonly CatalogSprite[]> = 
     { assetId: "barrel", kind: "prop", name: "Barrel", walkable: false },
     { assetId: "token_knight", kind: "token", name: "Knight", walkable: true },
     { assetId: "token_shadow", kind: "token", name: "Rogue", walkable: true },
-    { assetId: "token_fireball_person", kind: "token", name: "Mage", walkable: true },
+    { assetId: "token_fireball_person", kind: "token", name: "Wizard", walkable: true },
     { assetId: "token_goblin", kind: "token", name: "Goblin", walkable: true },
     { assetId: "token_skeleton", kind: "token", name: "Skeleton", walkable: true },
   ],

@@ -143,7 +143,7 @@ export const ARCHETYPE_LABEL: Record<ArchetypeId, string> = {
   knight: "Knight",
   shadow: "Rogue",
   healer: "Healer",
-  "fireball-person": "Mage",
+  "fireball-person": "Wizard",
   trooper: "Trooper",
   infiltrator: "Infiltrator",
   medic: "Medic",

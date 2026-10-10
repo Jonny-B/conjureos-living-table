@@ -1,12 +1,12 @@
 /**
  * Spell slots and the named spell lists for the two caster chassis this
  * launch supports (see DESIGN.md's "Characters: templates first" table:
- * Healer/Medic = Cleric, Mage/Psion = Wizard).
+ * Healer/Medic = Cleric, Wizard/Psion = Wizard).
  *
  * Scope is levels 1-3, matching the rest of `rules/`. That range matters
  * more here than anywhere else in the engine: SRD 5.1's full-caster slot
  * table does not grant a 3rd-level spell slot until character level 5, so a
- * level-3 "Mage" cannot cast Fireball yet. That's not a gap in
+ * level-3 "Wizard" cannot cast Fireball yet. That's not a gap in
  * this module, it's the SRD progression working correctly; see the note by
  * WIZARD_SPELLS below rather than "fixing" it by handing out an early slot.
  */
@@ -77,7 +77,7 @@ export const CLERIC_SPELLS: SpellInfo[] = [
 ];
 
 /**
- * NOTE ON "Mage": Fireball is a 3rd-level spell in SRD 5.1, and
+ * NOTE ON "Wizard": Fireball is a 3rd-level spell in SRD 5.1, and
  * the full-caster slot table above does not grant a 3rd-level slot until
  * character level 5. A level-1 to 3 Wizard character genuinely cannot cast
  * Fireball yet under standard progression; this list only includes what a

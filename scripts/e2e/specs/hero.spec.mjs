@@ -1,9 +1,9 @@
-// The hero choice (a swipeable strip of Knight, Rogue and Mage, each drawn in basic gear with its default stats)
+// The hero choice (a swipeable strip of Knight, Rogue and Wizard, each drawn in basic gear with its default stats)
 // and the character maker (the name first, then a class or a blank sheet). Bug bash items 6 and 25.
 import { dmScript } from "../lib/fixtures.mjs";
 
 const WITH_SERVER = { art: true };
-const OLD_NAMES = /Shadow|Fireball/;
+const OLD_NAMES = /Shadow|Fireball|Mage/;
 
 /** The hero choice of the Rat Cellar, at a given window size. */
 async function openHeroChoice(newGame, viewport, touch) {
@@ -23,7 +23,7 @@ async function currentDot(page) {
 
 export const specs = [
   {
-    name: "the hero choice is a strip of Knight, Rogue and Mage with a doll and default stats, then the maker (390 and 1280)",
+    name: "the hero choice is a strip of Knight, Rogue and Wizard with a doll and default stats, then the maker (390 and 1280)",
     async run({ newGame, assert }) {
       for (const [viewport, touch] of [[{ width: 390, height: 844 }, true], [{ width: 1280, height: 900 }, false]]) {
         const where = `${viewport.width}px`;
@@ -32,7 +32,7 @@ export const specs = [
         const slides = await page.locator("[data-lto-slide]").evaluateAll((n) => n.map((x) => x.dataset.ltoSlide));
         assert.deepEqual(slides, ["fighter", "rogue", "wizard", "create"], `${where}: three classes then the maker`);
         const titles = await page.locator("[data-lto-slide] .lto-card-title").evaluateAll((n) => n.map((x) => x.dataset.text));
-        assert.deepEqual(titles.slice(0, 3), ["Knight", "Rogue", "Mage"], `${where}: the classes are called Knight, Rogue and Mage`);
+        assert.deepEqual(titles.slice(0, 3), ["Knight", "Rogue", "Wizard"], `${where}: the classes are called Knight, Rogue and Wizard`);
         assert.equal(await page.locator("[data-lto-doll] canvas").count(), 3, `${where}: a doll for each class`);
         const inked = await page.locator("[data-lto-doll] canvas").evaluateAll((cs) =>
           cs.map((c) => {
@@ -44,7 +44,7 @@ export const specs = [
         );
         for (const n of inked) assert.ok(n > 500, `${where}: the doll is drawn (${n} painted pixels)`);
         assert.equal(await currentDot(page), 0, `${where}: starts on the Knight`);
-        // Right, Right: the Mage.
+        // Right, Right: the Wizard.
         await page.keyboard.press("ArrowRight");
         await page.waitForFunction(() => document.querySelector('[data-lto-hero-dot="1"]')?.getAttribute("aria-current") === "true");
         await page.keyboard.press("ArrowRight");
@@ -59,7 +59,7 @@ export const specs = [
           const slide = document.querySelector('[data-lto-slide="wizard"]').getBoundingClientRect();
           return { ok: Math.abs(slide.left - strip.left) < 4 && Math.abs(slide.right - strip.right) < 4, strip: [strip.left, strip.right], slide: [slide.left, slide.right], scrollLeft: document.querySelector(".lto-hero-strip").scrollLeft, clientWidth: document.querySelector(".lto-hero-strip").clientWidth, scrollWidth: document.querySelector(".lto-hero-strip").scrollWidth, slides: [...document.querySelectorAll(".lto-hero-slide")].map((s) => [s.offsetLeft, s.offsetWidth]) };
         });
-        assert.ok(inView.ok, `${where}: the Mage slide fills the strip ${JSON.stringify(inView)}`);
+        assert.ok(inView.ok, `${where}: the Wizard slide fills the strip ${JSON.stringify(inView)}`);
         // Left comes back.
         await page.keyboard.press("ArrowLeft");
         await page.waitForFunction(() => document.querySelector('[data-lto-hero-dot="1"]')?.getAttribute("aria-current") === "true");
@@ -78,7 +78,7 @@ export const specs = [
         assert.match(statsText, /INT/, `${where}: and the abilities`);
         assert.equal(await toggle.getAttribute("aria-expanded"), "true");
         // No old names anywhere a player can read.
-        assert.doesNotMatch(await d.text(), OLD_NAMES, `${where}: no Shadow or Fireball on the page`);
+        assert.doesNotMatch(await d.text(), OLD_NAMES, `${where}: no Shadow, Fireball or Mage on the page`);
         assert.doesNotMatch(await d.labels(), OLD_NAMES, `${where}: nor in a label`);
         // Touch targets and no sideways page scroll.
         for (const sel of ['[data-lto-hero-arrow="prev"]', '[data-lto-hero-arrow="next"]', '[data-lto-stats-toggle="wizard"]', '[data-lto-quick="wizard"]']) {
@@ -121,7 +121,7 @@ export const specs = [
   },
 
   {
-    name: "a Rogue or a Mage can be started from the strip, and the hero carries the typed name and the class",
+    name: "a Rogue or a Wizard can be started from the strip, and the hero carries the typed name and the class",
     async run({ newGame, assert }) {
       const { g, d } = await openHeroChoice(newGame, { width: 1280, height: 900 }, false);
       await d.playAs("rogue", "Mira");
@@ -179,7 +179,7 @@ export const specs = [
       // Step two: a class or a blank sheet.
       assert.equal(await page.locator('[data-lts-step="class"]').getAttribute("aria-selected"), "true");
       const cards = await page.locator("[data-lts-class-card]").evaluateAll((n) => n.map((x) => x.querySelector(".nm")?.textContent));
-      assert.deepEqual(cards, ["Knight", "Rogue", "Mage"], "three classes");
+      assert.deepEqual(cards, ["Knight", "Rogue", "Wizard"], "three classes");
       assert.equal(await page.locator("[data-lts-blank]").count(), 1, "and a blank sheet");
       assert.doesNotMatch(await d.text(), OLD_NAMES);
       await page.locator('[data-lts-class="fireball-person"]').click();

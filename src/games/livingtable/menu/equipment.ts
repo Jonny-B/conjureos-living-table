@@ -459,7 +459,7 @@ export const RARITY_WORD: Readonly<Record<EquipmentTier, string>> = Object.freez
  * This label used to be one string per ROLE, and the `crown` string was
  * "Armour or headwear". That is a lie for six of the eight archetypes: the
  * crown slot is bonusKind "armor" only for the Knight's Plate Harness and the
- * Trooper's Carapace Vest. On the Rogue, Healer, Mage,
+ * Trooper's Carapace Vest. On the Rogue, Healer, Wizard,
  * Infiltrator, Medic and Psion it is bonusKind "save", which
  * `equipmentSaveBonus` routes into `saveModifierFor` and which never touches
  * AC at all. A first-time player reads the label, not the paragraph, and
