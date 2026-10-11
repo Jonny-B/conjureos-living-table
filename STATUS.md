@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-10, 0.12.0 is live on the dev listing (version 6) and the prod listing (version 3, page hash b30ef727, identical to a local build of main): no old art for anything converted, KayKit heroes everywhere, and the game waits for its art (Retry on failure).
+Last updated: 2026-10-11, 0.12.1 declares `appType: "sealed"` (ConjureOS Phase 62) and is not published yet; 0.12.0 is live on the dev listing (version 6) and the prod listing (version 3, page hash b30ef727, identical to a local build of main): no old art for anything converted, KayKit heroes everywhere, and the game waits for its art (Retry on failure).
 
 ## 0.12.0, no old art for anything converted (owner, 2026-10-10)
 
@@ -40,7 +40,7 @@ The owner's thirty items from playing 0.9.0 are shipped (item 7, the 3D art, mov
 The bench game is now THE game. Merged to `dev` and `main` (see above). It holds:
 
 - **One window.** `src/games/livingtable/table/` (`mountTable.ts` and `host.ts` with its `TableHost`; `ui/`, `dmCore.ts`, `fightRules.ts`, `adventureRun.ts` and the rest) is the window the bench used to hold. The bench (`scripts/asset-bench/benchHost.ts`, `assets.ts`) is a thin host around it. The app (`src/games/livingtable/TableScreen.tsx`, `table/host/gameHost.ts`) is the other host. The nine re-export shims under `scripts/asset-bench/` are deleted and `test/livingtable-table-rules-parity.test.ts` with them; a guard test fails if anything under `src/` names `asset-bench`.
-- **Standalone and sealed.** The app opens straight into the window: a bar with Adventures and Fullscreen, the window, a save line and the licence panel. `package.json` declares `"editStyle": "locked"` with `"editable": false`, permissions `ai.complete` and `display.fullscreen`, and no `conjureGamesEntry` action. No hub, no back-to-hub exit.
+- **Standalone and sealed.** The app opens straight into the window: a bar with Adventures and Fullscreen, the window, a save line and the licence panel. `package.json` declares `"appType": "sealed"` with `"editable": false` (0.12.1; `"editStyle": "locked"` before it), permissions `ai.complete` and `display.fullscreen`, and no `conjureGamesEntry` action. No hub, no back-to-hub exit.
 - **Old campaign mode retired.** The AI campaign list, campaign generator, hero creator, play screen, memory and inventory screens went with `LivingTable.tsx` (about 220 tests of retired code cut; 1965 tests remain). Predefined adventures (The Rat Cellar and the Template) and the two test rooms replace it.
 - **Saves on the server.** games-db `game_saves` through the `gamesDb` action; the device cache is a fallback only, and a different player's cache is put aside, never uploaded. On open, a player with a save lands in their newest one.
 - **Animated art as asset files.** The 6.3 MB cast and the 0.2 MB library load through `window.__conjureos.assets.load(url, sha256)` (`table/host/assetFiles.ts`). Until they are uploaded the table draws still figures and the hand-drawn art and says so.

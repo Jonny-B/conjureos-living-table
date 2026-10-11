@@ -2,6 +2,11 @@
 
 Cross-cutting calls, newest first. Terse: what, why, what it touches. STATUS.md says where the project is; this says why it is that way.
 
+## 2026-10-11 (app type, 0.12.1)
+
+### The app declares `appType: "sealed"`, not `editStyle: "locked"`
+ConjureOS Phase 62 renamed the manifest field `editStyle` to `appType` (`locked` is `sealed`), and the owner decided every anchor declares its type now, all sealed. `package.json` carries `"appType": "sealed"` beside `"editable": false`, the older mirror that clients predating `appType` still read; ConjureOS writes `editStyle` for them at publish. A block that declares no type is an AI-editable applet, so neither key is dropped. Touches: `package.json` (0.12.1), `test/livingtable-table-asset-files.test.ts`. Nothing a player sees changes.
+
 ## 2026-10-10 (no old art, 0.12.0)
 
 ### The game never draws the old picture of anything that has a KayKit version, and waits for the art instead

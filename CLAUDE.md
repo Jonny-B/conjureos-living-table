@@ -21,6 +21,11 @@ and [STATUS.md](STATUS.md) for where the move out of Conjure Games stands.
 6. **All rights reserved.** The repo is public to be read. Do not add an open
    source licence, and do not commit third-party files whose licence forbids
    redistribution. KayKit (CC0) packs are fetched into `.cache/`, not committed.
+7. **The app is sealed** (ConjureOS Phase 62, owner decision 2026-10-11).
+   `package.json` declares `appType: "sealed"` and `editable: false`, so the AI
+   cannot change it. A manifest that declares no type is an AI-editable applet,
+   so do not drop either key; `test/livingtable-table-asset-files.test.ts`
+   holds both.
 
 ## Shape of the repo
 

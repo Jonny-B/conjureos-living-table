@@ -639,8 +639,9 @@ const COMMITTED_CAST = `asset-files/${CAST_NAME}`;
 const COMMITTED_LIB = `asset-files/${LIBRARY_NAME}`;
 
 test("package.json declares exactly the two asset files, by the names the game asks for, and both are committed", () => {
-  const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { conjureos: { editStyle?: string; assetFiles?: { name: string; path: string; type?: string }[] } };
-  assert.equal(pkg.conjureos.editStyle, "locked", "a sealed app");
+  const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { conjureos: { appType?: string; editable?: boolean; assetFiles?: { name: string; path: string; type?: string }[] } };
+  assert.equal(pkg.conjureos.appType, "sealed", "a sealed app");
+  assert.equal(pkg.conjureos.editable, false, "the older mirror, which clients that predate appType read");
   const declared = pkg.conjureos.assetFiles ?? [];
   assert.deepEqual(declared.map((d) => d.name).sort(), [ASSET_FILE_NAMES.cast, ASSET_FILE_NAMES.library].sort());
   for (const d of declared) {
