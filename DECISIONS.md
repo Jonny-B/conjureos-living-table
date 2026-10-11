@@ -2,6 +2,14 @@
 
 Cross-cutting calls, newest first. Terse: what, why, what it touches. STATUS.md says where the project is; this says why it is that way.
 
+## 2026-10-10 (no old art, 0.12.0)
+
+### The game never draws the old picture of anything that has a KayKit version, and waits for the art instead
+Owner: "I don't want the old assets to exist at all." and "For now just implement what we've already converted and keep everything else." So the hand-made art is no longer a fallback for converted ids: the game holds at the splash until both asset files are in, and a failure is a plain sentence with Retry (an app too old to hand over files is told to update). Ids with no KayKit version keep their hand-made picture; the set is computed from the files, so it shrinks as the owner converts more. Trade-off taken knowingly: with no art files the game does not run at all. Touches `table/host/artGate.ts`, `artFailure.ts`, `devAssets.ts`, `gameArt.ts`, `table/ui/heroPicture.ts`, `Splash.tsx`, `TableScreen.tsx`.
+
+### Error words on the art screen are fixed sentences
+No status codes, exception text or reason codes reach the player; the raw detail goes to the console. Seven sentences in `artFailure.ts`, pinned by a test over twenty failure routes.
+
 ## 2026-10-09 (asset files, ConjureOS #1149, 0.11.0)
 
 ### The animated art is the app's own asset files, committed in the repo and installed with the game
