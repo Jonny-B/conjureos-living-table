@@ -41,22 +41,31 @@
  *
  * The animated art (the cast, and the KayKit sprite library that goes with it) is too big for the app
  * package, so it ships as the app's ConjureOS asset files (assetFiles.ts; installing the game downloads
- * them) and is read AFTER the first paint:
+ * them):
  *
- *   await art.load();   // the hand-drawn art settles; the window mounts and paints with still figures
- *   // load() has already started art.loadAssets() in the background; when a file lands the art
- *   // changes (onChange fires, signature() differs) and the window repaints with it.
+ *   await art.load();         // the hand-drawn art settles (it stays only for the ids the library lacks)
+ *   await art.loadAssets();   // the cast and the KayKit library; load() has already started it in the background
+ *
+ * The game does not mount its window until BOTH files are in (artGate.ts waits for them, and shows a
+ * Retry screen when one cannot be had), so a player never sees the hand-drawn picture of anything that
+ * has a KayKit one. A bench host that mounts at once still gets `onChange` when a file lands.
  *
  * Each file goes through `window.__conjureos.assets.load(name)` (the platform checks it against the hash
  * recorded at publish and keeps it on the device), is parsed and checked once, and kept. A file with no name
  * (assetFiles null), a bridge that is not there (outside the ConjureOS app) or that does not give a game its
- * files (an older ConjureOS, the phone today), a failed or mismatched load, or a file that does not
- * parse each leave that part on its fallback (still figures, the hand-drawn art) and say why in
- * `assetStatus()`. Nothing here throws or rejects because of an asset file.
+ * files (an older ConjureOS app), a failed, mismatched or hung load (each file gets `loadTimeoutMs` to arrive),
+ * or a file that does not parse leaves that part not loaded. `assetStatus()` says why with ONE fixed plain
+ * sentence per kind of failure (artFailure.ts), which the game's art screen shows; the raw detail (a status
+ * code, an exception's message, the platform's reason code) goes to `warn` (console.warn) and nowhere else.
+ * Nothing here throws or rejects because of an asset file. `loadAssets()` tries a part that failed again, and
+ * `load({ fresh: true })` is the whole thing again (the games-db manifest from the server, not from the cache,
+ * and the parts that failed); parts that loaded are kept, so nothing is fetched twice.
  *
  * The cast is `cast()`: null until its file lands. The KayKit library, when it lands, replaces the
- * render half the window draws with (`render(t)`: the chosen ground, props and tokens at 32 px, the
- * hand-drawn art upscaled for any id it lacks); the catalog and the DM's id lists never change.
+ * render half the window draws with (`render(t)`: the chosen ground, props and tokens at 32 px). The hand-drawn
+ * picture, upscaled, remains for exactly the ids the library has no version of (`handMade(t)` lists them,
+ * `converted(id)` asks about one; both are worked out from the loaded files, so the list shrinks by itself as
+ * more are converted); the catalog and the DM's id lists never change.
  * `setCast` stays as the hook for a host that has its own cast (an explicit cast wins over the file).
  */
 import type { LoadedManifest } from "../../assets/manifestCache";
@@ -73,6 +82,8 @@ import type { AssetManifest } from "../../world/cell";
 import type { AdventureFile, ArtCatalog, CastData, CastStyle, RenderManifest, TableArt, TemplateGenre } from "../host";
 import type { BundledLibrary, BundledSprite } from "./bundledArt";
 import { ASSET_FILES, type AssetFiles, validAssetName } from "./assetFiles";
+import { ART_FAILURE_TEXT, bridgeFailure, type ArtFailure } from "./artFailure";
+import { devAssetBridge } from "./devAssets";
 
 export type { BundledLibrary, BundledSprite };
 
@@ -260,17 +271,17 @@ export interface ArtStatus {
 export interface GameArtOptions {
   /** The templates to load. Default: fantasy (the launch game). */
   templates?: readonly TemplateGenre[];
-  /** The manifest loader. Default: manifestCache's `loadManifest`. */
-  load?: (t: LtTemplate) => Promise<LoadedManifest>;
+  /** The manifest loader. Default: manifestCache's `loadManifest`. It gets `{ fresh: true }` on a Retry: the server's copy, not a cached one. */
+  load?: (t: LtTemplate, o?: LoadOptions) => Promise<LoadedManifest>;
   /** The ids the table needs per template. Default: ENGINE_ASSET_IDS. Hosts add the adventures with `adventureAssetIds`. */
   required?: (t: TemplateGenre) => AssetIdSet;
   /** The bundled libraries. Default: the generated bundledArt module, imported on demand. */
   bundled?: () => Promise<Partial<Record<TemplateGenre, BundledLibrary>>> | Partial<Record<TemplateGenre, BundledLibrary>>;
-  /** A cast the host already has. Default: none (the cast file is loaded instead, or still figures). */
+  /** A cast the host already has. Default: none (the cast file is loaded instead). */
   cast?: () => { data: CastData; style: CastStyle } | null;
   /** The asset files to read, by name. Default: ASSET_FILES (assetFiles.ts, the two files package.json lists). */
   assetFiles?: AssetFiles;
-  /** ConjureOS's asset loader. Default: `window.__conjureos.assets`, read when the load starts (absent outside the app). */
+  /** ConjureOS's asset loader. Default: `window.__conjureos.assets`, read when the load starts (absent outside the app; a local dev page with no ConjureOS at all reads the dev server's copy, devAssets.ts). */
   assets?: AssetsBridge | null | (() => AssetsBridge | null | undefined);
   /** Turns a loaded file's object URL into its parsed JSON. Default: fetch it, parse it, revoke the URL. */
   readJson?: (objectUrl: string) => Promise<unknown>;
@@ -278,7 +289,26 @@ export interface GameArtOptions {
   inflate?: (bytes: Uint8Array) => Promise<Uint8Array>;
   /** The look of the KayKit art and which cast style goes with it. Default: painted ground, cel-band figures, 32 px. */
   look?: Partial<ArtLook>;
+  /**
+   * How long one asset file gets to arrive before the load counts as a failed download. Default ASSET_LOAD_TIMEOUT_MS. A load that
+   * finishes after that changes nothing (its object URL is let go and the answer dropped).
+   */
+  loadTimeoutMs?: number;
+  /** Where the raw detail of a failure goes (it never reaches the screen). Default: console.warn. */
+  warn?: (message: string) => void;
 }
+
+/** What a manifest load may be asked for. */
+export interface LoadOptions {
+  /** Bypass whatever the loader has cached and ask the server. A Retry sets it, so a corrected server library is seen. */
+  fresh?: boolean;
+}
+
+/**
+ * The time one asset file gets to arrive: two minutes, so the biggest file (about 6.3 MB) still makes it over a slow phone connection,
+ * while a download that never ends reaches the Retry screen instead of waiting for ever.
+ */
+export const ASSET_LOAD_TIMEOUT_MS = 120_000;
 
 // ---- the animated art (asset files) ----------------------------------------------------
 
@@ -308,16 +338,20 @@ export interface ArtLook {
 /** The look the bench played with: painted ground, cel bands, 32 px. */
 export const DEFAULT_LOOK: ArtLook = { ground: "painted", chars: "bands", size: 32 };
 
-/** Where one asset file is: not asked for yet, on its way, in use, or on its fallback (with the reason, in plain words). */
+/**
+ * Where one asset file is: not asked for yet, on its way, in use, or not loaded ("fallback"). A part not loaded says why as a kind
+ * (`failure`) and that kind's fixed sentence (`reason`, from ART_FAILURE_TEXT); the game's art screen shows the sentence.
+ */
 export interface AssetPartStatus {
   state: "waiting" | "loading" | "ready" | "fallback";
+  failure?: ArtFailure;
   reason?: string;
 }
 
 export interface AssetStatus {
   cast: AssetPartStatus;
   library: AssetPartStatus;
-  /** One line for the window's art status: what is drawing and, if something fell back, why. */
+  /** One line for diagnostics: what loaded and, if something did not, why. */
   summary: string;
 }
 
@@ -410,11 +444,38 @@ function upscale(pixels: number[][], k: number): number[][] {
   return out;
 }
 
+/** The picture the KayKit parts have for an id (the first part that has one, in the order the look tries them), or null when none has. */
+function libraryPicture(id: string, parts: readonly Map<string, number[][]>[]): number[][] | null {
+  for (const p of parts) {
+    const px = p.get(id);
+    if (px) return px;
+  }
+  return null;
+}
+
+/**
+ * Whether the KayKit parts have a picture of this id. This is THE converted-or-not decision: a converted id is drawn from the
+ * library and never from the hand-drawn set; an id the library lacks keeps its hand-drawn picture (upscaled by `kaykitRender`).
+ * Worked out from the loaded parts, so it changes by itself when the library gains an id.
+ */
+export function isConvertedId(id: string, parts: readonly Map<string, number[][]>[]): boolean {
+  return libraryPicture(id, parts) !== null;
+}
+
+/**
+ * The ids of `base` the KayKit parts have no picture of: exactly the ones still drawn from the hand-drawn set. Computed from
+ * the files (the base render and the decoded parts), never listed by hand, so it shrinks as more art is converted.
+ */
+export function unconvertedIds(base: RenderManifest, parts: readonly Map<string, number[][]>[]): AssetIdSet {
+  const left = (ids: string[]): string[] => ids.filter((id) => !isConvertedId(id, parts));
+  return { tiles: left(Object.keys(base.tiles)), props: left(Object.keys(base.props)), tokens: left(Object.keys(base.tokens)) };
+}
+
 /**
  * The render half to draw with when the KayKit library is in: every id of `base`, drawn from the look's parts
- * where they have it and from `base` (upscaled to the look's size) where they do not. Returns the reason instead
- * when the two cannot be combined: the base is not 16 px art, or its palette is not the one the library was
- * converted to (a sprite is palette indices, so the palettes must be the same colours).
+ * where they have it and from `base` (upscaled to the look's size) where they do not (`unconvertedIds` says which).
+ * Returns the reason instead when the two cannot be combined: the base is not 16 px art, or its palette is not the
+ * one the library was converted to (a sprite is palette indices, so the palettes must be the same colours).
  */
 export function kaykitRender(
   base: RenderManifest,
@@ -422,18 +483,12 @@ export function kaykitRender(
   parts: readonly Map<string, number[][]>[],
   size: 16 | 32,
 ): { render: RenderManifest } | { reason: string } {
-  if ((base.spriteSize ?? 16) !== 16) return { reason: "the hand-drawn art is not 16 px, so the KayKit art cannot be laid over it" };
+  if ((base.spriteSize ?? 16) !== 16) return { reason: "the base art is not 16 px, so the board art cannot be laid over it" };
   const want = adaptPalette(libraryPalette).map((c) => c.toLowerCase());
   const have = base.palette.map((c) => c.toLowerCase());
   if (want.length !== have.length || want.some((c, i) => c !== have[i])) return { reason: "its colours are not the game's palette" };
   const k = size / 16;
-  const pick = (id: string, current: number[][]): number[][] => {
-    for (const p of parts) {
-      const px = p.get(id);
-      if (px) return px;
-    }
-    return upscale(current, k);
-  };
+  const pick = (id: string, current: number[][]): number[][] => libraryPicture(id, parts) ?? upscale(current, k);
   const render: RenderManifest = { palette: base.palette, tiles: {}, props: {}, tokens: {}, spriteSize: size };
   for (const [id, a] of Object.entries(base.tiles)) render.tiles[id] = { pixels: pick(id, a.pixels) };
   for (const [id, a] of Object.entries(base.props)) render.props[id] = { pixels: pick(id, a.pixels) };
@@ -441,33 +496,35 @@ export function kaykitRender(
   return { render };
 }
 
-/** The plain words for a failed `assets.load`. */
-export function assetReason(what: string, r: { reason: string; error?: string }): string {
-  switch (r.reason) {
-    case "unknown_name":
-      return `The ${what} file is not one this copy of the game came with, so it was not loaded.`;
-    case "mismatch":
-      return `The ${what} file does not match its hash (it was changed or cut short), so it was not used.`;
-    case "too_large":
-      return `The ${what} file is over the size limit, so it was not loaded.`;
-    case "fetch_failed":
-      return `The ${what} file could not be downloaded${r.error ? ` (${r.error})` : ""}.`;
-    default:
-      return `The ${what} file could not be loaded (${r.reason}).`;
-  }
+/**
+ * The plain words for a failed `assets.load`: the fixed sentence of the kind the platform's reason code means. The code itself and the
+ * error text are never part of it (they are for the log).
+ */
+export function assetReason(r: { reason: string; error?: string }): string {
+  return ART_FAILURE_TEXT[bridgeFailure(r.reason)];
 }
 
 export interface GameArt extends TableArt {
-  /** Fetch and settle every template. Safe to call again: it returns the same promise while one is running, and reloads after. */
-  load(): Promise<void>;
+  /**
+   * Fetch and settle every template. Safe to call again: it returns the same promise while one is running, and reloads after.
+   * `{ fresh: true }` (a Retry) asks the loader for the server's copy instead of a cached one, and lays the loaded KayKit library
+   * over it again, so a manifest that was wrong and has been fixed is seen. Parts already loaded are kept.
+   */
+  load(opts?: LoadOptions): Promise<void>;
   /**
    * Load the cast and the KayKit library from their asset files (once; a settled load is kept, a failed one is tried
    * again on the next call). Never rejects. `load()` starts it in the background, so a host only calls this to wait
    * for it (a test, or a retry button).
    */
   loadAssets(): Promise<void>;
-  /** Where the cast and the library are, with the plain reason for any that fell back. Safe at any time. */
+  /** Where the cast and the library are, with the plain reason for any that did not load. Safe at any time. */
   assetStatus(): AssetStatus;
+  /**
+   * The ids of a template still drawn from the hand-drawn art: those of the settled art the loaded KayKit library has no
+   * picture of. Null until the library is in (before that every id is hand-drawn, and the game does not play then).
+   * Throws before `load()` has settled the template.
+   */
+  handMade(t: TemplateGenre): AssetIdSet | null;
   /** What a template settled on. Throws before `load()` has settled it. */
   status(t: TemplateGenre): ArtStatus;
   /** The loaded manifest the window draws (for the DM's id lists and the like). Throws before `load()` has settled it. */
@@ -548,6 +605,20 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
   const look: ArtLook = { ...DEFAULT_LOOK, ...opts.look };
   const readJson = opts.readJson ?? defaultReadJson;
   const inflate = opts.inflate ?? browserInflate;
+  const loadTimeoutMs = opts.loadTimeoutMs ?? ASSET_LOAD_TIMEOUT_MS;
+  const warn =
+    opts.warn ??
+    ((message: string): void => {
+      try {
+        console.warn(message);
+      } catch {
+        // no console: nothing to tell
+      }
+    });
+  /** The raw detail of a failure goes here and only here; the player reads the fixed sentence of the kind (artFailure.ts). */
+  const note = (what: string, failure: ArtFailure, detail: unknown): void => warn(`The Living Table art: ${what}: ${failure}: ${errText(detail)}`);
+  /** A part that did not load: its kind and the kind's fixed sentence. */
+  const notLoaded = (failure: ArtFailure): AssetPartStatus => ({ state: "fallback", failure, reason: ART_FAILURE_TEXT[failure] });
 
   const listeners = new Set<() => void>();
   const settled = new Map<TemplateGenre, Settled>();
@@ -571,12 +642,12 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
 
   const names = (lib: BundledLibrary): Record<string, string> => Object.fromEntries(lib.sprites.map((s) => [s.assetId, s.name]));
 
-  async function settle(t: TemplateGenre): Promise<Settled> {
+  async function settle(t: TemplateGenre, fresh: boolean): Promise<Settled> {
     const need = required(t);
     let manifest: LoadedManifest | null = null;
     let error: string | undefined;
     try {
-      manifest = await loadOne(t);
+      manifest = await (fresh ? loadOne(t, { fresh: true }) : loadOne(t));
     } catch (e) {
       error = errText(e);
     }
@@ -615,46 +686,89 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
       const given = typeof opts.assets === "function" ? opts.assets() : opts.assets;
       if (given !== undefined) return given;
       const found = (globalThis as { __conjureos?: { assets?: AssetsBridge } }).__conjureos?.assets;
-      return found ?? null;
+      return found ?? devAssetBridge();
     } catch {
       return null;
     }
   };
 
+  /** Whether the page is inside a ConjureOS host at all (it defines `window.__conjureos`), as opposed to a plain web page. */
+  const conjureosHere = (): boolean => {
+    try {
+      return (globalThis as { __conjureos?: unknown }).__conjureos != null;
+    } catch {
+      return false;
+    }
+  };
+
   /**
-   * What stops an asset file loading before any work is done (no name, a malformed name, no bridge, a ConjureOS that does
-   * not give a game its files), as a plain reason, or the bridge and name to go ahead with. Synchronous, so a part that
-   * cannot load settles at once.
+   * What stops an asset file loading before any work is done (no name, a malformed name, no bridge, a ConjureOS app too old
+   * to give a game its files), as a kind of failure, or the bridge and name to go ahead with. Synchronous, so a part that
+   * cannot load settles at once. A ConjureOS host with no assets bridge (or one without `list`) is an app to update; no host at all
+   * is a page to open in the app.
    */
-  function preflight(what: string, name: string | null, instead: string): { reason: string } | { b: AssetsBridge; name: string } {
-    const no = (why: string): { reason: string } => ({ reason: `${why} The table shows ${instead}.` });
-    if (!name) return no(`The ${what} file is not part of this build.`);
-    if (!validAssetName(name)) return no(`The ${what} file's name is not valid.`);
+  function preflight(what: string, name: string | null): { failure: ArtFailure } | { b: AssetsBridge; name: string } {
+    const no = (failure: ArtFailure, detail: string): { failure: ArtFailure } => {
+      note(what, failure, detail);
+      return { failure };
+    };
+    if (!name) return no("unavailable", "no file of this name is part of this build");
+    if (!validAssetName(name)) return no("unavailable", `the file name ${JSON.stringify(name)} is not valid`);
     const b = bridge();
-    if (!b || typeof b.load !== "function") return no("Asset files are not available here (the game is not running inside the ConjureOS app).");
-    if (typeof b.list !== "function") return no("This ConjureOS does not give a game its asset files yet (the phone app and older versions do not).");
+    if (!b) return conjureosHere() ? no("update", "window.__conjureos has no assets bridge") : no("outside", "there is no window.__conjureos");
+    if (typeof b.load !== "function" || typeof b.list !== "function") return no("update", "the assets bridge has no list(), so this ConjureOS does not give a game its files");
     return { b, name };
   }
 
-  /** One asset file, through the bridge, parsed and checked. Never throws. `what` and `instead` are plain words for the reason. */
-  async function fetchAsset<T>(what: string, go: { b: AssetsBridge; name: string }, parse: (x: unknown) => T | null, instead: string): Promise<{ ok: true; value: T } | { ok: false; reason: string }> {
-    const no = (why: string): { ok: false; reason: string } => ({ ok: false, reason: `${why} The table shows ${instead}.` });
-    const { b, name } = go;
-    let r: AssetLoadResult;
-    try {
-      r = await b.load(name);
-    } catch (e) {
-      r = { ok: false, reason: "fetch_failed", error: errText(e) };
-    }
-    if (!r || r.ok !== true) return no(assetReason(what, r ?? { reason: "no answer" }));
+  /**
+   * The bridge's answer to `load(name)`, or a download failure when it has not answered within `loadTimeoutMs`. Never rejects.
+   * An answer that comes after the limit changes nothing: it is dropped, and the object address it made is given back.
+   */
+  function loadWithin(b: AssetsBridge, name: string): Promise<AssetLoadResult> {
+    const asked = (async (): Promise<AssetLoadResult> => {
+      try {
+        return await b.load(name);
+      } catch (e) {
+        return { ok: false, reason: "fetch_failed", error: errText(e) };
+      }
+    })();
+    return new Promise<AssetLoadResult>((resolve) => {
+      let over = false;
+      const timer = setTimeout(() => {
+        over = true;
+        resolve({ ok: false, reason: "fetch_failed", error: `no answer within ${loadTimeoutMs} ms` });
+      }, loadTimeoutMs);
+      void asked.then((r) => {
+        if (!over) {
+          clearTimeout(timer);
+          resolve(r);
+        } else if (r && r.ok === true) {
+          try {
+            URL.revokeObjectURL(r.objectUrl);
+          } catch {
+            // nothing to give back outside a browser
+          }
+        }
+      });
+    });
+  }
+
+  /** One asset file, through the bridge, parsed and checked. Never throws. `what` is the plain word for the file in the log. */
+  async function fetchAsset<T>(what: string, go: { b: AssetsBridge; name: string }, parse: (x: unknown) => T | null): Promise<{ ok: true; value: T } | { ok: false; failure: ArtFailure }> {
+    const no = (failure: ArtFailure, detail: unknown): { ok: false; failure: ArtFailure } => {
+      note(what, failure, detail);
+      return { ok: false, failure };
+    };
+    const r = await loadWithin(go.b, go.name);
+    if (!r || r.ok !== true) return no(bridgeFailure(r?.reason), r ? `${String(r.reason)}${r.error ? `: ${r.error}` : ""}` : "the bridge gave no answer");
     let json: unknown;
     try {
       json = r.blob && typeof r.blob.text === "function" ? await readBlobJson(r.blob, r.objectUrl) : await readJson(r.objectUrl);
     } catch (e) {
-      return no(`The ${what} file could not be read (${errText(e)}).`);
+      return no(e instanceof SyntaxError ? "damaged" : "unknown", e);
     }
     const value = parse(json);
-    return value ? { ok: true, value } : no(`The ${what} file is not in the format the table expects.`);
+    return value ? { ok: true, value } : no("damaged", "the file is not in the format the table expects");
   }
 
   function chooseStyle(data: CastData): CastStyle {
@@ -668,13 +782,13 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
       return;
     }
     const mine = epoch;
-    const go = preflight("animated figures", files.cast, "still figures");
-    if ("reason" in go) {
-      castStatus = { state: "fallback", reason: go.reason };
+    const go = preflight("animated figures", files.cast);
+    if ("failure" in go) {
+      castStatus = notLoaded(go.failure);
       return;
     }
     castStatus = { state: "loading" };
-    const res = await fetchAsset("animated figures", go, parseCastFile, "still figures");
+    const res = await fetchAsset("animated figures", go, parseCastFile);
     if (mine !== epoch) return;
     if (castExplicit) {
       castStatus = { state: "ready" }; // the host set its own cast while the file was on its way: that one stays
@@ -682,7 +796,7 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
       cast = { data: res.value, style: chooseStyle(res.value) };
       castStatus = { state: "ready" };
     } else {
-      castStatus = { state: "fallback", reason: res.reason };
+      castStatus = notLoaded(res.failure);
     }
     fire();
   }
@@ -704,34 +818,46 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
       if ("render" in made) overlays.set(t, { base: s.manifest.render, render: made.render });
       else reason = made.reason;
     }
-    libStatus = reason ? { state: "fallback", reason: `The KayKit art was not used: ${reason}. The table shows the hand-drawn art.` } : { state: "ready" };
+    if (reason) {
+      note("board art", "mismatch", reason);
+      libStatus = notLoaded("mismatch");
+    } else {
+      libStatus = { state: "ready" };
+    }
   }
 
   async function loadLibrary(): Promise<void> {
+    // Decoded parts are kept across a Retry (nothing is fetched twice). If the library was refused for not fitting the games-db art
+    // (status "fallback", mismatch), the Retry's `load({ fresh: true })` lays the kept parts over the corrected art (refreshOverlays).
     if (libStatus.state === "ready" || libParts) return;
     const mine = epoch;
-    const go = preflight("KayKit art", files.library, "the hand-drawn art");
-    if ("reason" in go) {
-      libStatus = { state: "fallback", reason: go.reason };
+    const go = preflight("board art", files.library);
+    if ("failure" in go) {
+      libStatus = notLoaded(go.failure);
       return;
     }
     libStatus = { state: "loading" };
-    const fail = (reason: string): void => {
-      libStatus = { state: "fallback", reason };
+    const fail = (failure: ArtFailure, detail: unknown): void => {
+      note("board art", failure, detail);
+      libStatus = notLoaded(failure);
       fire();
     };
-    const res = await fetchAsset("KayKit art", go, parseLibraryFile, "the hand-drawn art");
+    const res = await fetchAsset("board art", go, parseLibraryFile);
     if (mine !== epoch) return;
-    if (!res.ok) return fail(res.reason);
+    if (!res.ok) {
+      libStatus = notLoaded(res.failure); // fetchAsset has logged the detail
+      fire();
+      return;
+    }
     const decoded: Map<string, number[][]>[] = [];
     for (const name of libraryPartFiles(look)) {
       const part = res.value.parts.find((p) => p.file === name);
-      if (!part) return fail(`The KayKit art file has no ${name}. The table shows the hand-drawn art.`);
+      if (!part) return fail("damaged", `the file has no ${name}`);
       try {
         decoded.push(await decodeLibraryPart(part, inflate));
       } catch (e) {
         if (mine !== epoch) return;
-        return fail(`The KayKit art file could not be read (${errText(e)}). The table shows the hand-drawn art.`);
+        return fail("damaged", e);
       }
     }
     if (mine !== epoch) return;
@@ -745,8 +871,8 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
     if (assetsRun) return assetsRun;
     // Each loader reports its own failures; the catches are for the day one forgets to.
     const both = Promise.all([
-      loadCast().catch((e) => void (castStatus = { state: "fallback", reason: `The animated figures could not be loaded (${errText(e)}). The table shows still figures.` })),
-      loadLibrary().catch((e) => void (libStatus = { state: "fallback", reason: `The KayKit art could not be loaded (${errText(e)}). The table shows the hand-drawn art.` })),
+      loadCast().catch((e) => void (note("animated figures", "unknown", e), (castStatus = notLoaded("unknown")))),
+      loadLibrary().catch((e) => void (note("board art", "unknown", e), (libStatus = notLoaded("unknown")))),
     ]);
     const mine = (assetsRun = both.then(() => undefined));
     void mine.then(() => {
@@ -762,11 +888,12 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
     return { cast: { ...castStatus }, library: { ...libStatus }, summary: bits.length ? bits.join(" ") : pending ? "Loading the animated art." : "" };
   };
 
-  function load(): Promise<void> {
+  function load(o: LoadOptions = {}): Promise<void> {
     if (running) return running;
+    const fresh = o.fresh === true;
     running = (async () => {
       try {
-        const results = await Promise.all(templates.map(async (t) => [t, await settle(t)] as const));
+        const results = await Promise.all(templates.map(async (t) => [t, await settle(t, fresh)] as const));
         settled.clear();
         for (const [t, s] of results) settled.set(t, s);
         refreshOverlays();
@@ -791,6 +918,12 @@ export function createGameArt(opts: GameArtOptions = {}): GameArt {
     load,
     loadAssets,
     assetStatus,
+    handMade(t) {
+      const s = get(t);
+      const over = overlays.get(t);
+      return over && over.base === s.manifest.render && libParts ? unconvertedIds(s.manifest.render, libParts) : null;
+    },
+    converted: (id) => libStatus.state === "ready" && libParts !== null && isConvertedId(id, libParts),
     status: (t) => get(t).status,
     manifest: (t) => get(t).manifest,
     catalog: (t) => get(t).catalog,

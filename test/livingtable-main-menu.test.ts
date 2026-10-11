@@ -24,7 +24,7 @@ import { newAdventurePlay } from "../src/games/livingtable/table/adventureRun";
 import { NEW_GAME_CHECKPOINT, continueTarget, creditLines, installMainMenu, liveGame } from "../src/games/livingtable/table/flows/mainMenu";
 import { mainMenuButtons, menuNavIndex, type MainMenuOptions } from "../src/games/livingtable/table/ui/mainMenu";
 import { cardBadge, startCards } from "../src/games/livingtable/table/ui/screenHelpers";
-import { SPLASH_MIN_MS, splashRemainingMs } from "../src/games/livingtable/Splash";
+import { SPLASH_LINES, SPLASH_MIN_MS, splashRemainingMs } from "../src/games/livingtable/Splash";
 import { SRD_ATTRIBUTION } from "../src/games/livingtable/menu/labels";
 import type { TableCtx } from "../src/games/livingtable/table/tableCtx";
 
@@ -371,7 +371,9 @@ test("what the menu and the splash say is in player words: no bench, stub, build
   const menuText = [...mainMenuButtons({ canContinue: true, continueHint: "Back to your game" }).flatMap((b) => [b.label, b.hint])].join(" ");
   assert.doesNotMatch(menuText, /bench|stub|build|games-db|engine/i);
   const splash = read("src/games/livingtable/Splash.tsx");
-  const words = [...splash.matchAll(/>\s*([A-Z][^<>{}]{3,})\s*</g)].map((x) => x[1]).join(" ");
+  // The words are in the markup and in the lines the three steps of the wait say.
+  const words = [...splash.matchAll(/>\s*([A-Z][^<>{}]{3,})\s*</g)].map((x) => x[1]).join(" ") + " " + Object.values(SPLASH_LINES).join(" ");
   assert.match(words, /Setting the table/);
+  assert.match(words, /Getting the art ready/);
   assert.doesNotMatch(words, /bench|stub|build|games-db|engine/i);
 });

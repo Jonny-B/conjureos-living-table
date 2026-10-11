@@ -29,7 +29,7 @@
  *
  * Contract with the Play lane:
  *   - the host passes portrait canvases in (the bench owns the art), and may pass a picture service (ui/heroPicture.ts) so a portrait is the
- *     KayKit cast figure when the cast is loaded and the canvas it passed in otherwise;
+ *     KayKit cast figure; the canvas it passed in is only for a class that has no KayKit version (the game passes none for a class that has one);
  *   - creation rolls the six ability scores through api.rollDice(6, 4, 6, ...)
  *     when the host gives one, so the dice tray can throw them, and falls back to
  *     rollAbilitySet (creation.ts) when it does not;
@@ -99,7 +99,7 @@ export interface SheetExtras {
   /** The hero's picture, drawn small in the header. Copied, never moved. */
   portrait?: HTMLCanvasElement | null;
   /**
-   * A live picture of the hero (the cast figure when it is loaded, `portrait` otherwise), made when the header is drawn and let go with it.
+   * A live picture of the hero (the cast figure; `portrait` only for a class with no KayKit version), made when the header is drawn and let go with it.
    * Wins over `portrait` when it gives one.
    */
   picture?: () => HeroPicture | null;
@@ -135,7 +135,7 @@ export interface CreationHost {
   rollDice?(groups: number, count: number, sides: number, label: string): Promise<number[][]>;
   /** A picture of a class, for its card. Copied, never moved. */
   portrait?(archetypeId: string): HTMLCanvasElement | null;
-  /** Makes the class cards' and the review's pictures live: the cast figure in the class's starting gear when the cast is loaded, `portrait` otherwise. */
+  /** Makes the class cards' and the review's pictures live: the cast figure in the class's starting gear, `portrait` only for a class with no KayKit version. */
   pictures?: HeroPictures;
 }
 

@@ -7,6 +7,7 @@ import { dropLowest } from "../ui/sheet";
 import { type PlayState } from "../state";
 import { SCORE_READ_MS, dieOf } from "./tableKit";
 import { portraitCanvas } from "../fog";
+import { heroIsConverted } from "../ui/heroPicture";
 import type { SheetExtras } from "../ui/sheet";
 import type { TableCtx } from "../tableCtx";
 
@@ -39,7 +40,10 @@ export function installSheetViews(tc: TableCtx): void {
   tc.lootWin = null;
   tc.lootTarget = null;
   const overlayOpen = (): boolean => tc.gameMenuOpen() || tc.creationView !== null || screenOpen() || storyUp();
-  const portrait = (archetypeId: string): HTMLCanvasElement | null => portraitCanvas(tc.host.art.render("fantasy"), archetypeId);
+  // The class token is the still stand-in for a hero picture. A class that has a KayKit version is never drawn from it (the picture waits for its
+  // figure instead, ui/heroPicture.ts), so there is none for such a class; only a class with no KayKit version has one.
+  const portrait = (archetypeId: string): HTMLCanvasElement | null =>
+    heroIsConverted(tc.host.art.cast(), tc.host.art.converted?.bind(tc.host.art), archetypeId) ? null : portraitCanvas(tc.host.art.render("fantasy"), archetypeId);
   const sheetExtras = (p: PlayState): SheetExtras => ({
     potions: p.potions,
     notes: p.itemNotes,

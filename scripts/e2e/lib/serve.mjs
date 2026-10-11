@@ -11,6 +11,9 @@
 //       an older commit, or the working tree to test the port.
 // The committed asset files (asset-files/*.json: the cast and the KayKit library) are served from the checkout's own folder at
 // /asset-files/<name>, so a spec can give the page a ConjureOS asset bridge (lib/assets.mjs) that loads them from here.
+// `/asset-files/living-table-cast.json?still=1` is the same cast with its idle loops held on their first frame (every clip named "idle" gets an
+// fps so low that the frame never moves): a figure standing still stays still, so the board hash settles and the specs that wait for a still
+// board (Driver.settle) do not wait out their limit. The bridge asks for it by default; `art: { motion: true }` asks for the real loops.
 //
 // mode: "dev"  esbuild bundle of src/main.tsx plus /livingtable-assets.json
 //       "dist" the already built dist/living-table.html (npm run build). It
@@ -95,7 +98,21 @@ function copyDevManifest(root, outDir, log) {
 
 const ASSET_URL = "/asset-files/";
 
+/** The cast with every idle clip held on its first frame (see the note at the top), made once per server. */
+function stillCast(file) {
+  const cast = JSON.parse(fs.readFileSync(file, "utf8"));
+  const hold = (clips) => {
+    for (const c of clips ?? []) if (c.clip === "idle") c.fps = 1e-9;
+  };
+  for (const style of cast.styles ?? []) {
+    for (const ch of style.characters ?? []) hold(ch.clips);
+    for (const gear of style.gear ?? []) hold(gear.clips);
+  }
+  return JSON.stringify(cast);
+}
+
 function serveDir(outDir, indexFile, assetDir = null) {
+  let still = null;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     let rel = decodeURIComponent(url.pathname);
@@ -109,6 +126,11 @@ function serveDir(outDir, indexFile, assetDir = null) {
     }
     if (rel === "/favicon.ico") {
       res.writeHead(204).end();
+      return;
+    }
+    if (fromAssets && url.searchParams.has("still") && path.basename(file) === "living-table-cast.json" && fs.existsSync(file)) {
+      still ??= stillCast(file);
+      res.writeHead(200, { "content-type": MIME[".json"], "cache-control": "no-store" }).end(still);
       return;
     }
     fs.readFile(file, (err, data) => {

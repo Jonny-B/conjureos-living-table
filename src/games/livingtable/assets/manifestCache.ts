@@ -199,15 +199,21 @@ function writeToStorage(template: LtTemplate, wire: WireManifest): void {
  * short-circuits everything; a localStorage hit survives a page reload;
  * only a genuine miss calls games-db at all, exactly the "fetch once, cache
  * client-side" DESIGN.md's Assets section asks for.
+ *
+ * `fresh: true` skips both caches and asks games-db, then replaces what was cached with the answer. The game's Retry after the art
+ * could not be had uses it: a cached copy is exactly what was refused (for instance a palette the KayKit board art does not fit), so
+ * a server library that has been fixed is only seen by asking. A failed fresh load throws and leaves the caches as they were.
  */
-export async function loadManifest(template: LtTemplate): Promise<LoadedManifest> {
-  const cached = memoryCache.get(template);
-  if (cached) return cached;
+export async function loadManifest(template: LtTemplate, opts: { fresh?: boolean } = {}): Promise<LoadedManifest> {
+  if (opts.fresh !== true) {
+    const cached = memoryCache.get(template);
+    if (cached) return cached;
 
-  const fromStorage = readFromStorage(template);
-  if (fromStorage) {
-    memoryCache.set(template, fromStorage);
-    return fromStorage;
+    const fromStorage = readFromStorage(template);
+    if (fromStorage) {
+      memoryCache.set(template, fromStorage);
+      return fromStorage;
+    }
   }
 
   const wire = await api.ltAssetManifest(template);

@@ -22,6 +22,7 @@ import { CAST_NAME, LIBRARY_NAME, buildAssetFiles } from "../scripts/assets/expo
 import { adaptManifest, type LoadedManifest } from "../src/games/livingtable/assets/manifestCache";
 import type { CastData } from "../src/games/livingtable/table/host";
 import { ASSET_FILES, ASSET_FILE_NAMES, ASSET_NAME_RE, validAssetName, type AssetFiles } from "../src/games/livingtable/table/host/assetFiles";
+import { ART_FAILURE_TEXT } from "../src/games/livingtable/table/host/artFailure";
 import {
   DEFAULT_LOOK,
   assetReason,
@@ -36,6 +37,10 @@ import {
   type LibraryFile,
   type LibraryPart,
 } from "../src/games/livingtable/table/host/gameArt";
+
+// The art logs the raw detail of every failure with console.warn (that is where it belongs, and nowhere on screen). These tests are about
+// the sentences a player reads, so the log is dropped here; livingtable-art-gate.test.ts reads it.
+console.warn = (): void => {};
 
 // ---- fixtures ---------------------------------------------------------------------
 
@@ -191,17 +196,22 @@ test("kaykitRender: library pixels where it has them, the hand-drawn art upscale
   assert.ok("reason" in big);
 });
 
-test("assetReason says each bridge reason in plain words", () => {
-  assert.match(assetReason("cast", { reason: "unknown_name" }), /not one this copy of the game came with/);
-  assert.match(assetReason("cast", { reason: "mismatch" }), /does not match its hash/);
-  assert.match(assetReason("cast", { reason: "too_large" }), /size limit/);
-  assert.match(assetReason("cast", { reason: "fetch_failed", error: "HTTP 404" }), /could not be downloaded \(HTTP 404\)/);
-  assert.match(assetReason("cast", { reason: "weird" }), /\(weird\)/);
+test("assetReason says each bridge reason as one fixed plain sentence, never the code or the error text", () => {
+  assert.equal(assetReason({ reason: "unknown_name" }), ART_FAILURE_TEXT.unavailable);
+  assert.equal(assetReason({ reason: "mismatch" }), ART_FAILURE_TEXT.damaged);
+  assert.equal(assetReason({ reason: "too_large" }), ART_FAILURE_TEXT.unavailable);
+  assert.equal(assetReason({ reason: "fetch_failed", error: "HTTP 404" }), ART_FAILURE_TEXT.download);
+  assert.equal(assetReason({ reason: "fetch_failed" }), ART_FAILURE_TEXT.download);
+  assert.equal(assetReason({ reason: "weird_code", error: "kaboom" }), ART_FAILURE_TEXT.unknown, "a code nobody knows is not printed");
+  assert.doesNotMatch(assetReason({ reason: "weird_code", error: "kaboom" }), /weird|kaboom|_/);
 });
 
 // ---- gameArt with no files uploaded -----------------------------------------------
 
-test("gameArt: with no file names it asks the bridge for nothing, shows still figures and says why", async () => {
+/** No reason a player reads may claim the table is showing the old art in place of the converted art. */
+const NO_OLD_ART_CLAIM = /table shows|hand-drawn|still figures|KayKit/i;
+
+test("gameArt: with no file names it asks the bridge for nothing, has not loaded either part and says why in plain words", async () => {
   const f = fakeBridge();
   const art = createGameArt({ load: async () => BASE, assetFiles: { cast: null, library: null }, assets: f.bridge });
   let n = 0;
@@ -214,10 +224,10 @@ test("gameArt: with no file names it asks the bridge for nothing, shows still fi
   assert.equal(n, 1, "load() announced once; nothing else changed");
   const s = art.assetStatus();
   assert.equal(s.cast.state, "fallback");
-  assert.match(s.cast.reason ?? "", /not part of this build.*still figures/);
+  assert.equal(s.cast.reason, ART_FAILURE_TEXT.unavailable);
   assert.equal(s.library.state, "fallback");
-  assert.match(s.library.reason ?? "", /not part of this build.*hand-drawn art/);
-  assert.match(s.summary, /still figures/);
+  assert.equal(s.library.reason, ART_FAILURE_TEXT.unavailable);
+  assert.doesNotMatch(`${s.cast.reason} ${s.library.reason} ${s.summary}`, NO_OLD_ART_CLAIM, "nothing says the table shows the old art");
   assert.doesNotMatch(art.signature(), /kaykit/);
 });
 
@@ -330,7 +340,8 @@ test("gameArt: the Blob assets.load hands over is read in place, never by fetchi
   const old = artWith({ assets: fakeBridge().bridge, readJson: refused });
   await old.load();
   await old.loadAssets();
-  assert.match(old.assetStatus().cast.reason ?? "", /could not be read \(CSP blocked connect-src \(blob\)\)/);
+  assert.equal(old.assetStatus().cast.reason, ART_FAILURE_TEXT.unknown, "a read that was refused is told plainly; the refusal's own words are not");
+  assert.doesNotMatch(old.assetStatus().cast.reason ?? "", /CSP|blob|connect/);
 });
 
 test("gameArt: a cast style the file lacks falls to the first one", async () => {
@@ -343,13 +354,13 @@ test("gameArt: a cast style the file lacks falls to the first one", async () => 
 
 // ---- the ways it falls back --------------------------------------------------------
 
-for (const [reason, pattern] of [
-  ["unknown_name", /not one this copy of the game came with/],
-  ["mismatch", /does not match its hash/],
-  ["fetch_failed", /could not be downloaded/],
-  ["too_large", /size limit/],
+for (const [reason, sentence] of [
+  ["unknown_name", ART_FAILURE_TEXT.unavailable],
+  ["mismatch", ART_FAILURE_TEXT.damaged],
+  ["fetch_failed", ART_FAILURE_TEXT.download],
+  ["too_large", ART_FAILURE_TEXT.unavailable],
 ] as const) {
-  test(`gameArt: assets.load says ${reason}: still figures and hand-drawn art, a plain reason, no throw`, async () => {
+  test(`gameArt: assets.load says ${reason}: neither part is loaded, a plain reason that claims no old art, no throw`, async () => {
     const f = fakeBridge({
       [FILES.cast!]: { ok: false, reason, error: "HTTP 404" },
       [FILES.library!]: { ok: false, reason },
@@ -363,9 +374,10 @@ for (const [reason, pattern] of [
     assert.equal(art.render("fantasy"), BASE.render);
     const s = art.assetStatus();
     assert.equal(s.cast.state, "fallback");
-    assert.match(s.cast.reason ?? "", pattern);
-    assert.match(s.cast.reason ?? "", /The table shows still figures\.$/);
-    assert.match(s.library.reason ?? "", /The table shows the hand-drawn art\.$/);
+    assert.equal(s.cast.reason, sentence);
+    assert.equal(s.library.reason, sentence);
+    assert.doesNotMatch(s.cast.reason ?? "", NO_OLD_ART_CLAIM);
+    assert.doesNotMatch(s.cast.reason ?? "", /HTTP|404|_/, "the platform's code and error text stay out of the sentence");
     assert.ok(n >= 2, "a failed download is announced, so a status line can update");
     assert.doesNotMatch(art.signature(), /kaykit/);
   });
@@ -398,8 +410,9 @@ test("gameArt: no bridge at all (the game outside the ConjureOS app) falls back 
     await art.load();
     await art.loadAssets();
     assert.equal(art.cast(), null);
-    assert.match(art.assetStatus().cast.reason ?? "", /not running inside the ConjureOS app/);
-    assert.match(art.assetStatus().library.reason ?? "", /not running inside the ConjureOS app/);
+    assert.equal(art.assetStatus().cast.reason, ART_FAILURE_TEXT.outside);
+    assert.equal(art.assetStatus().library.reason, ART_FAILURE_TEXT.outside);
+    assert.match(ART_FAILURE_TEXT.outside, /ConjureOS app/);
   }
 });
 
@@ -423,8 +436,8 @@ test("gameArt: a malformed name never reaches the bridge", async () => {
   await art.load();
   await art.loadAssets();
   assert.equal(f.calls.length, 0);
-  assert.match(art.assetStatus().cast.reason ?? "", /name is not valid/);
-  assert.match(art.assetStatus().library.reason ?? "", /name is not valid/);
+  assert.equal(art.assetStatus().cast.reason, ART_FAILURE_TEXT.unavailable);
+  assert.equal(art.assetStatus().library.reason, ART_FAILURE_TEXT.unavailable);
 });
 
 test("gameArt: a ConjureOS that does not give a game its files (the phone today, an older version) falls back and says so", async () => {
@@ -442,8 +455,10 @@ test("gameArt: a ConjureOS that does not give a game its files (the phone today,
   assert.equal(calls.length, 0);
   assert.equal(art.cast(), null);
   assert.equal(art.render("fantasy"), BASE.render);
-  assert.match(art.assetStatus().cast.reason ?? "", /does not give a game its asset files yet.*still figures/);
-  assert.match(art.assetStatus().library.reason ?? "", /does not give a game its asset files yet.*hand-drawn art/);
+  assert.equal(art.assetStatus().cast.reason, ART_FAILURE_TEXT.update);
+  assert.equal(art.assetStatus().library.reason, ART_FAILURE_TEXT.update);
+  assert.match(ART_FAILURE_TEXT.update, /Update the app/);
+  assert.doesNotMatch(art.assetStatus().cast.reason ?? "", NO_OLD_ART_CLAIM);
 });
 
 test("gameArt: a file that arrives but is not what the table expects, or cannot be read, falls back", async () => {
@@ -451,28 +466,33 @@ test("gameArt: a file that arrives but is not what the table expects, or cannot 
   await art.load();
   await art.loadAssets();
   assert.equal(art.cast(), null);
-  assert.match(art.assetStatus().cast.reason ?? "", /not in the format the table expects/);
-  assert.match(art.assetStatus().library.reason ?? "", /not in the format the table expects/);
+  assert.equal(art.assetStatus().cast.reason, ART_FAILURE_TEXT.damaged);
+  assert.equal(art.assetStatus().library.reason, ART_FAILURE_TEXT.damaged);
 
   const unreadable = artWith({ assets: fakeBridge().bridge, readJson: async () => { throw new Error("Unexpected token"); } });
   await unreadable.load();
   await unreadable.loadAssets();
-  assert.match(unreadable.assetStatus().cast.reason ?? "", /could not be read \(Unexpected token\)/);
+  assert.equal(unreadable.assetStatus().cast.reason, ART_FAILURE_TEXT.unknown);
+  assert.doesNotMatch(unreadable.assetStatus().cast.reason ?? "", /Unexpected token/);
+  const garbled = artWith({ assets: fakeBridge().bridge, readJson: async () => { throw new SyntaxError("Unexpected token < in JSON at position 0"); } });
+  await garbled.load();
+  await garbled.loadAssets();
+  assert.equal(garbled.assetStatus().cast.reason, ART_FAILURE_TEXT.damaged, "text that is not JSON is a damaged file");
 });
 
 test("gameArt: a library with another palette, or with a part missing, or with cut-off pixels, is not used but the cast still is", async () => {
-  const cases: [string, unknown, RegExp][] = [
-    ["palette", library(FANTASY_PALETTE.slice(0, 20)), /colours are not the game's palette/],
-    ["missing part", { ...library(), parts: library().parts.filter((p) => p.file !== "props-32.json") }, /has no props-32\.json/],
-    ["cut off", { ...library(), parts: library().parts.map((p) => (p.file === "tokens-bands-32.json" ? { ...p, data: deflateSync(Buffer.alloc(10)).toString("base64") } : p)) }, /could not be read.*shorter than its sprites/],
+  const cases: [string, unknown, string][] = [
+    ["palette", library(FANTASY_PALETTE.slice(0, 20)), ART_FAILURE_TEXT.mismatch],
+    ["missing part", { ...library(), parts: library().parts.filter((p) => p.file !== "props-32.json") }, ART_FAILURE_TEXT.damaged],
+    ["cut off", { ...library(), parts: library().parts.map((p) => (p.file === "tokens-bands-32.json" ? { ...p, data: deflateSync(Buffer.alloc(10)).toString("base64") } : p)) }, ART_FAILURE_TEXT.damaged],
   ];
-  for (const [name, lib, pattern] of cases) {
+  for (const [name, lib, sentence] of cases) {
     const art = artWith({ assets: fakeBridge().bridge, readJson: reader(blobs({ "blob:library": lib })) });
     await art.load();
     await art.loadAssets();
     assert.equal(art.render("fantasy"), BASE.render, `${name}: the hand-drawn art stays`);
     assert.equal(art.assetStatus().library.state, "fallback", name);
-    assert.match(art.assetStatus().library.reason ?? "", pattern, name);
+    assert.equal(art.assetStatus().library.reason, sentence, name);
     assert.equal(art.assetStatus().cast.state, "ready", `${name}: the cast does not depend on the library`);
     assert.ok(art.cast(), name);
   }

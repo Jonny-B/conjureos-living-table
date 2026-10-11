@@ -238,7 +238,7 @@ export interface GameMenuOptions {
   onItemAction?: (key: string, actionId: string) => void;
   /** A button of the Saves and Settings views: the HUD's action ids ("load:<id>", "set:<key>:<value>", "export"). */
   onAction: (id: string) => void;
-  /** Makes the Inventory's doll the KayKit cast figure (in the gear previewed) when the cast is loaded; without it, always the hand-made doll. */
+  /** Makes the Inventory's picture the KayKit cast figure (in the gear previewed); without it (the asset bench), the hand-made doll. A class with no KayKit version keeps the doll. */
   pictures?: HeroPictures;
   /** The menu has closed (Escape, the close button, or `close()`). */
   onClose: () => void;
@@ -551,7 +551,7 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
     const grid = el("div", "lto-doll-grid");
     const mid = el("div", "lto-doll-mid");
     let scale = dollScale(Math.max(bodyWidth() - 24, 200));
-    /** The hand-made doll for a sheet, at the doll's own scale: the picture's stand-in whenever the cast figure is not on show. */
+    /** The hand-made doll for a sheet, at the doll's own scale: the picture's stand-in for a class with no KayKit version (never asked for one that has it). */
     const dollFor = (shown: CharacterSheet): HTMLCanvasElement | null => {
       if (!manifest) return null;
       const c = el("canvas");
@@ -561,7 +561,7 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
       renderDoll(cx, renderPlanFor(shown), manifest, scale);
       return c;
     };
-    // One canvas for both: the cast figure when it is loaded (re-dressed as a piece is pointed at), the doll otherwise. Its box is the doll's.
+    // One canvas for both: the cast figure (re-dressed as a piece is pointed at), or the doll for a class with no KayKit version. Its box is the doll's.
     const live: HeroPicture | null = opts.pictures?.picture({ sheet, still: dollFor }) ?? null;
     if (live) offs.push(() => live.dispose());
     const canvas = live ? live.canvas : el("canvas", "lto-doll");

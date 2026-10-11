@@ -203,7 +203,7 @@ export function installHeroEnding(oc: OverlayCtx): void {
         oc.stext(c, label, { cls: "lto-card-title", scale: 3, weight: "bold", color: PX.gold, center: true });
         const pv = previewOf(h.chassis);
         if (pv?.canvas) {
-          // The box is fixed by .lto-hero-doll; the canvas in it is the hand-made doll or, once the cast has loaded, the KayKit figure (data-art says which).
+          // The box is fixed by .lto-hero-doll; the canvas in it is the KayKit figure (empty until its frames are decoded; data-art says which), never the hand-made doll of a class that has a KayKit version.
           const doll = el("div", "lto-hero-doll");
           doll.dataset.ltoDoll = h.chassis;
           doll.setAttribute("role", "img");

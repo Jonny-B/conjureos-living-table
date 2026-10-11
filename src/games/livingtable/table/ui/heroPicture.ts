@@ -1,11 +1,16 @@
 /**
  * A picture of a playable hero for the screens outside the board: the hero choice, the maker's class cards, the character sheet's
- * header. It draws the KayKit cast figure (the board's own figure, style and worn gear, standing still in its idle animation and
- * facing the viewer) when the cast is loaded, and the screen's still picture (the hand-made pixel doll, or the class token) when it is
- * not: outside ConjureOS, on the phone app, after a failed load, or before the cast has arrived.
+ * header, the inventory. It draws the KayKit cast figure (the board's own figure, style and worn gear, standing still in its idle
+ * animation and facing the viewer).
  *
- * The cast is one of the app's asset files and lands AFTER the first paint (host/gameArt.ts), so a screen can be open when it does.
- * A picture subscribes to the art's `onChange` and switches in place, on the same canvas, with no change to its box. The subscription
+ * A class that has a KayKit version (the cast has its figure, or the art says its body token is converted) is NEVER drawn as the
+ * hand-made pixel doll or the class token: until its frames are decoded the canvas is empty (`data-art="wait"`), then the figure
+ * shows. Only a class with no KayKit version (the Healer, who is out of play) keeps the still stand-in (`data-art="doll"`), and so
+ * does a host that knows of no cast and no converted art at all (the asset bench). The game waits for its art files before it shows
+ * any screen (host/artGate.ts), so in the game the cast is always there and the doll is never seen for the three playable classes.
+ *
+ * The cast is one of the app's asset files (host/gameArt.ts); a host that mounts before it lands gets `onChange`, and a picture
+ * subscribes to it and switches in place, on the same canvas, with no change to its box. The subscription
  * is held only while a picture is alive: `dispose()` ends it, and a picture whose canvas has left the page is let go by itself, so a
  * screen that is replaced or redrawn never leaves one behind.
  *
@@ -23,17 +28,21 @@ import { castFrameIndex, castFrames, findCastClip, type CastCharacter, type Cast
 
 // ---- choosing --------------------------------------------------------------------
 
-/** What a hero picture is drawn from: the cast's figure for the hero, or the still stand-in. */
-export type HeroArtChoice = { kind: "doll" } | { kind: "cast"; set: FigureSet; size: string };
+/**
+ * What a hero picture is drawn from: the cast's figure for the hero; for a class with no KayKit version, the still stand-in (`doll`);
+ * for a class that has one but whose figure cannot be made yet, nothing (`wait`), never the stand-in.
+ */
+export type HeroArtChoice = { kind: "doll" } | { kind: "wait" } | { kind: "cast"; set: FigureSet; size: string };
 
-/** Which art is on a picture's canvas right now. `cast` is the animated KayKit figure; `doll` is the still stand-in. */
-export type HeroArtKind = "cast" | "doll";
+/** Which art is on a picture's canvas right now. `cast` is the animated KayKit figure; `doll` is the still stand-in; `wait` is an empty canvas. */
+export type HeroArtKind = "cast" | "doll" | "wait";
 
 /** The clip and the facing every portrait plays: standing in the idle animation, looking at the player. */
 export const PICTURE_CLIP = "idle" as const;
 export const PICTURE_FACING = "down" as const;
 
 const DOLL: HeroArtChoice = { kind: "doll" };
+const WAIT: HeroArtChoice = { kind: "wait" };
 
 /**
  * The size to draw a portrait at: the finest one the cast has for this figure's idle clip facing the viewer (a portrait is shown
@@ -47,23 +56,46 @@ export function pictureSize(entry: CastCharacter): string | null {
 }
 
 /**
- * The art for this hero: the cast figure when the cast is on offer and has this hero's class (the same lookup the board makes:
- * the class's body token in the cast's style) with the gear the sheet wears, else the doll. A cast that lacks the class, or lacks its
- * idle clip, is the doll; so is no cast.
+ * Whether this class has a KayKit version: the cast has a figure for its body token (the lookup the board makes), or the art says that
+ * token is converted (`TableArt.converted`, the loaded library has it). THE decision that keeps the hand-made doll off a converted class.
+ * False for a class neither knows (the Healer), and when nothing is known at all (a host with no cast and no converted art).
  */
-export function chooseHeroArt(cast: { style: CastStyle } | null | undefined, sheet: CharacterSheet): HeroArtChoice {
-  if (!cast || !cast.style) return DOLL;
-  const entry = castEntry(cast.style, bodySpriteId(sheet.archetypeId as ArchetypeId));
-  if (!entry) return DOLL;
-  const size = pictureSize(entry);
-  if (!size) return DOLL;
-  const set = buildFigureSet(cast.style, entry, size, wornLayers(cast.style, sheet));
-  return set ? { kind: "cast", set, size } : DOLL;
+export function heroIsConverted(
+  cast: { style: CastStyle } | null | undefined,
+  converted: ((assetId: string) => boolean) | undefined,
+  archetypeId: string,
+): boolean {
+  const body = bodySpriteId(archetypeId as ArchetypeId);
+  if (cast && cast.style && castEntry(cast.style, body)) return true;
+  try {
+    return converted?.(body) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The art for this hero: the cast figure when the class has a KayKit version and the cast is on offer with this hero's class (the same
+ * lookup the board makes: the class's body token in the cast's style), dressed in the gear the sheet wears. A converted class whose
+ * figure cannot be made (no cast yet, no idle clip facing the viewer) is `wait`, never the doll. A class with no KayKit version is the
+ * doll, and so is a host that knows of nothing converted.
+ */
+export function chooseHeroArt(
+  cast: { style: CastStyle } | null | undefined,
+  sheet: CharacterSheet,
+  converted?: (assetId: string) => boolean,
+): HeroArtChoice {
+  if (!heroIsConverted(cast, converted, sheet.archetypeId)) return DOLL;
+  const entry = cast && cast.style ? castEntry(cast.style, bodySpriteId(sheet.archetypeId as ArchetypeId)) : null;
+  const size = entry ? pictureSize(entry) : null;
+  const set = cast && entry && size ? buildFigureSet(cast.style, entry, size, wornLayers(cast.style, sheet)) : null;
+  return set && size ? { kind: "cast", set, size } : WAIT;
 }
 
 /** A short string that changes exactly when `chooseHeroArt` would pick a different figure or dress it differently. */
 export function choiceKey(choice: HeroArtChoice): string {
   if (choice.kind === "doll") return "doll";
+  if (choice.kind === "wait") return "wait";
   const worn = choice.set.layers.map((l) => `${l.gear.id}:${l.remap ? Object.entries(l.remap).join(",") : ""}`).join("+");
   return `cast|${choice.set.style.style}|${choice.set.entry.id}|${choice.size}|${worn}`;
 }
@@ -118,7 +150,7 @@ export function fitFigure(boxW: number, boxH: number, fig: { w: number; h: numbe
 export interface HeroPictureRequest {
   /** Whose picture: the class, and the gear worn (the cast's gear layers are worked out from it exactly as the board does). */
   sheet: CharacterSheet;
-  /** The still stand-in for a sheet: a canvas to copy when the cast cannot be drawn. Null when there is none. */
+  /** The still stand-in for a sheet: a canvas to copy for a class with no KayKit version (never asked for a class that has one). Null when there is none. */
   still: (sheet: CharacterSheet) => HTMLCanvasElement | null;
   /** The picture's size in CSS pixels, when the screen has no style rule for it (the canvas is then given this width and height). */
   box?: number;
@@ -146,6 +178,8 @@ export interface HeroPictures {
 export interface HeroPictureArt {
   cast(): { data: CastData; style: CastStyle } | null;
   onChange(cb: () => void): () => void;
+  /** Whether a picture id has a KayKit version in the loaded library (TableArt.converted). Absent: nothing is known to be converted. */
+  converted?(assetId: string): boolean;
 }
 
 /** What the service needs from the cast engine; the defaults are cast.ts and figures.ts. A test hands in stand-ins for the decoding. */
@@ -227,10 +261,18 @@ export function createHeroPictures(opts: HeroPictureOptions): HeroPictures {
     }
   };
 
+  const convertedNow = (id: string): boolean => {
+    try {
+      return opts.art.converted?.(id) === true;
+    } catch {
+      return false;
+    }
+  };
+
   /** Work out what a picture should be drawn from now, and start decoding when that is a cast figure. */
   function choose(l: Live): void {
     const cast = castNow();
-    const choice = chooseHeroArt(cast, l.sheet);
+    const choice = chooseHeroArt(cast, l.sheet, convertedNow);
     const key = choiceKey(choice);
     if (key === l.key) return;
     l.key = key;
@@ -245,7 +287,16 @@ export function createHeroPictures(opts: HeroPictureOptions): HeroPictures {
     l.canvas.dataset.art = kind;
   }
 
-  /** The doll (or the class token): the still's own pixels, one to one, in the canvas. */
+  /** Nothing yet: a class that has a KayKit version, whose figure is still being made. The canvas is empty; the old picture is never drawn in its place. */
+  function drawWait(l: Live): void {
+    const ctx = l.canvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, l.canvas.width, l.canvas.height);
+    setArt(l, "wait");
+    l.drawn = null;
+    l.dirty = false;
+  }
+
+  /** The doll (or the class token) of a class with no KayKit version: the still's own pixels, one to one, in the canvas. */
   function drawStill(l: Live): void {
     const src = (l.stillCanvas ??= l.req.still(l.sheet));
     const ctx = l.canvas.getContext("2d");
@@ -303,12 +354,14 @@ export function createHeroPictures(opts: HeroPictureOptions): HeroPictures {
   function draw(l: Live, t: number): void {
     if (l.choice.kind === "cast") {
       if (drawCast(l, t)) return;
-      // Not decoded or not laid out yet. Keep what is there (the doll, or the last cast frame); ask again in case the cache let it go.
+      // Not decoded or not laid out yet. Keep what is there (the last cast frame, or an empty canvas); ask again in case the cache let it go.
       const cast = castNow();
       if (cast) deps.request(l.choice.set, cast.data.palette, l.onReady);
-      // Decoded already and only waiting to be on the page: no doll for the one frame before the figure is drawn.
-      const decoded = deps.frames(l.choice.set, 0) !== null;
-      if (!decoded && l.shown === "doll" && l.dirty) drawStill(l);
+      if (l.shown !== "cast" && l.dirty) drawWait(l);
+      return;
+    }
+    if (l.choice.kind === "wait") {
+      if (l.dirty || l.shown !== "wait") drawWait(l);
       return;
     }
     if (l.dirty || l.shown !== "doll") drawStill(l);
@@ -370,7 +423,7 @@ export function createHeroPictures(opts: HeroPictureOptions): HeroPictures {
         sheet,
         choice: DOLL,
         key: "",
-        shown: "doll",
+        shown: "wait",
         stillCanvas: null,
         born: t,
         t0: t,
@@ -382,13 +435,13 @@ export function createHeroPictures(opts: HeroPictureOptions): HeroPictures {
         },
       };
       choose(l);
-      // Nothing to draw at all: no cast figure and no still. The screen shows its words alone.
+      // Nothing to draw at all: a class with no KayKit version and no still. The screen shows its words alone.
       if (l.choice.kind === "doll") {
         l.stillCanvas = req.still(sheet);
         if (!l.stillCanvas) return null;
       }
-      canvas.dataset.art = "doll";
-      // The first picture is on the canvas before the screen shows it: the still at once, the cast figure the moment its frames are in.
+      canvas.dataset.art = l.choice.kind === "doll" ? "doll" : "wait";
+      // The first picture is on the canvas before the screen shows it: the still at once (a class with no KayKit version), the cast figure the moment its frames are in.
       draw(l, t);
       l.pic = {
         canvas,

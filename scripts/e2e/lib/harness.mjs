@@ -36,9 +36,11 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
    *   server:   play games-db from Node (server saves that survive a reload, the art manifest, auth.whoami); see platform.mjs
    *   saves:    a Map to share server saves between games (default: one per game)
    *   who:      what auth.whoami answers (default a signed-in tester)
+   *   art:      the game's art files, which it cannot start without: "ready" (default), "none" (no assets bridge at all), "hold" (parked until
+   *             window.__releaseAssets()), "fail" (download failures until window.__failAssets(false)); see lib/assets.mjs
    *   permissions, storageState: passed to the browser context
    */
-  async function newGame({ script = [], viewport = { width: 1280, height: 900 }, allowHosts = [], url = "/", latencyMs = 0, extraInit, server = false, saves, who, ...ctxOpts } = {}) {
+  async function newGame({ script = [], viewport = { width: 1280, height: 900 }, allowHosts = [], url = "/", latencyMs = 0, extraInit, art = "ready", server = false, saves, who, ...ctxOpts } = {}) {
     const context = await browser.newContext({ viewport, acceptDownloads: true, ...ctxOpts });
     const page = await context.newPage();
     let manifest = null;
@@ -70,7 +72,7 @@ export async function startHarness({ root = process.cwd(), mode = "dev", headed 
         true,
       );
     });
-    const platform = await installPlatform(page, { latencyMs, extraInit, server: !!server, saves, who, assetManifest });
+    const platform = await installPlatform(page, { latencyMs, extraInit, art, server: !!server, saves, who, assetManifest });
     platform.script(script);
 
     const consoleErrors = [];

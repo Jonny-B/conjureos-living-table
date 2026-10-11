@@ -1,11 +1,13 @@
-// The hero pictures off the board: the hero choice ("Who will you be?") and the character maker's class cards draw the KayKit cast figure
-// (the board's own, idling and facing the viewer) when the cast is loaded, and the hand-made pixel art when it is not. The page marks the
-// picture it drew with data-art on its canvas ("cast" or "doll").
+// The hero pictures off the board: the hero choice ("Who will you be?"), the character maker's class cards, the character sheet's portrait and the
+// inventory's picture draw the KayKit cast figure (the board's own, idling and facing the viewer). The game does not show any of them until
+// its art files are in (specs/artgate.spec.mjs), so there is no hand-made doll for the three playable classes. The page marks the picture it
+// drew with data-art on its canvas ("cast", or "wait" for the empty moment while the figure's frames are decoded; "doll" is only for a class with
+// no KayKit version, and none of the three is one).
 //
-// The cast is one of the app's asset files. The ConjureOS bridge is stood in for by lib/assets.mjs, which serves the committed
-// asset-files/*.json from the test server; without it the page runs as it does outside ConjureOS (the doll).
+// The cast is one of the app's asset files. The ConjureOS bridge is stood in for by lib/assets.mjs, which every page has by default and which serves
+// the committed asset-files/*.json from the test server.
 import { dmScript } from "../lib/fixtures.mjs";
-import { assetBridge } from "../lib/assets.mjs";
+import { WATCH_DOLLS } from "../lib/assets.mjs";
 
 const WITH_SERVER = { art: true };
 const T = 20000;
@@ -15,16 +17,16 @@ const SIZES = [
 ];
 const CLASSES = ["fighter", "rogue", "wizard"];
 const dollOf = (chassis) => `[data-lto-doll="${chassis}"] canvas`;
-const shotName = (screen, size, art) => `art-everywhere-${screen}-${size.width}x${size.height}-${art}`;
+const shotName = (screen, size) => `no-old-art-${screen}-${size.width}x${size.height}`;
 
-/** The Rat Cellar's hero choice at a window size, with or without the cast bridge. */
-async function openHeroChoice(newGame, size, extraInit) {
+/** The Rat Cellar's hero choice at a window size. */
+async function openHeroChoice(newGame, size, opts = {}) {
   const g = await newGame({
     server: WITH_SERVER,
     script: dmScript(),
     viewport: { width: size.width, height: size.height },
     ...(size.touch ? { hasTouch: true } : {}),
-    ...(extraInit ? { extraInit } : {}),
+    ...opts,
   });
   const d = g.driver;
   await d.ready();
@@ -81,11 +83,11 @@ const CARDS = ["knight", "shadow", "fireball-person"];
 
 export const specs = [
   {
-    name: "with the cast loaded, the hero choice and the maker's class cards draw the KayKit figure (390 and 1280)",
+    name: "the hero choice and the maker's class cards draw the KayKit figure for every class, and never the hand-made doll (390 and 1280)",
     async run({ newGame, assert }) {
       for (const size of SIZES) {
         const where = `${size.width}px`;
-        const { g, d } = await openHeroChoice(newGame, size, assetBridge());
+        const { g, d } = await openHeroChoice(newGame, size, { extraInit: WATCH_DOLLS });
         const page = g.page;
         await allPictures(page, "cast", where);
         const ink = await page.locator("[data-lto-doll] canvas").evaluateAll((cs, fn) => cs.map((c) => new Function(`return (${fn})`)()(c)), inkOf.toString());
@@ -95,8 +97,8 @@ export const specs = [
           assert.ok(m.x0 > 0 && m.y0 > 0 && m.x1 < m.w - 1 && m.y1 < m.h - 1, `${where}: the ${CLASSES[i]} figure is whole inside its canvas ${JSON.stringify(m)}`);
         }
         await page.waitForTimeout(1200); // the screen has finished fading in
-        await g.screenshot(shotName("hero", size, "cast"));
-        // The slide for each class stands in the same box the doll did.
+        await g.screenshot(shotName("hero", size));
+        // The slide for each class stands in a square box.
         for (const c of CLASSES) {
           const box = await page.locator(`[data-lto-doll="${c}"]`).boundingBox();
           assert.ok(box && box.width >= 70 && Math.abs(box.width - box.height) < 1, `${where}: the ${c} picture box is a square (${JSON.stringify(box)})`);
@@ -107,132 +109,51 @@ export const specs = [
         assert.equal(cards.length, 3, `${where}: a picture on each class card`);
         for (const m of cards) assert.ok(m.n > 150, `${where}: a class card figure is drawn (${m.n} painted pixels)`);
         await page.waitForTimeout(1200);
-        await g.screenshot(shotName("maker", size, "cast"));
+        await g.screenshot(shotName("maker", size));
+        assert.deepEqual(await page.evaluate(() => window.__dolls), [], `${where}: the doll was never on the page, not even for a moment`);
         await g.close();
       }
     },
   },
 
   {
-    name: "without the cast, the hero choice and the maker's class cards draw the hand-made art (390 and 1280)",
+    name: "with the art's real motion the hero choice's figure idles (its pixels change over a second or two), and with the default art it holds still",
     async run({ newGame, assert }) {
-      for (const size of SIZES) {
-        const where = `${size.width}px`;
-        // Once with no bridge at all (outside ConjureOS), once with a bridge that has no such files (a failed load).
-        for (const [label, bridge] of [["no bridge", undefined], ["no files", assetBridge({ names: [] })]]) {
-          const { g, d } = await openHeroChoice(newGame, size, bridge);
-          const page = g.page;
-          await allPictures(page, "doll", `${where}, ${label}`);
-          const ink = await page.locator("[data-lto-doll] canvas").evaluateAll((cs, fn) => cs.map((c) => new Function(`return (${fn})`)()(c)), inkOf.toString());
-          for (const m of ink) assert.ok(m.n > 500, `${where}, ${label}: the doll is drawn (${m.n} painted pixels)`);
-          // The cast would have landed by now; give it the time, then see the doll is still there.
-          await page.waitForTimeout(1500);
-          await allPictures(page, "doll", `${where}, ${label}, later`);
-          if (label === "no bridge") await g.screenshot(shotName("hero", size, "doll"));
-          await openClassStep(g, d);
-          const arts = await page.locator("[data-lts-class-card] canvas").evaluateAll((cs) => cs.map((c) => c.getAttribute("data-art")));
-          assert.deepEqual(arts, ["doll", "doll", "doll"], `${where}, ${label}: the class cards draw the hand-made art`);
-          if (label === "no bridge") {
-            await page.waitForTimeout(1200); // the screen has finished fading in
-            await g.screenshot(shotName("maker", size, "doll"));
-          }
-          await g.close();
-        }
-      }
+      const moving = await openHeroChoice(newGame, SIZES[0], { art: { motion: true } });
+      await allPictures(moving.g.page, "cast", "with motion");
+      const first = await moving.g.page.locator(dollOf("fighter")).evaluate((c) => c.toDataURL());
+      await moving.g.page.waitForFunction(([sel, was]) => document.querySelector(sel).toDataURL() !== was, [dollOf("fighter"), first], { timeout: 4000 });
+      await moving.g.close();
+      const still = await openHeroChoice(newGame, SIZES[0]);
+      await allPictures(still.g.page, "cast", "default art");
+      const a = await still.g.page.locator(dollOf("fighter")).evaluate((c) => c.toDataURL());
+      await still.g.page.waitForTimeout(2200);
+      assert.equal(await still.g.page.locator(dollOf("fighter")).evaluate((c) => c.toDataURL()), a, "the default art's idle loop is held on its first frame");
+      await still.g.close();
     },
   },
 
   {
-    name: "a cast that lands while the hero choice is open switches each picture in place: same canvas, same box",
+    name: "in a game, the character sheet's portrait and the inventory's picture draw the cast figure for each class, and no doll is ever on the page",
     async run({ newGame, assert }) {
-      const size = SIZES[0];
-      const { g, d } = await openHeroChoice(newGame, size, assetBridge({ hold: true }));
-      const page = g.page;
-      await allPictures(page, "doll", "before the cast");
-      // Mark each canvas and note its box, so "in place" is checked against the very same elements.
-      const before = await page.evaluate((classes) => {
-        const out = {};
-        for (const c of classes) {
-          const canvas = document.querySelector(`[data-lto-doll="${c}"] canvas`);
-          canvas.__mark = c;
-          const r = document.querySelector(`[data-lto-doll="${c}"]`).getBoundingClientRect();
-          const cr = canvas.getBoundingClientRect();
-          out[c] = { box: [r.x, r.y, r.width, r.height], canvas: [cr.x, cr.y, cr.width, cr.height] };
-        }
-        return out;
-      }, CLASSES);
-      await page.evaluate(() => window.__releaseAssets());
-      await allPictures(page, "cast", "after the cast landed");
-      const after = await page.evaluate((classes) => {
-        const out = {};
-        for (const c of classes) {
-          const canvas = document.querySelector(`[data-lto-doll="${c}"] canvas`);
-          const r = document.querySelector(`[data-lto-doll="${c}"]`).getBoundingClientRect();
-          const cr = canvas.getBoundingClientRect();
-          out[c] = { mark: canvas.__mark, box: [r.x, r.y, r.width, r.height], canvas: [cr.x, cr.y, cr.width, cr.height] };
-        }
-        return out;
-      }, CLASSES);
-      for (const c of CLASSES) {
-        assert.equal(after[c].mark, c, `${c}: the same canvas element is showing the cast`);
-        assert.deepEqual(after[c].box, before[c].box, `${c}: the picture box did not move or change size`);
-        assert.deepEqual(after[c].canvas, before[c].canvas, `${c}: the canvas did not move or change size`);
-      }
-      // The figure idles: its pixels change over a second or two (a frame of its loop turns over).
-      const first = await page.locator(dollOf("fighter")).evaluate((c) => c.toDataURL());
-      await page.waitForFunction(([sel, was]) => document.querySelector(sel).toDataURL() !== was, [dollOf("fighter"), first], { timeout: 4000 });
-      void d;
-    },
-  },
-
-  {
-    name: "in a game, the character sheet's portrait and the inventory's doll draw the cast figure when it is loaded and the hand-made art when it is not",
-    async run({ newGame, assert }) {
-      for (const [label, bridge, want] of [["with the cast", assetBridge(), "cast"], ["without it", undefined, "doll"]]) {
-        const { g, d } = await openHeroChoice(newGame, SIZES[1], bridge);
+      for (const chassis of CLASSES) {
+        const { g, d } = await openHeroChoice(newGame, SIZES[1], { extraInit: WATCH_DOLLS });
         const page = g.page;
-        await d.playAs("fighter", "Mira");
+        await d.playAs(chassis, "Mira");
         await d.dismissDialogue();
-        const art = (sel) => page.waitForFunction(([s, w]) => document.querySelector(s)?.getAttribute("data-art") === w, [sel, want], { timeout: T });
+        const art = (sel) => page.waitForFunction(([s, w]) => document.querySelector(s)?.getAttribute("data-art") === w, [sel, "cast"], { timeout: T });
         await d.openMenu("character");
         await art("[data-game-menu] .lts-portrait canvas");
         const portrait = await page.locator("[data-game-menu] .lts-portrait").boundingBox();
-        assert.ok(portrait && portrait.width >= 60, `${label}: the sheet's portrait box is there (${JSON.stringify(portrait)})`);
+        assert.ok(portrait && portrait.width >= 60, `${chassis}: the sheet's portrait box is there (${JSON.stringify(portrait)})`);
         await d.openMenu("inventory");
         await art("[data-game-menu] canvas[data-inv-doll]");
         const doll = await page.locator("[data-game-menu] canvas[data-inv-doll]").boundingBox();
-        assert.ok(doll && doll.width >= 100 && Math.abs(doll.width - doll.height) < 1, `${label}: the doll is a square box (${JSON.stringify(doll)})`);
+        assert.ok(doll && doll.width >= 100 && Math.abs(doll.width - doll.height) < 1, `${chassis}: the inventory's picture is a square box (${JSON.stringify(doll)})`);
         const inked = await page.locator("[data-game-menu] canvas[data-inv-doll]").evaluate((c) => c.getContext("2d").getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0));
-        assert.equal(inked, true, `${label}: the doll is drawn`);
+        assert.equal(inked, true, `${chassis}: the inventory's picture is drawn`);
+        assert.deepEqual(await page.evaluate(() => window.__dolls), [], `${chassis}: no doll on the hero choice, the maker, the sheet or the inventory`);
         await g.close();
-      }
-    },
-  },
-
-  {
-    name: "a class card switches to the cast in place when it lands under the open maker",
-    async run({ newGame, assert }) {
-      const size = SIZES[1];
-      const { g, d } = await openHeroChoice(newGame, size, assetBridge({ hold: true }));
-      const page = g.page;
-      await openClassStep(g, d);
-      await page.waitForFunction((sels) => sels.every((s) => document.querySelector(s)?.getAttribute("data-art") === "doll"), CARDS.map(cardCanvas), { timeout: T });
-      const boxes = await page.evaluate((sels) => sels.map((s) => {
-        const c = document.querySelector(s);
-        c.__mark = "kept";
-        const r = c.parentElement.getBoundingClientRect();
-        return [r.x, r.y, r.width, r.height];
-      }), CARDS.map(cardCanvas));
-      await page.evaluate(() => window.__releaseAssets());
-      await page.waitForFunction((sels) => sels.every((s) => document.querySelector(s)?.getAttribute("data-art") === "cast"), CARDS.map(cardCanvas), { timeout: T });
-      const after = await page.evaluate((sels) => sels.map((s) => {
-        const c = document.querySelector(s);
-        const r = c.parentElement.getBoundingClientRect();
-        return { mark: c.__mark, box: [r.x, r.y, r.width, r.height] };
-      }), CARDS.map(cardCanvas));
-      for (const [i, a] of after.entries()) {
-        assert.equal(a.mark, "kept", `${CARDS[i]}: the same canvas element is showing the cast`);
-        assert.deepEqual(a.box, boxes[i], `${CARDS[i]}: the card's picture box did not move or change size`);
       }
     },
   },

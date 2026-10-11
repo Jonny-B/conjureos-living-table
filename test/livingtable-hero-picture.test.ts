@@ -1,9 +1,11 @@
 /**
  * The hero pictures off the board (ui/heroPicture.ts): the hero choice, the maker's class cards and the character sheet draw the KayKit
- * cast figure when the cast is loaded and the hand-made art when it is not.
+ * cast figure, and never the hand-made art for a class that has a KayKit version.
  *
- *  - the choosing: a cast with the hero's class picks the cast figure for THAT class (and dresses it in the sheet's gear); no cast picks the
- *    doll; a cast that lacks the class, or its idle clip, picks the doll. Checked on a stand-in cast and on the committed cast file;
+ *  - the choosing: a cast with the hero's class picks the cast figure for THAT class (and dresses it in the sheet's gear); a class that has a
+ *    KayKit version (the cast has its figure, or the art says its token is converted) whose figure cannot be made yet is `wait`, an empty canvas,
+ *    never the doll; only a class with no KayKit version (and a host that knows of none) gets the doll. Checked on a stand-in cast and on the
+ *    committed cast file;
  *  - the fitting: whole device pixels per art pixel, centred, one crop for every hero and every set of gear (every piece of gear of every
  *    hero lies inside it, which is checked on the committed file);
  *  - the live picture, under plain Node with a recording canvas: the doll first, the cast figure the moment its frames are in, the switch
@@ -33,6 +35,7 @@ import {
   cropToFrame,
   figureCrop,
   fitFigure,
+  heroIsConverted,
   pictureSize,
   type HeroPicture,
   type HeroPictureArt,
@@ -99,10 +102,31 @@ test("a cast that lacks the class: the doll, class by class", () => {
   assert.equal(chooseHeroArt(cast, WIZARD).kind, "doll", "nor is the Wizard");
 });
 
-test("a cast whose figure has no idle clip facing the viewer, or no size at all: the doll", () => {
-  assert.equal(chooseHeroArt(castOf(standInStyle(["token_knight"], ["32"], [], { idle: false })), KNIGHT).kind, "doll");
-  assert.equal(chooseHeroArt(castOf(standInStyle(["token_knight"], [], [])), KNIGHT).kind, "doll");
-  assert.equal(chooseHeroArt(castOf({ ...standInStyle(["token_knight"]), characters: [] }), KNIGHT).kind, "doll");
+test("a cast whose figure for the class has no idle clip facing the viewer, or no size at all: nothing to draw yet (wait), never the doll", () => {
+  assert.deepEqual(chooseHeroArt(castOf(standInStyle(["token_knight"], ["32"], [], { idle: false })), KNIGHT), { kind: "wait" });
+  assert.deepEqual(chooseHeroArt(castOf(standInStyle(["token_knight"], [], [])), KNIGHT), { kind: "wait" });
+  // A cast with no figure of the class at all does not have the class: the doll, unless the art says the class is converted.
+  const bare = castOf({ ...standInStyle(["token_knight"]), characters: [] });
+  assert.equal(chooseHeroArt(bare, KNIGHT).kind, "doll");
+  assert.equal(chooseHeroArt(bare, KNIGHT, (id) => id === "token_knight").kind, "wait", "the library has the Knight, so the doll is off");
+});
+
+test("the converted-or-not decision: the cast has the class's figure, or the art says its body token is converted", () => {
+  const cast = castOf(standInStyle(["token_knight"], ["32"]));
+  assert.equal(heroIsConverted(cast, undefined, "knight"), true, "the cast has the Knight");
+  assert.equal(heroIsConverted(cast, undefined, "shadow"), false, "not the Rogue");
+  assert.equal(heroIsConverted(null, undefined, "knight"), false, "a host that knows of nothing converted");
+  assert.equal(heroIsConverted(null, (id) => id === "token_shadow", "shadow"), true, "the art says the Rogue's token is converted");
+  assert.equal(heroIsConverted(null, (id) => id === "token_shadow", "knight"), false);
+  assert.equal(
+    heroIsConverted(null, () => {
+      throw new Error("art broke");
+    }, "knight"),
+    false,
+    "a broken art never breaks the choosing",
+  );
+  assert.equal(heroIsConverted(cast, (id) => id === "token_healer", "healer"), true, "a class with no entry in the cast is converted when the art says so");
+  assert.equal(heroIsConverted(cast, undefined, "healer"), false, "the Healer has no KayKit version");
 });
 
 test("the size is the finest the figure has an idle clip for", () => {
@@ -298,8 +322,9 @@ interface Rig {
   clock: { t: number };
 }
 
-function rig(initial: { data: CastData; style: CastStyle } | null, opts: { reducedMotion?: boolean } = {}): Rig {
+function rig(initial: { data: CastData; style: CastStyle } | null, opts: { reducedMotion?: boolean; converted?: (assetId: string) => boolean } = {}): Rig {
   const art = fakeArt(initial);
+  if (opts.converted) art.converted = opts.converted;
   const canvases: FakeCanvas[] = [];
   const requests: FigureSet[] = [];
   const clock = { t: 1000 };
@@ -392,13 +417,13 @@ test("the picture has no doll for the frame before the figure is drawn when the 
   p.dispose();
 });
 
-test("a cast that lands while the screen is open: the same canvas switches from the doll to the figure, and nothing else changes", () => {
+test("a cast that lands while the screen is open (a host that does not wait for it): the same canvas goes from the doll to an empty canvas to the figure", () => {
   const r = rig(null);
   const p = r.pictures.picture(request(KNIGHT))!;
   const canvas = p.canvas;
   asFake(p).isConnected = true;
   r.tick();
-  assert.equal(p.art(), "doll");
+  assert.equal(p.art(), "doll", "this host knew of nothing converted");
   const stillSize = [asFake(p).width, asFake(p).height];
   assert.deepEqual(stillSize, [128, 128], "the doll is drawn at its own size");
   r.art.set(knightCast());
@@ -406,13 +431,53 @@ test("a cast that lands while the screen is open: the same canvas switches from 
   assert.equal(r.requests.length, 1, "the figure's clips are asked for");
   assert.equal(r.requests[0]!.entry.id, "token_knight");
   r.tick();
-  assert.equal(p.art(), "doll", "the doll stays until the frames are decoded: never a blank");
+  assert.equal(p.art(), "wait", "the Knight has a KayKit version now: the doll goes, and nothing stands in for the figure until its frames are decoded");
+  assert.equal(asFake(p).dataset.art, "wait");
   r.decode();
   r.tick();
   assert.equal(p.art(), "cast");
   assert.equal(p.canvas, canvas, "in place: the very same element");
   assert.equal(asFake(p).dataset.art, "cast");
   p.dispose();
+});
+
+test("a class that has a KayKit version is never the doll: its picture waits empty for the figure, and the still is never even asked for", () => {
+  // The art says the three playable classes are converted (the loaded library has their tokens) but the cast has not been given to the picture.
+  const converted = (id: string): boolean => ["token_knight", "token_shadow", "token_fireball_person"].includes(id);
+  const r = rig(null, { converted });
+  const asked: string[] = [];
+  for (const sheet of [KNIGHT, ROGUE, WIZARD]) {
+    const p = r.pictures.picture(request(sheet, () => (asked.push(sheet.archetypeId), stillOf())))!;
+    assert.ok(p, `${sheet.archetypeId} still gets a picture to fill in`);
+    asFake(p).isConnected = true;
+    r.tick();
+    assert.equal(p.art(), "wait", `${sheet.archetypeId}: no doll while the figure is made`);
+    assert.equal(asFake(p).dataset.art, "wait");
+    assert.equal(asFake(p).lastDraw(), null, "and nothing was copied onto the canvas");
+    p.dispose();
+  }
+  assert.deepEqual(asked, [], "the stand-in is not even built for a class that has a KayKit version");
+});
+
+test("a class with no KayKit version keeps the doll, beside a class that has one drawing the figure", () => {
+  const r = rig(knightCast());
+  r.decode();
+  const healer = freshHero("healer");
+  const seen: string[] = [];
+  const h = r.pictures.picture(request(healer, (s) => (seen.push(s.archetypeId), stillOf())))!;
+  const k = r.pictures.picture(
+    request(KNIGHT, () => {
+      throw new Error("the Knight has a figure: no stand-in");
+    }),
+  )!;
+  asFake(h).isConnected = true;
+  asFake(k).isConnected = true;
+  r.tick();
+  assert.equal(h.art(), "doll", "the Healer is out of play and has no KayKit version");
+  assert.deepEqual(seen, ["healer"]);
+  assert.equal(k.art(), "cast");
+  h.dispose();
+  k.dispose();
 });
 
 test("a cast without the hero's class never replaces the doll, even when it lands", () => {
