@@ -35,6 +35,7 @@ import { bindCatalog } from "./catalog";
 import { bindAdventures } from "./adventureCatalog";
 import { bindFightEnv } from "./fightRules";
 import { bindCastSource } from "./ui/cast";
+import { createHeroPictures } from "./ui/heroPicture";
 import { createFog } from "./fog";
 import { advApply, advBoard, currentLocation, exitIsOpen, exitsHere, featureIsFound, featureSearchable } from "./adventureRun";
 import { creaturesInSight, heroSees } from "./sight";
@@ -145,6 +146,8 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
   const session = opts.session ?? createTableSession(host);
   const reducedMotion = host.env.reducedMotion;
   const heroIds = host.heroes.playable();
+  // The screens off the board draw a hero as the cast figure when the cast is loaded (and switch to it when it lands); they follow the art through this.
+  tc.pictures = createHeroPictures({ art: host.art, reducedMotion });
   // What the engine modules read from the host: the picture catalog, the adventure list, the dice and the cast. The unbinds are tokens, so
   // a window that is disposed late cannot unbind the one that replaced it.
   const unbinds: Array<() => void> = [bindCatalog(host.art), bindAdventures(host), bindFightEnv(host.env)];
@@ -386,6 +389,7 @@ export function mountTable(el: HTMLElement, host: TableHost, opts: TableOptions 
     trayMoreWatch?.disconnect();
     trayMoreMutations?.disconnect();
     trayMore.off();
+    tc.pictures.dispose();
     hud.destroy();
     stage.dispose();
     fit?.dispose();

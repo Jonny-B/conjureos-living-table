@@ -205,6 +205,54 @@ export class Driver {
     });
   }
 
+  /**
+   * A fingerprint of the whole board except the hero's own figure: every pixel of the board canvas (floor, walls, props, doors, creatures) and
+   * the fog over it (the shroud canvas; its soft edge shimmers, so what is hashed is where it covers, not its colours). `rect` is the hero's
+   * square as heroRect() reads it. The figure is left out, with the room its gear and its head take beyond the square (0.6 of a square to each
+   * side and above): it faces the way it last walked, and a game loaded from a save stands it facing the viewer again, because the facing is not
+   * saved. A door, a creature, a prop or a fogged square anywhere else changes the answer. Pass the same rect for the two boards being compared.
+   */
+  async boardHashExcept(rect) {
+    return this.page.evaluate((hero) => {
+      let h = 2166136261;
+      let n = 0;
+      const mix = (v) => {
+        h = Math.imul(h ^ v, 16777619) >>> 0;
+      };
+      for (const c of document.querySelectorAll("canvas.ltt-canvas, canvas.lt-shroud")) {
+        const b = c.getBoundingClientRect();
+        if (!c.width || !b.width) continue;
+        const fog = c.classList.contains("lt-shroud");
+        const kx = c.width / b.width;
+        const ky = c.height / b.height;
+        const x0 = Math.floor((hero.x - hero.w * 0.6 - b.left) * kx);
+        const x1 = Math.ceil((hero.x + hero.w * 1.6 - b.left) * kx);
+        const y0 = Math.floor((hero.y - hero.h * 0.6 - b.top) * ky);
+        const y1 = Math.ceil((hero.y + hero.h - b.top) * ky);
+        const data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        mix(c.width);
+        mix(c.height);
+        for (let y = 0; y < c.height; y += 1) {
+          const inRow = y >= y0 && y < y1;
+          for (let x = 0; x < c.width; x += 1) {
+            if (inRow && x >= x0 && x < x1) continue;
+            const i = (y * c.width + x) * 4;
+            if (fog) {
+              mix(data[i + 3] > 0 ? 1 : 0);
+            } else {
+              mix(data[i]);
+              mix(data[i + 1]);
+              mix(data[i + 2]);
+              mix(data[i + 3]);
+            }
+            n += 1;
+          }
+        }
+      }
+      return n ? `${n}:${h}` : "";
+    }, rect);
+  }
+
   /** How many different colours the board canvas holds (a blank or failed paint has one or two). */
   async boardColours() {
     return this.page.evaluate(() => {

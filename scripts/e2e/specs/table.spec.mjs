@@ -226,7 +226,12 @@ export const specs = [
       assert.ok(keys.some((k) => k.startsWith("s:")), `a save point went to the server (${keys.join(", ")})`);
       assert.ok(keys.includes("current"), "and the current copy");
       const before = await d.readout();
-      const boardBefore = await d.settle();
+      await d.settle();
+      // The whole board is compared, door by door and creature by creature, except the hero's own figure: it faces the way it last walked, and a
+      // loaded game stands it facing the viewer again (the facing is not saved). Where the hero stands is compared on its own.
+      const heroBefore = await d.heroRect();
+      const boardBefore = await d.boardHashExcept(heroBefore);
+      assert.notEqual(boardBefore, "", "there is a board to compare");
       // The device forgets everything: only the server has the game now.
       await g.page.evaluate(() => {
         try {
@@ -242,7 +247,9 @@ export const specs = [
       const after = await d.readout();
       const head = (s) => s.split(/AC \d+/)[0];
       assert.equal(head(after), head(before), "the same scene is up");
-      assert.equal(await d.settle(), boardBefore, "with the hero standing where they were");
+      await d.settle();
+      assert.deepEqual(await d.heroRect(), heroBefore, "with the hero standing where they were");
+      assert.equal(await d.boardHashExcept(heroBefore), boardBefore, "and every other square of the board, and the fog over it, as it was");
       assert.ok((await d.saves()).length >= 1, "the saves came back from the server");
       assert.match(await d.footLine(), /account/i, "the line under the window says the saves are on the account");
       assert.equal(g.platform.calls.length, 0, "restoring a game never calls the model");

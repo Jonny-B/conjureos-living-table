@@ -2,10 +2,21 @@
 
 Cross-cutting calls, newest first. Terse: what, why, what it touches. STATUS.md says where the project is; this says why it is that way.
 
+## 2026-10-10 (no old art, 0.12.0)
+
+### The game never draws the old picture of anything that has a KayKit version, and waits for the art instead
+Owner: "I don't want the old assets to exist at all." and "For now just implement what we've already converted and keep everything else." So the hand-made art is no longer a fallback for converted ids: the game holds at the splash until both asset files are in, and a failure is a plain sentence with Retry (an app too old to hand over files is told to update). Ids with no KayKit version keep their hand-made picture; the set is computed from the files, so it shrinks as the owner converts more. Trade-off taken knowingly: with no art files the game does not run at all. Touches `table/host/artGate.ts`, `artFailure.ts`, `devAssets.ts`, `gameArt.ts`, `table/ui/heroPicture.ts`, `Splash.tsx`, `TableScreen.tsx`.
+
+### Error words on the art screen are fixed sentences
+No status codes, exception text or reason codes reach the player; the raw detail goes to the console. Seven sentences in `artFailure.ts`, pinned by a test over twenty failure routes.
+
 ## 2026-10-09 (asset files, ConjureOS #1149, 0.11.0)
 
 ### The animated art is the app's own asset files, committed in the repo and installed with the game
 Owner: "These assets should stream from supabase game files. When the game installs from the discovery store it should install all the assets ... for that user." So the cast and the library are two files in `asset-files/`, declared in `package.json` `conjureos.assetFiles` (`name`, `path`, `type`). The publish uploads them as the bot and records `{name, url, sha256, size, type}` with the version; the kernel fetches them at install and update; the game asks for each by name. No url or hash lives in the game's code, and nobody uploads by hand. Committed rather than built in CI because the Blender renders behind them are not in the repo. Both bundlers skip declared files, so the page stays 1.67 MB. The game falls back to still figures and the hand-drawn art whenever a file is not there, and feature-detects `assets.list` so the phone and an older ConjureOS say so instead of misreading `load(name)`. The files are public (sealed means not editable, not secret). Touches: `table/host/assetFiles.ts`, `gameArt.ts`, `package.json`, `scripts/build-bundle.mjs`, `scripts/assets/export-asset-files.mjs`, `.github/workflows/publish-store.yml`.
+
+### The Mage is the Wizard, and a saved hero follows (0.11.1)
+Owner: "fireball person should wizard, and shadow rogue." The class shown as the Mage reads Wizard everywhere a player or the DM reads it; archetype and asset ids stay (saves and art key off them). A save written before a rename keeps the old label in the hero sheet, and `normalizeSheet` has no caller on the load path, so `fromSnapshot` and `saveDetail` call `refreshRetiredNames`: the class name follows the archetype, and a hero NAME that is exactly a retired class label (the old default name of a quick start) follows too. A name a player typed is kept. This is a default taken for the owner (veto: drop the name half in `refreshRetiredNames`). Found by an independent audit that ran a real old save through the real renderers; the unit test of `normalizeSheet` alone had passed for the wrong reason. The cast file's own labels ("Shadow", "Fireball Person") are not displayed and are left, because changing them changes the file's hash and means another publish.
 
 ## 2026-10-08 (bug bash, issue #13, 0.10.0)
 

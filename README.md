@@ -22,6 +22,14 @@ npm run bench      # the asset bench: .cache/asset-bench/living-table-bench.html
 `npm run dev` does not exercise the store pipeline; run `npm run build` and
 open `dist/living-table.html` before anything is published.
 
+The game does not start without its two art files (`asset-files/`, which
+ConjureOS hands over). On `npm run dev` there is no ConjureOS, so the script
+that runs first copies them into `.devserve/asset-files/` and the game reads
+them from the dev server (`src/games/livingtable/table/host/devAssets.ts`,
+local pages with no ConjureOS only). Anywhere else a file that cannot be had
+shows the art screen: one plain sentence and a Retry button (none when the
+ConjureOS app is too old to hand files over, where it says to update the app).
+
 ## Where things are
 
 - `src/games/livingtable/`: the game (rules, dungeon master, world, rendering, inventory).

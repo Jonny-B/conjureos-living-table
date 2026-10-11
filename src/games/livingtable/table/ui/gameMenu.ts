@@ -41,6 +41,7 @@ import { renderPlanFor, slotLabelFor } from "../../menu/equipment";
 import { deltaTone, deltaWords, previewEquip, previewTakeOff, signedNumber, statsOf, type StatBlock, type StatDelta, type StatPreview } from "../../menu/statPreview";
 import { knownArchetypeId } from "../../rules/attunement";
 import { renderDoll } from "../../render/doll";
+import type { HeroPicture, HeroPictures } from "./heroPicture";
 import { renderGearIcon } from "../../render/gearIcon";
 import type { RenderManifest } from "../../render/canvasRenderer";
 import type { TextStyle } from "./overlayTypes";
@@ -237,6 +238,8 @@ export interface GameMenuOptions {
   onItemAction?: (key: string, actionId: string) => void;
   /** A button of the Saves and Settings views: the HUD's action ids ("load:<id>", "set:<key>:<value>", "export"). */
   onAction: (id: string) => void;
+  /** Makes the Inventory's picture the KayKit cast figure (in the gear previewed); without it (the asset bench), the hand-made doll. A class with no KayKit version keeps the doll. */
+  pictures?: HeroPictures;
   /** The menu has closed (Escape, the close button, or `close()`). */
   onClose: () => void;
   /** The tab changed. */
@@ -547,13 +550,31 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
     const dollSec = sec("lto-inv-doll", "Equipped");
     const grid = el("div", "lto-doll-grid");
     const mid = el("div", "lto-doll-mid");
-    const canvas = el("canvas", "lto-doll");
+    let scale = dollScale(Math.max(bodyWidth() - 24, 200));
+    /** The hand-made doll for a sheet, at the doll's own scale: the picture's stand-in for a class with no KayKit version (never asked for one that has it). */
+    const dollFor = (shown: CharacterSheet): HTMLCanvasElement | null => {
+      if (!manifest) return null;
+      const c = el("canvas");
+      c.width = c.height = DOLL_CANVAS_SIZE * scale;
+      const cx = c.getContext("2d");
+      if (!cx) return null;
+      renderDoll(cx, renderPlanFor(shown), manifest, scale);
+      return c;
+    };
+    // One canvas for both: the cast figure (re-dressed as a piece is pointed at), or the doll for a class with no KayKit version. Its box is the doll's.
+    const live: HeroPicture | null = opts.pictures?.picture({ sheet, still: dollFor }) ?? null;
+    if (live) offs.push(() => live.dispose());
+    const canvas = live ? live.canvas : el("canvas", "lto-doll");
+    if (live) {
+      canvas.className = "lto-doll";
+      canvas.removeAttribute("aria-hidden");
+    }
     canvas.setAttribute("role", "img");
     canvas.setAttribute("aria-label", `${sheet.name}, as equipped`);
     canvas.dataset.invDoll = "";
-    let scale = dollScale(Math.max(bodyWidth() - 24, 200));
     const sizeDoll = (): void => {
-      canvas.width = canvas.height = DOLL_CANVAS_SIZE * scale;
+      // The picture owns its pixels (the doll's own size, or the cast figure's, whole device pixels per art pixel); the box is the same either way.
+      if (!live) canvas.width = canvas.height = DOLL_CANVAS_SIZE * scale;
       canvas.style.width = canvas.style.height = `${DOLL_CANVAS_SIZE * scale}px`;
     };
     sizeDoll();
@@ -562,6 +583,10 @@ export function openGameMenu(host: HTMLElement, opts: GameMenuOptions): GameMenu
     grid.append(mid);
 
     const drawDoll = (shown: CharacterSheet): void => {
+      if (live) {
+        live.setSheet(shown);
+        return;
+      }
       const ctx = canvas.getContext("2d");
       if (!ctx || !manifest) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);

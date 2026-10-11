@@ -82,7 +82,8 @@ test("a phone paints the DM's dock band only while the box is up, and the dice t
 
 test("the tray column's width follows the page zoom, and the tablet keeps a fixed room for its panel", () => {
   assert.match(tableStyleCss(), /clamp\(320px,calc\(16vw \/ var\(--lt-zoom,1\)\),440px\)/);
-  assert.equal(TABLET_PANEL_ROOM, 240);
+  // The HUD (206) with the notice strip under it (8 + 30) and the gap above the panel (8): a notice arriving must not make the table taller than its window.
+  assert.equal(TABLET_PANEL_ROOM, 206 + 8 + 30 + 8);
   assert.ok(TABLET_PANEL_ROOM <= 300);
 });
 

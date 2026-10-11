@@ -203,6 +203,7 @@ export function installHeroEnding(oc: OverlayCtx): void {
         oc.stext(c, label, { cls: "lto-card-title", scale: 3, weight: "bold", color: PX.gold, center: true });
         const pv = previewOf(h.chassis);
         if (pv?.canvas) {
+          // The box is fixed by .lto-hero-doll; the canvas in it is the KayKit figure (empty until its frames are decoded; data-art says which), never the hand-made doll of a class that has a KayKit version.
           const doll = el("div", "lto-hero-doll");
           doll.dataset.ltoDoll = h.chassis;
           doll.setAttribute("role", "img");
@@ -347,6 +348,10 @@ export function installHeroEnding(oc: OverlayCtx): void {
       }
     });
     s.onEscape = () => hopts.onBack();
+    // The pictures follow the art while the screen is up (the cast can land under it); when it goes they let go of that.
+    s.onClose(() => {
+      for (const p of previews.values()) p?.picture?.dispose();
+    });
     queueMicrotask(() => {
       if (!s.closed) s.node.querySelector<HTMLElement>("[data-lto-quick], [data-lto-create]")?.focus({ preventScroll: true });
     });
