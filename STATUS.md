@@ -1,10 +1,10 @@
 # Status
 
-Last updated: 2026-10-11, 0.12.0 is live on dev (listing 6) and prod (listing 3); 0.13.0 (days, the World and The Quiet Under Blackstone) waits on branch `claude/dreamy-fermi-xg1ixr`, level with dev, not merged.
+Last updated: 2026-10-11, 0.13.0 (days, the World and The Quiet Under Blackstone) is live on the dev listing (version 7) and the prod listing (version 4).
 
-## 0.13.0 on branch `claude/dreamy-fermi-xg1ixr`: days, the World and Blackstone (not merged)
+## 0.13.0, days, the World and Blackstone (live)
 
-Held on the branch by the owner ("we will merge when the others are done"). Brought level with dev's 0.12.0 on 2026-10-11; re-take the version at merge time if dev moves again.
+Live 2026-10-11: dev listing version 7, prod listing version 4 (release PR #18, merge `7609a08`). Both publish runs logged the version line; the asset files were reused, not re-uploaded.
 
 - **Days**: a long rest moves the day on; `it is day N or later` is a condition; the Journal shows "Day N" for an adventure that keeps time.
 - **World**: `## World` beats and ways out fire in any scene (the villain's clock). The brief tells the DM what comes next, DM ONLY.
