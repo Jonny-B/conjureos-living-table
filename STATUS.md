@@ -10,7 +10,7 @@ Held on the branch by the owner ("we will merge when the others are done"). Brou
 - **World**: `## World` beats and ways out fire in any scene (the villain's clock). The brief tells the DM what comes next, DM ONLY.
 - **Blackstone**: `adventures/blackstone.md`, a three-act campaign with four endings and a clock; checker clean, 0 warnings.
 - **Fix**: a creature a world beat brings in is absent until it fires.
-- **Checks**: `npm test` all pass, typecheck clean, `adventures:check` ok, build ok; e2e 88 of 89, the one failure (the Fullscreen button still reads "Exit full screen" after leaving) fails the same way on `dev` and is not this branch's. Still REVIEW in the file: no faction attitudes, no creature turning hostile mid-scene, no forced ambush; untested on a device.
+- **Checks** (on the merge with dev's 0.12.0): `npm test` 2275 of 2275, typecheck clean, `adventures:check` ok, build ok, e2e 101 of 101. Still REVIEW in the file: no faction attitudes, no creature turning hostile mid-scene, no forced ambush; untested on a device.
 
 ## 0.12.0, no old art for anything converted (owner, 2026-10-10)
 
