@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-10, 0.12.0 is going to the dev and prod listings: no old art for anything converted, KayKit heroes everywhere, and the game waits for its art (Retry on failure).
+Last updated: 2026-10-10, 0.12.0 is live on the dev listing (version 6) and the prod listing (version 3, page hash b30ef727, identical to a local build of main): no old art for anything converted, KayKit heroes everywhere, and the game waits for its art (Retry on failure).
 
 ## 0.12.0, no old art for anything converted (owner, 2026-10-10)
 
