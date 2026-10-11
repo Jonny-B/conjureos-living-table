@@ -7,6 +7,10 @@
  * Settings, Licence and credits), the start screen with the adventures, the hero choice, the board, the dice, the DM and
  * the game menu.
  *
+ * The window is mounted only once the game's art is in (table/host/artGate.ts): after the table is set the splash says it is
+ * getting the art ready, and if an art file cannot be had it becomes a screen with the plain reasons and a Retry button. The game
+ * never goes on to the main menu with the old hand-drawn pictures standing in for the ones that have been converted.
+ *
  * The game stands alone: nothing here leads to another app. The window is built once per visit, from the game's own
  * host (table/host/gameHost.ts), and torn down with the screen.
  *
@@ -15,18 +19,27 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { APP_VERSION } from "../../version";
-import { Splash, SPLASH_FADE_MS, splashRemainingMs } from "./Splash";
-import { mountTable, type TableWindow } from "./table/mountTable";
+import { Splash, SPLASH_FADE_MS, splashRemainingMs, type SplashStep } from "./Splash";
+import { mountTable, type TableSession, type TableWindow } from "./table/mountTable";
 import { createGameHost, type GameHost } from "./table/host/gameHost";
+import { artIsReady, retryArt, waitForArt } from "./table/host/artGate";
 import { statusText, type StorageStatus } from "./table/host/gameStorage";
 
 /** The splash: shown while loading, fading once the window is up (it stays at least a moment so it does not flash), then gone. */
 type SplashState = "show" | "leave" | "gone";
 
-type Phase = { kind: "loading" } | { kind: "ready" } | { kind: "failed"; message: string };
+type Phase =
+  | { kind: "loading" }
+  | { kind: "art" }
+  | { kind: "artFailed"; reasons: string[]; retry: boolean }
+  | { kind: "ready" }
+  | { kind: "failed"; message: string };
 
 /** What the player reads when the window could not be stood up on their last save. Plain: no error text. */
 const MOUNT_FAILED = "Your last game could not be opened. Your saves are kept. Try again to start from the adventure list.";
+
+/** What the player reads when the table could not be set at all. Plain: the error itself goes to the console, never to the screen. */
+const OPEN_FAILED = "The table could not be set.";
 
 /** Whether the page may go full screen (the app declares display.fullscreen; a frame that does not allow it says false). */
 const canFullscreen = (): boolean => typeof document !== "undefined" && document.fullscreenEnabled !== false && typeof document.documentElement.requestFullscreen === "function";
@@ -41,6 +54,10 @@ export function TableScreen() {
   const noResume = useRef(false);
   const [saveLine, setSaveLine] = useState("");
   const [splash, setSplash] = useState<SplashState>("show");
+  // What the splash says: setting the table, getting the art ready, or (art not had) the Retry screen. Kept while it fades out.
+  const [step, setStep] = useState<SplashStep>("table");
+  // What the Retry button does while the art screen is up: the whole art load again, then the wait (artGate.ts retryArt).
+  const onArtRetry = useRef<(() => void) | null>(null);
   const [full, setFull] = useState(false);
   const [fullNote, setFullNote] = useState("");
 
@@ -53,6 +70,8 @@ export function TableScreen() {
     const shownAt = performance.now();
     setPhase({ kind: "loading" });
     setSplash("show");
+    setStep("table");
+    onArtRetry.current = null;
     // Started a tick later, not at once: React's development double run (mount, unmount, mount) would otherwise leave two hosts
     // pulling the same saves into the same device storage at the same time. The first run is cancelled before it starts.
     const timer = setTimeout(() => {
@@ -62,37 +81,65 @@ export function TableScreen() {
         if (alive) setSaveLine(statusText(s)); // while the account is not known the storage's own message says saves are on this device only
       };
       offStatus = made.storage.onStatus(line);
-      made.open().then(
-        (session) => {
-          const el = stage.current;
-          if (!alive || !el) return;
-          // A save the window cannot stand up must not strand the screen on "loading", nor be resumed again: say so, and let Try again
-          // open on the start screen with every save kept.
-          try {
-            win.current = mountTable(el, made.host, { session });
-          } catch {
-            made.noteMountFailed();
-            win.current?.dispose();
-            win.current = null;
-            el.replaceChildren();
-            noResume.current = true;
-            setSplash("gone");
-            setPhase({ kind: "failed", message: MOUNT_FAILED });
+      const mount = (session: TableSession): void => {
+        const el = stage.current;
+        if (!alive || !el) return;
+        // A save the window cannot stand up must not strand the screen on "loading", nor be resumed again: say so, and let Try again
+        // open on the start screen with every save kept.
+        try {
+          win.current = mountTable(el, made.host, { session });
+        } catch {
+          made.noteMountFailed();
+          win.current?.dispose();
+          win.current = null;
+          el.replaceChildren();
+          noResume.current = true;
+          setSplash("gone");
+          setPhase({ kind: "failed", message: MOUNT_FAILED });
+          return;
+        }
+        line(made.storage.status());
+        setPhase({ kind: "ready" });
+        // The splash stays for its minimum, then fades away.
+        leaveTimer = setTimeout(() => {
+          if (!alive) return;
+          setSplash("leave");
+          goneTimer = setTimeout(() => alive && setSplash("gone"), SPLASH_FADE_MS + 40);
+        }, splashRemainingMs(shownAt, performance.now()));
+      };
+      // The window waits for the art: both files in, or the Retry screen. Retry is the whole art load again (the games-db art and the
+      // files that failed), then the same wait.
+      const waitForTheArt = (session: TableSession, again: boolean): void => {
+        if (!alive) return;
+        if (!again && artIsReady(made.art)) {
+          mount(session);
+          return;
+        }
+        onArtRetry.current = null;
+        setStep("art");
+        setPhase({ kind: "art" });
+        void (again ? retryArt(made.art) : waitForArt(made.art)).then((res) => {
+          if (!alive) return;
+          if (res.state === "ready") {
+            mount(session);
             return;
           }
-          line(made.storage.status());
-          setPhase({ kind: "ready" });
-          // The splash stays for its minimum, then fades away.
-          leaveTimer = setTimeout(() => {
-            if (!alive) return;
-            setSplash("leave");
-            goneTimer = setTimeout(() => alive && setSplash("gone"), SPLASH_FADE_MS + 40);
-          }, splashRemainingMs(shownAt, performance.now()));
-        },
+          onArtRetry.current = res.retry ? () => waitForTheArt(session, true) : null;
+          setStep("failed");
+          setPhase({ kind: "artFailed", reasons: res.reasons, retry: res.retry });
+        });
+      };
+      made.open().then(
+        (session) => waitForTheArt(session, false),
         (e: unknown) => {
           if (!alive) return;
+          try {
+            console.warn("The Living Table: the table could not be set:", e);
+          } catch {
+            // no console
+          }
           setSplash("gone");
-          setPhase({ kind: "failed", message: e instanceof Error && e.message ? e.message : "The table could not be set." });
+          setPhase({ kind: "failed", message: OPEN_FAILED });
         },
       );
     }, 0);
@@ -234,7 +281,14 @@ export function TableScreen() {
         </span>
         <span className="lt-app-version">v{APP_VERSION}</span>
       </footer>
-      {splash !== "gone" ? <Splash leaving={splash === "leave"} /> : null}
+      {splash !== "gone" ? (
+        <Splash
+          leaving={splash === "leave"}
+          step={step}
+          reasons={phase.kind === "artFailed" ? phase.reasons : []}
+          onRetry={phase.kind === "artFailed" && phase.retry ? () => onArtRetry.current?.() : undefined}
+        />
+      ) : null}
     </main>
   );
 }

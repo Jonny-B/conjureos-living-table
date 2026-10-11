@@ -205,8 +205,13 @@ export interface StageFit {
 
 /** Roughly how tall the tray is when it rolls (dice.ts keeps it between 160 and 200 pixels), plus the gap below it. */
 const DICE_ROOM = 216;
-/** About how tall the panel under the board is on an upright tablet (the HUD laid out in two columns: status, the DM's options and the three buttons), kept clear below the board. */
-export const TABLET_PANEL_ROOM = 240;
+/**
+ * About how tall the panel under the board is on an upright tablet (the HUD laid out in two columns: status, the DM's options and the three buttons,
+ * 206 px; and the strip of notices that comes under it for a moment after a harvest or a pick-up, 30 px and its 8 px gap, 244 px in all), plus the
+ * 8 px gap above it, kept clear below the board. It is room for the panel WITH a notice up: with less, the notice's arrival made the table
+ * 12 px taller than its window at 768 by 1024, and the page scrolled by that much for as long as the notice showed.
+ */
+export const TABLET_PANEL_ROOM = 252;
 /** A page this short or shorter (a phone on its side) does not keep the DM's dock band for the board while it is idle. */
 const SHORT_PAGE = 500;
 /** How long the tray stays over the board after the dice settle, in ms. */

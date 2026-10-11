@@ -28,7 +28,8 @@
  * when called.
  *
  * Contract with the Play lane:
- *   - the host passes portrait canvases in (the bench owns the art);
+ *   - the host passes portrait canvases in (the bench owns the art), and may pass a picture service (ui/heroPicture.ts) so a portrait is the
+ *     KayKit cast figure; the canvas it passed in is only for a class that has no KayKit version (the game passes none for a class that has one);
  *   - creation rolls the six ability scores through api.rollDice(6, 4, 6, ...)
  *     when the host gives one, so the dice tray can throw them, and falls back to
  *     rollAbilitySet (creation.ts) when it does not;
@@ -86,6 +87,7 @@ import { armorDisplayLabel } from "../../menu/equipment";
 import type { TextStyle } from "./overlay";
 import { attachItemCard, attachTip, itemCardIsUp, type ItemCardContent, type TipContent } from "./tip";
 import { pixelText } from "./pixelFont";
+import type { HeroPicture, HeroPictures } from "./heroPicture";
 
 // ---- the public contract ----------------------------------------------------
 
@@ -96,6 +98,11 @@ export interface SheetExtras {
   notes?: Readonly<Record<string, string>>;
   /** The hero's picture, drawn small in the header. Copied, never moved. */
   portrait?: HTMLCanvasElement | null;
+  /**
+   * A live picture of the hero (the cast figure; `portrait` only for a class with no KayKit version), made when the header is drawn and let go with it.
+   * Wins over `portrait` when it gives one.
+   */
+  picture?: () => HeroPicture | null;
 }
 
 /**
@@ -128,6 +135,8 @@ export interface CreationHost {
   rollDice?(groups: number, count: number, sides: number, label: string): Promise<number[][]>;
   /** A picture of a class, for its card. Copied, never moved. */
   portrait?(archetypeId: string): HTMLCanvasElement | null;
+  /** Makes the class cards' and the review's pictures live: the cast figure in the class's starting gear, `portrait` only for a class with no KayKit version. */
+  pictures?: HeroPictures;
 }
 
 export interface CreationView {
@@ -1137,6 +1146,14 @@ function copyCanvas(src: HTMLCanvasElement | null | undefined, size: number): HT
   return c;
 }
 
+/** A live picture's canvas, sized like copyCanvas sizes a copy; the picture is let go with the tips (the next draw of the sheet, or its close). */
+function sizedPicture(ctx: Ctx, pic: HeroPicture, size: number): HTMLCanvasElement {
+  pic.canvas.style.width = `${size}px`;
+  pic.canvas.style.height = `${size}px`;
+  ctx.offs.push(() => pic.dispose());
+  return pic.canvas;
+}
+
 // ---- the sheet content (shared by the sheet window and creation's review) ----
 
 function fieldEl(ctx: Ctx, label: string, value: string, tip: TipContent, empty = false): HTMLElement {
@@ -1149,7 +1166,8 @@ function fieldEl(ctx: Ctx, label: string, value: string, tip: TipContent, empty 
 function headerBlock(ctx: Ctx, sheet: CharacterSheet, extras: SheetExtras): HTMLElement {
   const card = h("section", "lts-card");
   const top = h("div", "lts-head");
-  const portrait = copyCanvas(extras.portrait, 64);
+  const live = extras.picture?.() ?? null;
+  const portrait = live ? sizedPicture(ctx, live, 64) : copyCanvas(extras.portrait, 64);
   if (portrait) {
     const box = h("div", "lts-portrait");
     box.append(portrait);
@@ -1935,7 +1953,9 @@ export function openCreation(
       sel.setAttribute("aria-pressed", String(input.archetypeId === id));
       sel.addEventListener("click", () => pickClass(id));
       const row = h("div", "row");
-      const pic = copyCanvas(api.portrait?.(id), 56);
+      // The cast figure in the class's own starting gear when the cast is loaded (and in place when it lands), else the card's picture as before.
+      const live = def ? api.pictures?.picture({ sheet: def, still: () => api.portrait?.(id) ?? null }) ?? null : null;
+      const pic = live ? sizedPicture(ctx, live, 56) : copyCanvas(api.portrait?.(id), 56);
       if (pic) {
         const box = h("div", "lts-portrait");
         box.style.width = "56px";
@@ -2591,7 +2611,11 @@ export function openCreation(
     }
     if (pv.sheet) {
       into.append(h("p", "lts-lede", "This is your sheet. Hover or tap any number to see where it came from, then press Begin."));
-      const content = sheetBody(ctx, pv.sheet, { portrait: api.portrait?.(input.archetypeId) ?? null });
+      const reviewed = pv.sheet;
+      const content = sheetBody(ctx, reviewed, {
+        portrait: api.portrait?.(input.archetypeId) ?? null,
+        ...(api.pictures ? { picture: () => api.pictures?.picture({ sheet: reviewed, still: () => api.portrait?.(input.archetypeId) ?? null }) ?? null } : {}),
+      });
       content.style.padding = "0";
       content.style.maxWidth = "none";
       // Auto side margins would shrink it to its content inside this flex column.

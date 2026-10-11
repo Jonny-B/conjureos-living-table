@@ -8,9 +8,10 @@
  * name with `window.__conjureos.assets.load(name)`, which checks the bytes against the hash recorded at
  * publish. The files are committed under `asset-files/` and are left out of the page's own bundle.
  *
- * Outside ConjureOS, on a ConjureOS that does not give a game its files (the phone today), or when a load
- * fails, the table draws still figures and the hand-drawn art, and says why in the art status
- * (gameArt.ts `assetStatus()`).
+ * The game does not start without them (artGate.ts): while they load the splash says it is getting the art
+ * ready. When a load fails it shows a fixed plain sentence (artFailure.ts) with a Retry button; on a ConjureOS app too old to hand over a
+ * game's files (a phone app before 0.59.1) it says to update the app, with no Retry; outside ConjureOS it says to open the game there. A local dev
+ * page (`npm run dev`) has no ConjureOS: devAssets.ts reads the same files from the dev server instead.
  *
  * The files are written by `node scripts/assets/export-asset-files.mjs`, which prints each one's name, size
  * and sha256. A changed file is a new publish; the platform records the new hash itself.

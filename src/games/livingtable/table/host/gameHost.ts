@@ -1,8 +1,9 @@
 /**
  * The shipped game's TableHost: the one place the table window's parts are put together.
  *
- *   art        gameArt.ts       games-db manifest, else the bundled hand-drawn art; the animated cast
- *                               arrives from ConjureOS asset files after the first paint
+ *   art        gameArt.ts       games-db manifest, else the bundled hand-drawn art (kept only for the ids the KayKit
+ *                               library lacks); the cast and the KayKit library come from ConjureOS asset files, which
+ *                               the screen waits for before it mounts the window (artGate.ts)
  *   dm         gameDm.ts        the ai.complete bridge, one call at a time, no price text
  *   storage    gameStorage.ts   saves on the device, mirrored to the server (games-db ltSave*)
  *   files      gameFiles.ts     the adventure export, as a download

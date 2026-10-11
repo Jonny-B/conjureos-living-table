@@ -128,6 +128,12 @@ export interface TableArt {
   ready(): boolean;
   /** Subscribe to "the art changed" (a library decoded, a cast prefetch landed). Returns the unsubscribe. */
   onChange(cb: () => void): () => void;
+  /**
+   * Whether this picture id has a KayKit version that `render` draws (the library is in and has the id). A converted id is never drawn from the
+   * hand-drawn set, so a screen with its own fallback picture for it (the hero pictures' doll) shows nothing instead while the figure is made.
+   * Absent on a host that does not wait for its art (the bench): then nothing is known to be converted.
+   */
+  converted?(assetId: string): boolean;
 }
 
 // ---- dm ---------------------------------------------------------------------

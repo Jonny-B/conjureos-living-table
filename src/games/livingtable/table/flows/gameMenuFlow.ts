@@ -84,6 +84,7 @@ export function installGameMenu(tc: TableCtx): void {
       tab: firstUsableTab(tab ?? "character", data.live),
       // The same item cards as the pack used to have: what each thing can do, and why not when it cannot.
       itemCard: (key) => itemCardFor(tc.st(), key),
+      pictures: tc.pictures,
       onItemAction: (key, id) => void tc.runItemAction(key, id),
       onAction: (id) => void tc.onHudAction(id),
       onClose: () => {

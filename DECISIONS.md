@@ -2,7 +2,7 @@
 
 Cross-cutting calls, newest first. Terse: what, why, what it touches. STATUS.md says where the project is; this says why it is that way.
 
-## 2026-10-10 (days, the World and Blackstone, 0.12.0, branch claude/dreamy-fermi-xg1ixr)
+## 2026-10-10 (days, the World and Blackstone, 0.13.0, branch claude/dreamy-fermi-xg1ixr)
 
 ### Adventures keep time: a day passes each time the hero sleeps
 The owner's campaign framework writes the villain's plan as "Day 1 ... Day 10, if the player does nothing". So `AdventureProgress.day` starts at 1 and a long rest is the only thing that moves it (`{ type: "rest" }`, applied by `restFlow` after "Morning comes"). A condition reads `it is day N or later`; there is no "before day N", because "not" already says it. A save from before days reads as day 1. An adventure that never looks at the day shows and tells nothing about days (`adventureKeepsTime`). Sleep, not turns or hours, because a rest is the one moment the game already treats as time passing, and the DM never chooses it. Touches: `adventures/types.ts`, `progress.ts`, `markdown.ts`, `validate.ts`, `brief.ts`, `table/flows/turns.ts`, the Journal.
@@ -15,6 +15,13 @@ Bug found by the e2e: `spawnIsPresent`, `dmGivableItemIds` and `beatFlags` read 
 
 ### The Quiet Under Blackstone is ported to the Markdown format, and the TypeScript campaign module is retired
 The old branch's campaign engine (Acts, Arcs, factions, a TypeScript module) lost to dev's adventure format at the merge. Blackstone is now `adventures/blackstone.md`: three act scenes, four endings, the clock in `## World` (days 2, 4, 6, 9; cutting off the silver moves the last three by three days; stopping Corvane stops it). Judgment calls are flags a beat reacts to; secrets are DM ONLY lines and the DM never list, because the format cannot gate what the DM says. Not carried over, and marked REVIEW in the file: faction attitudes, a creature that turns hostile mid-scene, and a DM-forced ambush. Blackstone sorts before the Rat Cellar on the start screen (the catalog is alphabetical). Touches: `adventures/blackstone.md`, `test/livingtable-adventure-blackstone.test.ts`.
+## 2026-10-10 (no old art, 0.12.0)
+
+### The game never draws the old picture of anything that has a KayKit version, and waits for the art instead
+Owner: "I don't want the old assets to exist at all." and "For now just implement what we've already converted and keep everything else." So the hand-made art is no longer a fallback for converted ids: the game holds at the splash until both asset files are in, and a failure is a plain sentence with Retry (an app too old to hand over files is told to update). Ids with no KayKit version keep their hand-made picture; the set is computed from the files, so it shrinks as the owner converts more. Trade-off taken knowingly: with no art files the game does not run at all. Touches `table/host/artGate.ts`, `artFailure.ts`, `devAssets.ts`, `gameArt.ts`, `table/ui/heroPicture.ts`, `Splash.tsx`, `TableScreen.tsx`.
+
+### Error words on the art screen are fixed sentences
+No status codes, exception text or reason codes reach the player; the raw detail goes to the console. Seven sentences in `artFailure.ts`, pinned by a test over twenty failure routes.
 
 ## 2026-10-09 (asset files, ConjureOS #1149, 0.11.0)
 

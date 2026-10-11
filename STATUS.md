@@ -1,16 +1,25 @@
 # Status
 
-Last updated: 2026-10-10, 0.12.0 (days, the World and The Quiet Under Blackstone) is on branch `claude/dreamy-fermi-xg1ixr`, not merged; 0.11.1 is live on dev and prod.
+Last updated: 2026-10-11, 0.12.0 is live on dev (listing 6) and prod (listing 3); 0.13.0 (days, the World and The Quiet Under Blackstone) waits on branch `claude/dreamy-fermi-xg1ixr`, level with dev, not merged.
 
-## 0.12.0 on branch `claude/dreamy-fermi-xg1ixr`: days, the World and Blackstone (not merged)
+## 0.13.0 on branch `claude/dreamy-fermi-xg1ixr`: days, the World and Blackstone (not merged)
 
-Held on the branch by the owner ("we will merge when the others are done"). Re-take the version number at merge time if dev has moved.
+Held on the branch by the owner ("we will merge when the others are done"). Brought level with dev's 0.12.0 on 2026-10-11; re-take the version at merge time if dev moves again.
 
 - **Days**: a long rest moves the day on; `it is day N or later` is a condition; the Journal shows "Day N" for an adventure that keeps time.
 - **World**: `## World` beats and ways out fire in any scene (the villain's clock). The brief tells the DM what comes next, DM ONLY.
 - **Blackstone**: `adventures/blackstone.md`, a three-act campaign with four endings and a clock; checker clean, 0 warnings.
 - **Fix**: a creature a world beat brings in is absent until it fires.
 - **Checks**: `npm test` all pass, typecheck clean, `adventures:check` ok, build ok; e2e 88 of 89, the one failure (the Fullscreen button still reads "Exit full screen" after leaving) fails the same way on `dev` and is not this branch's. Still REVIEW in the file: no faction attitudes, no creature turning hostile mid-scene, no forced ambush; untested on a device.
+
+## 0.12.0, no old art for anything converted (owner, 2026-10-10)
+
+Owner: "I don't want the old assets to exist at all." then, on the goblin and rats that have no 3D source, "I will work on converting those later. For now just implement what we've already converted and keep everything else."
+
+- **The game waits for its art** (`table/host/artGate.ts`, `Splash.tsx`, `TableScreen.tsx`): after the splash, both asset files must be in before the main menu. While they load the splash says so; a failure shows one fixed plain sentence (`table/host/artFailure.ts`) and Retry, which reloads the games-db art fresh (`manifestCache.ts` `fresh`) and the failed files; each file load gives up after 120 s and Retry's games-db call after 30 s. A ConjureOS app too old to hand over files (a phone app before 0.59.1) is told to update, with no Retry; outside ConjureOS it says to open the game there. `npm run dev` reads the files from the dev server (`table/host/devAssets.ts`).
+- **KayKit everywhere it exists:** hero pictures (`table/ui/heroPicture.ts`: hero choice, maker, sheet, inventory) and the board draw only the cast and the library for converted ids. Still hand-made, computed from the files (`gameArt.ts` `unconvertedIds`): token_goblin, token_rat, token_giant_rat, the Healer and its gear, 4 tiles (floor_wood, floor_wood_b, wall_earth, wall_earth_b) and 19 props. A KayKit conversion of the 4 tiles and 19 props from the packs on disk was started and stopped on the owner's word.
+- **Tablet fit:** `TABLET_PANEL_ROOM` 240 to 252 (a notice row at harvest overflowed 768x1024 by 12 px, intermittently since before 0.11.1).
+- **Tests:** npm test 2244/2244; the whole e2e 101/101 (new: `artgate`, `heroart`; the harness serves `asset-files/` through a fake bridge by default, idle loops held still); a reload is checked against the whole board except the hero's square. Made and fixed by agents, verified twice independently; the last finding (Retry waiting forever on games-db) is fixed with a test that hangs without it.
 
 ## 0.11.0 and 0.11.1, the art ships as asset files, and the Mage is the Wizard (ConjureOS #1149)
 
