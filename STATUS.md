@@ -1,14 +1,24 @@
 # Status
 
-Last updated: 2026-10-09, 0.11.0 is on the dev store: the animated art now ships as the app's own asset files (ConjureOS #1149); prod stays on 0.10.1 until ConjureOS is promoted.
+Last updated: 2026-10-10, 0.12.0 is live on the dev listing (version 6) and the prod listing (version 3, page hash b30ef727, identical to a local build of main): no old art for anything converted, KayKit heroes everywhere, and the game waits for its art (Retry on failure).
 
-## 0.11.0, the art ships as asset files (ConjureOS #1149)
+## 0.12.0, no old art for anything converted (owner, 2026-10-10)
+
+Owner: "I don't want the old assets to exist at all." then, on the goblin and rats that have no 3D source, "I will work on converting those later. For now just implement what we've already converted and keep everything else."
+
+- **The game waits for its art** (`table/host/artGate.ts`, `Splash.tsx`, `TableScreen.tsx`): after the splash, both asset files must be in before the main menu. While they load the splash says so; a failure shows one fixed plain sentence (`table/host/artFailure.ts`) and Retry, which reloads the games-db art fresh (`manifestCache.ts` `fresh`) and the failed files; each file load gives up after 120 s and Retry's games-db call after 30 s. A ConjureOS app too old to hand over files (a phone app before 0.59.1) is told to update, with no Retry; outside ConjureOS it says to open the game there. `npm run dev` reads the files from the dev server (`table/host/devAssets.ts`).
+- **KayKit everywhere it exists:** hero pictures (`table/ui/heroPicture.ts`: hero choice, maker, sheet, inventory) and the board draw only the cast and the library for converted ids. Still hand-made, computed from the files (`gameArt.ts` `unconvertedIds`): token_goblin, token_rat, token_giant_rat, the Healer and its gear, 4 tiles (floor_wood, floor_wood_b, wall_earth, wall_earth_b) and 19 props. A KayKit conversion of the 4 tiles and 19 props from the packs on disk was started and stopped on the owner's word.
+- **Tablet fit:** `TABLET_PANEL_ROOM` 240 to 252 (a notice row at harvest overflowed 768x1024 by 12 px, intermittently since before 0.11.1).
+- **Tests:** npm test 2244/2244; the whole e2e 101/101 (new: `artgate`, `heroart`; the harness serves `asset-files/` through a fake bridge by default, idle loops held still); a reload is checked against the whole board except the hero's square. Made and fixed by agents, verified twice independently; the last finding (Retry waiting forever on games-db) is fixed with a test that hangs without it.
+
+## 0.11.0 and 0.11.1, the art ships as asset files, and the Mage is the Wizard (ConjureOS #1149)
 
 The cast (6.3 MB) and the KayKit library (0.2 MB) are committed in `asset-files/` and listed in `package.json` under `conjureos.assetFiles`. Every publish uploads them as the bot (content-addressed, so an unchanged file is not stored twice) and the version records their hashes. Installing or updating the game from Discover downloads them to the player's device; the game reads them with `window.__conjureos.assets.load(name)` (`table/host/assetFiles.ts`, `gameArt.ts`). No upload by hand, no address or hash pasted into the code. Outside ConjureOS, on a ConjureOS without the feature (the phone today, issue conjureos-mobile#68) or when a load fails, the game draws the still figures and the hand-drawn art and says why in the art status.
 
 - **Files**: `scripts/assets/export-asset-files.mjs` writes them into `asset-files/` from `.cache/kaykit/` (the Blender renders are not in the repo, so CI cannot rebuild them; commit a changed file). `scripts/build-bundle.mjs` and ConjureOS's shared bundler both leave declared files out of the page (1.67 MB).
 - **Tests**: `test/livingtable-table-asset-files.test.ts` pins the names, the package.json declaration, that the committed files parse, and the fallbacks (no bridge, no `assets.list`, `unknown_name`, a failed load).
-- **Prod**: do not push `main` until ConjureOS 0.175.x is promoted to prod; the workflow checks out ConjureOS `dev`, and prod `store-version` does not know the list yet. Old art-less 0.10.1 stays live there meanwhile.
+- **0.11.1**: the Mage reads Wizard everywhere (hero choice, maker, sheet, rulebook, board token, the DM's brief). Ids stay. A hero saved as the Mage or the Shadow reads Wizard or Rogue when the save is loaded and listed (`refreshRetiredNames` in `characters/creation.ts`, applied by `fromSnapshot` and `saveDetail`); a hero NAME is renamed only when it is exactly a retired class label (a quick start's old default name), a name a player typed is kept. An adventure may address the class as `mage` too.
+- **Live**: dev listing version 5 and prod listing version 2, both 0.11.1. Prod's page is byte-identical to the local build (content hash `c7f92b62`), prod recorded both files and serves their exact bytes, and the new menu is unchanged against 0.10.1 (no menu file touched). ConjureOS reached prod first as 0.173.9 (promoted alone, PR #1152). `main` publishes on its own from now on.
 
 ## 0.10.0 and 0.10.1, the bug bash and the fit pass (issue #13, shipped)
 
@@ -17,7 +27,7 @@ The owner's thirty items from playing 0.9.0 are shipped (item 7, the 3D art, mov
 - **Layout and fit** (1, 2, 3, 26, 27): `table/stageFit.ts`; the board fills the stage at every size from 320 px to 4K and in full screen; the dice tray floats over the stage at 720 px and under; no text selection, no browser menu, no ResizeObserver window errors.
 - **Menus and actions** (8 to 11, 14, 20, 21, 23, 28): left click walks, right click or long press opens the actions menu with a text line; Talk and Look closer walk first; rats can be harvested; one game Menu with six tabs and a stat preview; End turn automatically in Settings.
 - **Text and story** (12, 13, 17, 18, 19, 30): a story screen for unrequested story, a standoff band for the DM box, no pop-up strip, Cancel while the DM thinks.
-- **Way in** (4, 5, 6, 24, 25, 29): splash, main menu, Knight Rogue Mage and a swipeable hero choice, name first in the maker, test rooms on dev builds only (`src/buildTarget.ts`).
+- **Way in** (4, 5, 6, 24, 25, 29): splash, main menu, Knight Rogue Wizard (Mage until 0.11.1) and a swipeable hero choice, name first in the maker, test rooms on dev builds only (`src/buildTarget.ts`).
 - **Board** (15, 16, 22): one thing, one name; no hints; open exits ringed; slain creatures drawn.
 - **Code**: `mountTable.ts` (347 lines) and the overlay and HUD are split into `table/flows/`, `table/ui/` modules; `TableCtx` (`table/tableCtx.ts`) is the shared context. The module map is in the header of each file.
 - **Checks**: `npm test` all pass, `npm run typecheck` clean, `npm run adventures:check` ok, `npm run build` writes `dist/living-table.html`, `node scripts/e2e/run.mjs` all specs pass (new: layout, menu-actions, board, text, hero, start, menu, integration), and `node scripts/e2e/walk.mjs` tours the game at eight window sizes with a screenshot of every screen (`.cache/bench-shots/bb-<step>-<size>.png`).
@@ -104,7 +114,7 @@ clothing drab, and the skeleton is near white in Cel bands and Plain.
 
 ## Next
 
-- Check 0.11.0 on a real dev install: open Discover on dev, install The Living Table, see "Getting The Living Table ready", then confirm the animated figures draw (the art status says so). Issues #1 and #2 here were waiting on this. Then promote ConjureOS to prod, then `main`.
+- Check 0.11.1 on a real install: open Discover (dev or prod), install or update The Living Table, see "Getting The Living Table ready", then confirm the animated figures draw (the art status says so). Issues #1 and #2 here were waiting on this.
 - Music and sound effects (#14): the owner picks six tracks (title, village, tavern, cellar, combat, victory); effects are procedural plus CC0 packs; an Audio tab on the bench first.
 - Open owner questions from the bug bash are listed on issue #13 (a bigger phone board by following the hero, the portrait tablet layout, the "AI written" tag).
 - Owner calls from the port: (1) a player with a save lands in their newest save on open, not the start screen, keep it? (2) the Adventures bar button mid-game opens the start screen with no confirm; saves are kept. (3) with no AI permission or outside ConjureOS the DM is off and says so, no stand-in answer; keep it? (4) the start screen's "Test rooms" heading, rename it "Example adventures for testing"? (5) prune the old CSS, and trim the hub and campaign code left in `src/bridge/gamesApi.ts` and `src/bridge/ai.ts`?

@@ -183,8 +183,8 @@ export function installAdventureStart(tc: TableCtx): void {
         const chassis = getArchetype(id).chassis;
         return { chassis, label: ARCHETYPE_LABEL[id], hook: heroHook(a, chassis) ?? a.summary, kit: kitWords(startingKitFor(a, chassis)) };
       }),
-      // The class picker shows each class in its starting gear with its default stats (built from the adventure's own kit).
-      preview: (chassis) => heroPreview(a, chassis),
+      // The class picker shows each class in its starting gear with its default stats (built from the adventure's own kit), as the cast figure when it is loaded.
+      preview: (chassis) => heroPreview(a, chassis, tc.pictures),
       onCreate: () => openAdventureCreation(entry),
       // A named hero is required, however the player got here: "Play as the Knight" opens the maker on its Name step with that class and the
       // adventure's kit, and nothing else changed from the slide's default stats, so Begin waits for a name and then starts the hero the slide showed.
@@ -208,7 +208,7 @@ export function installAdventureStart(tc: TableCtx): void {
     closeScreens();
     tc.creationView = openCreation(
       tc.stageWrap,
-      { style: () => tc.textStyle, rollDice: tc.rollScoreDice, portrait: tc.portrait },
+      { style: () => tc.textStyle, rollDice: tc.rollScoreDice, portrait: tc.portrait, pictures: tc.pictures },
       {
         start: archetypeId ? { ...creatorStartFor(a, archetypeId), ancestryId: undefined, background: undefined, alignment: undefined } : creatorStartFor(a, tc.heroIds[0]!),
         onBegin: (sheet, input) => {

@@ -36,6 +36,12 @@
 // `stream` with `hold: true` streams first and then parks: the reply has started to type, but the call has not ended.
 // No match at all rejects the call and records it in `platform.unmatched`, so a
 // spec cannot spend a call it did not plan for without noticing.
+//
+// The art: the game does not start without its two art files, which ConjureOS hands over through `window.__conjureos.assets`. So every page gets
+// that bridge by default (lib/assets.mjs, serving asset-files/ from the test server). `opts.art` picks how: "ready" (default), "none" (no bridge),
+// "hold" (parked until window.__releaseAssets()), "fail" (download failures until window.__failAssets(false)), or the options of assetBridge.
+
+import { artInit } from "./assets.mjs";
 
 const SAVE_KEY = /^[a-z0-9:_-]{1,80}$/;
 const SAVE_KINDS = ["rest", "checkpoint", "manual", "current", "ai-adventure"];
@@ -178,7 +184,7 @@ export async function installPlatform(page, opts = {}) {
   if (opts.server) await page.exposeFunction("__e2eGamesDb", serverHandle);
 
   // The init script runs before the page's own scripts, in every frame.
-  await page.addInitScript(({ extra, server, who }) => {
+  await page.addInitScript(({ extras, server, who }) => {
     // Streaming: the page keeps the request's onChunk by an id, and Node calls __e2eEmit with each piece (see `stream` above).
     const chunks = new Map();
     let nextId = 1;
@@ -214,7 +220,8 @@ export async function installPlatform(page, opts = {}) {
       };
       window.__conjureos.auth = { whoami: async () => who };
     }
-    if (extra) {
+    // The art bridge first, then the spec's own init (which may replace it), each as its own function so their declarations cannot clash.
+    for (const extra of extras) {
       try {
         // eslint-disable-next-line no-new-func
         new Function("bridge", extra)(window.__conjureos);
@@ -222,7 +229,7 @@ export async function installPlatform(page, opts = {}) {
         console.error("e2e platform extra init failed", e);
       }
     }
-  }, { extra: opts.extraInit ?? null, server: !!opts.server, who: opts.who ?? { signedIn: true, email: "tester@example.test" } });
+  }, { extras: [artInit(opts.art), opts.extraInit ?? null].filter(Boolean), server: !!opts.server, who: opts.who ?? { signedIn: true, email: "tester@example.test" } });
 
   return platform;
 }

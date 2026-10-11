@@ -17,9 +17,15 @@
  * games-db, and gamesApi.ts falls back to the placeholder whenever this file
  * is absent, which is every context except a local dev server.
  *
+ * The art files too. The game does not start without its two asset files (the animated figures and the board art;
+ * src/games/livingtable/table/host/artGate.ts), which ConjureOS hands over through `window.__conjureos.assets`. A page
+ * from `npm run dev` has no ConjureOS, so the copies of those files in `asset-files/` are put under
+ * `.devserve/asset-files/` here, and table/host/devAssets.ts reads them from `/asset-files/<name>` on a local page with no
+ * ConjureOS. `.devserve` is stripped from the published bundle, so they never ship that way either.
+ *
  * Run: npx tsx scripts/assets/build-dev-manifest.ts   (npm run dev does it)
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PALETTE as FANTASY_PALETTE, SPRITES as FANTASY_SPRITES } from "./fantasy";
@@ -55,9 +61,27 @@ mkdirSync(OUT_DIR, { recursive: true });
 const json = JSON.stringify(payload);
 writeFileSync(OUT, json, "utf8");
 
+// The two art files, copied only when they changed (about 6.4 MB, so not on every start).
+const FILES_IN = join(ROOT, "asset-files");
+const FILES_OUT = join(OUT_DIR, "asset-files");
+let copied = 0;
+if (existsSync(FILES_IN)) {
+  mkdirSync(FILES_OUT, { recursive: true });
+  for (const name of readdirSync(FILES_IN).filter((f) => f.endsWith(".json"))) {
+    const from = join(FILES_IN, name);
+    const to = join(FILES_OUT, name);
+    const same = existsSync(to) && statSync(to).size === statSync(from).size && readFileSync(to).equals(readFileSync(from));
+    if (!same) {
+      copyFileSync(from, to);
+      copied += 1;
+    }
+  }
+}
+
 const kb = (json.length / 1024).toFixed(0);
 console.log(
   `[dev-manifest] wrote .devserve/livingtable-assets.json (${kb} KB): ` +
     `fantasy ${payload.fantasy.assets.length} sprites / ${payload.fantasy.palette.length} colours, ` +
-    `scifi ${payload.scifi.assets.length} sprites / ${payload.scifi.palette.length} colours`,
+    `scifi ${payload.scifi.assets.length} sprites / ${payload.scifi.palette.length} colours; ` +
+    `art files in .devserve/asset-files (${copied} copied)`,
 );
