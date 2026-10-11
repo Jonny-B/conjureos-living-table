@@ -1,6 +1,16 @@
 # Status
 
-Last updated: 2026-10-10, 0.12.0 is going to the dev and prod listings: no old art for anything converted, KayKit heroes everywhere, and the game waits for its art (Retry on failure).
+Last updated: 2026-10-11, 0.12.0 is live on dev (listing 6) and prod (listing 3); 0.13.0 (days, the World and The Quiet Under Blackstone) waits on branch `claude/dreamy-fermi-xg1ixr`, level with dev, not merged.
+
+## 0.13.0 on branch `claude/dreamy-fermi-xg1ixr`: days, the World and Blackstone (not merged)
+
+Held on the branch by the owner ("we will merge when the others are done"). Brought level with dev's 0.12.0 on 2026-10-11; re-take the version at merge time if dev moves again.
+
+- **Days**: a long rest moves the day on; `it is day N or later` is a condition; the Journal shows "Day N" for an adventure that keeps time.
+- **World**: `## World` beats and ways out fire in any scene (the villain's clock). The brief tells the DM what comes next, DM ONLY.
+- **Blackstone**: `adventures/blackstone.md`, a three-act campaign with four endings and a clock; checker clean, 0 warnings.
+- **Fix**: a creature a world beat brings in is absent until it fires.
+- **Checks** (on the merge with dev's 0.12.0): `npm test` 2275 of 2275, typecheck clean, `adventures:check` ok, build ok, e2e 101 of 101. Still REVIEW in the file: no faction attitudes, no creature turning hostile mid-scene, no forced ambush; untested on a device.
 
 ## 0.12.0, no old art for anything converted (owner, 2026-10-10)
 

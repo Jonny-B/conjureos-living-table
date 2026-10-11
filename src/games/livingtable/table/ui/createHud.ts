@@ -243,7 +243,7 @@ export function createHud(
       prevPack = state.pack?.sections ?? null;
       if (drawer === "pack" && state.pack) hc.freshNow = added;
       else for (const item of added) hc.pendingNew.add(item);
-      const jsig = state.journal ? JSON.stringify([state.journal.scene, journalObjectives(state.journal.objectives), journalRecent(state.journal.recent)]) : null;
+      const jsig = state.journal ? JSON.stringify([state.journal.scene, state.journal.day, journalObjectives(state.journal.objectives), journalRecent(state.journal.recent)]) : null;
       if (jsig !== null && prevJournal !== null && jsig !== prevJournal && drawer !== "journal") hc.journalNew = true;
       if (jsig === null) hc.journalNew = false;
       prevJournal = jsig;

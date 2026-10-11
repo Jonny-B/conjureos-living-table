@@ -20,7 +20,7 @@
  * called.
  */
 import { bodySpriteId, gearItemName, LOOT_CAP_LINE, type ArchetypeId } from "../characters/equipmentTypes";
-import { type AdventureStepResult, applyEvent, evaluate as evaluateCondition, settleProgress, startProgress } from "../adventures/progress";
+import { type AdventureStepResult, adventureKeepsTime, applyEvent, evaluate as evaluateCondition, settleProgress, startProgress } from "../adventures/progress";
 import {
   type Adventure,
   type AdventureEvent,
@@ -28,6 +28,7 @@ import {
   type AdventureFeature,
   type AdventureItem,
   type AdventureSpawn,
+  dayOf,
   itemOf,
   locationOf,
   sceneOf,
@@ -415,6 +416,7 @@ export function journalFor(p: PlayState): HudJournal | undefined {
   return {
     title: a.title,
     scene: scene?.title ?? "",
+    ...(adventureKeepsTime(a) ? { day: dayOf(progress) } : {}),
     objectives: (scene?.objectives ?? []).filter((o) => !o.hidden).map((o) => ({ text: o.text, done: progress.objectivesDone.includes(o.id) })),
     ...(p.storyRecent.length > 0 ? { recent: [...p.storyRecent] } : {}),
   };

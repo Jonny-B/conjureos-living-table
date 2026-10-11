@@ -61,6 +61,10 @@ A paragraph or two.
 ### Beat: goblin_down
 ### Next
 ### Ending
+
+## World
+### Beat: lantern_finished
+### Next
 ````
 
 - `# Title` is the adventure's name. There is exactly one, and it comes first.
@@ -177,6 +181,15 @@ A scene is a chapter. Directly under the heading: `id` and `location` (where it 
 - `### Next`: the only ways out of the scene, one bullet each, `- Scene title when <condition>`. The first one whose condition holds is taken.
 - `### Ending`: `outcome` is `victory`, `defeat` or `continue`, plus a `>` quote of the ending text. A scene with an ending that is `victory` or `defeat` finishes the adventure. A scene with no ending and no `Next` is a dead end, and the checker warns.
 
+### World
+
+What happens whatever scene the story is in: the villain's plan going ahead while the party is busy, a rumour that reaches the village, the night the dead walk. Optional, and at most one.
+
+- `### Beat: id`: exactly like a scene's beat, but checked in every scene. Beat ids are shared with the scenes', so each is unique across the file.
+- `### Next`: ways out that can be taken from any scene, checked before the scene's own. Use one to end the story when a clock runs out, wherever the party is: `- Too late when the flag king_woken is set`.
+
+A world beat is how an adventure keeps time. Give it a day (`- when: it is day 5 or later`) and it happens on that day unless something the party did first stops it (`- when: it is day 5 or later and the flag silver_cut_off is not set`). The DM is told the day and what is coming, marked DM ONLY, so it can let the party feel it approach; the engine makes it happen, and the DM never can. Once an adventure looks at the day anywhere, the player's Journal shows it.
+
 ## Conditions
 
 Wherever a condition is wanted (`done when`, `when`, `open when`, `appears when`, and after `when` in a `### Next` bullet) write it in plain words, using exactly these phrasings. Case does not matter, a leading `when` is allowed, and a trailing full stop is ignored.
@@ -194,6 +207,7 @@ Wherever a condition is wanted (`done when`, `when`, `open when`, `appears when`
 | `the player talks to Marta` | the party has spoken with that NPC |
 | `the player has the brass key` | the party holds that item now |
 | `the objective talk is done` | that objective is done (by id or by its text) |
+| `it is day 3 or later` | the adventure has reached that day. It starts on day 1 and a day passes each time the hero sleeps (a long rest). `not it is day 3 or later` means before day 3 |
 
 `dead` works in place of `killed`, `has entered` for `enters`, `has talked to` and `speaks to` for `talks to`, `the party` for `the player`, `complete` for `done`.
 

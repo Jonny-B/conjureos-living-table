@@ -54,12 +54,16 @@ test("the embedded adventure data is exactly adventures/*.md (run node scripts/a
   const written = readFileSync(new URL("../src/games/livingtable/table/adventures/data.ts", import.meta.url), "utf8").replace(/\r\n?/g, "\n");
   assert.equal(written, buildModule());
   const files = ADVENTURE_FILES.map((f) => f.file);
-  assert.deepEqual(files, ["rat-cellar.md", "TEMPLATE.md"]);
+  assert.deepEqual(files, ["blackstone.md", "rat-cellar.md", "TEMPLATE.md"]);
   assert.ok(!files.includes("README.md"), "the authoring guide is not an adventure");
 });
 
-test("every adventure file is read and checked in the page: the Rat Cellar and the Template adventure start, with their cards", () => {
+test("every adventure file is read and checked in the page: Blackstone, the Rat Cellar and the Template adventure start, with their cards", () => {
   const list = R.benchAdventures();
+  const blackstone = list.find((e) => e.file === "blackstone.md")!;
+  assert.equal(blackstone.id, "blackstone");
+  assert.deepEqual(blackstone.problems, []);
+  assert.ok(blackstone.adventure);
   const rat = list.find((e) => e.file === "rat-cellar.md")!;
   const template = list.find((e) => e.file === "TEMPLATE.md")!;
   assert.equal(rat.id, "rat-cellar");
@@ -71,11 +75,11 @@ test("every adventure file is read and checked in the page: the Rat Cellar and t
   assert.deepEqual(template.problems, []);
   assert.ok(template.adventure);
   // The owner's files come first, the template last; the start screen's cards carry what the overlay shows.
-  assert.deepEqual(list.slice(0, 2).map((e) => e.file), ["rat-cellar.md", "TEMPLATE.md"]);
+  assert.deepEqual(list.slice(0, 3).map((e) => e.file), ["blackstone.md", "rat-cellar.md", "TEMPLATE.md"]);
   const cards = R.startCardsFor(list);
-  assert.equal(cards[0]!.draftMarks, rat.draftMarks);
-  assert.equal(cards[0]!.problems, undefined);
-  assert.equal(cards[1]!.draftMarks, undefined);
+  assert.equal(cards[1]!.draftMarks, rat.draftMarks);
+  assert.equal(cards[1]!.problems, undefined);
+  assert.equal(cards[2]!.draftMarks, undefined);
 });
 
 test("a file with problems is listed with them and cannot be started", () => {

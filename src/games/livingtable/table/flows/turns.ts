@@ -8,7 +8,7 @@ import { DM_RECENT_KEEP, heroDown, newPlay } from "../state";
 import { fromSnapshot } from "../snapshot";
 import { benchAdventures } from "../adventureCatalog";
 import { restRefusal } from "../fightRules";
-import { adventureOf } from "../adventureRun";
+import { advApply, adventureOf } from "../adventureRun";
 import type { TableCtx } from "../tableCtx";
 
 export function installTurns(tc: TableCtx): void {
@@ -26,6 +26,9 @@ export function installTurns(tc: TableCtx): void {
    * Make camp: the game's own longRest on the sheet (full hit points, hit dice and spell slots, once a day; the potions are
    * items and are not refilled), then a "rest" save point. Refused, in the sheet's or the table's words, in a fight, with
    * anything hostile awake or in sight, or once today's sleep is spent (a won fight turns the day over).
+   *
+   * In an adventure the night is also a day of the story: the rest is reported (adventures/progress.ts), so the world
+   * clock moves and whatever it fires plays out before the save, which then holds the new day.
    */
   async function restFlow(): Promise<void> {
     if (tc.busy) return;
@@ -39,6 +42,10 @@ export function installTurns(tc: TableCtx): void {
     p.dmRecent.push({ who: "player", text: "I make camp and sleep until morning." });
     if (p.dmRecent.length > DM_RECENT_KEEP) p.dmRecent.splice(0, p.dmRecent.length - DM_RECENT_KEEP);
     tc.story({ text: "You make camp and sleep. Morning comes.", tone: "plain" }, false);
+    if (adventureOf(p)) {
+      advApply(p, { type: "rest" });
+      tc.flushAdventure();
+    }
     tc.addSavePoint(p, "rest", "");
     tc.hud.notice("Rested. Game saved.", "good");
     tc.flushLog();

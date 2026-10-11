@@ -9,9 +9,9 @@
  * the typed model and the progress record; nothing here rolls or decides.
  */
 import { beastById } from "../rules/bestiary";
-import { allowedDmSteps, describeDmStep, evaluate } from "./progress";
+import { adventureKeepsTime, allowedDmSteps, conditionMentionsDay, describeCondition, describeDmStep, evaluate } from "./progress";
 import { spawnIsPresent } from "./validate";
-import { heroHook, itemOf, locationOf, sceneOf, spawnInstanceIds, type Adventure, type AdventureProgress, type Chassis } from "./types";
+import { dayOf, heroHook, itemOf, locationOf, sceneOf, spawnInstanceIds, worldOf, type Adventure, type AdventureProgress, type Chassis } from "./types";
 
 export interface AdventureBriefOptions {
   /** The hero's class, to pick the hook that addresses them. */
@@ -93,6 +93,30 @@ export function adventureBrief(a: Adventure, p: AdventureProgress, opts: Adventu
   });
 
   if (hook) sections.push({ keep: 80, render: () => [`How the story addresses this hero: ${hook}`] });
+
+  // The world clock: what day it is, and what the world will do next if
+  // nobody stops it. The engine fires these beats; the DM's job is to let
+  // the party feel them coming (a rumour, a cold wind off the ridge), never
+  // to announce or fire one.
+  const world = worldOf(a);
+  const usesDays = adventureKeepsTime(a);
+  if (usesDays || world.beats.length > 0 || world.next.length > 0) {
+    sections.push({
+      keep: 86,
+      render: (level) => {
+        const lines = usesDays ? [`It is day ${dayOf(p)} of the adventure. A day passes each time the hero sleeps.`] : [];
+        const coming = world.beats.filter((b) => !p.beatsFired.includes(b.id) && (level <= 1 || conditionMentionsDay(b.when)));
+        if (coming.length > 0) {
+          lines.push("DM ONLY, what the world does next unless the party stops it (the engine makes these happen; foreshadow them, never announce them):");
+          for (const b of coming) {
+            const what = b.narrate ?? (b.setFlags?.length ? `the story marks ${b.setFlags.join(", ")}` : b.id);
+            lines.push(`- once ${describeCondition(a, b.when)}: ${level <= 1 ? what : b.id}`);
+          }
+        }
+        return lines;
+      },
+    });
+  }
 
   if (scene) {
     sections.push({
